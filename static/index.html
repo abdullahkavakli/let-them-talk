@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Organizer</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <span class="brand">Agent Organizer</span>
+  <label class="board-pick">Board
+    <select id="board-select" aria-label="Board"></select>
+  </label>
+  <button id="new-board" class="btn">New board</button>
+  <button id="fit-view" class="btn" title="Bring every card into view">Fit view</button>
+  <span class="spacer"></span>
+  <span class="hint">Drag an agent's <span class="hint-port"></span> handle onto another agent to connect them.</span>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <section>
+      <h2>Board folder</h2>
+      <p id="board-folder" class="mono muted">—</p>
+    </section>
+    <section>
+      <h2>Add agents</h2>
+      <p class="muted small">Running sessions not on this board, by folder.</p>
+      <div id="available"></div>
+    </section>
+    <section class="grow">
+      <details id="activity-box">
+        <summary><h2>Activity <span id="activity-count" class="muted"></span></h2></summary>
+        <ol id="activity"></ol>
+      </details>
+    </section>
+  </aside>
+  <div id="sidebar-resizer" class="resizer" role="separator" aria-orientation="vertical"
+    title="Drag to resize · double-click to reset"></div>
+
+  <main id="canvas" tabindex="0">
+    <div id="world">
+      <svg id="wires" width="1" height="1" aria-hidden="true">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" class="arrow-head"></path>
+          </marker>
+          <marker id="arrow-draft" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" class="arrow-head draft"></path>
+          </marker>
+        </defs>
+        <g id="wire-layer"></g>
+        <path id="draft-wire" d="" marker-end="url(#arrow-draft)"></path>
+      </svg>
+      <div id="nodes"></div>
+      <div id="labels"></div>
+    </div>
+    <div id="empty" hidden>
+      <p><strong>No agents on this board yet.</strong></p>
+      <p class="muted">Sessions running in this folder appear here automatically. Add sessions from other folders in the sidebar.</p>
+    </div>
+  </main>
+
+  <aside id="drawer" hidden>
+    <div id="drawer-resizer" class="resizer edge" role="separator" aria-orientation="vertical"
+      title="Drag to resize · double-click to reset"></div>
+    <button class="icon-btn close" id="drawer-close" aria-label="Close">&times;</button>
+    <div id="drawer-body"></div>
+  </aside>
+</div>
+
+<dialog id="connect-dialog">
+  <form method="dialog" id="connect-form">
+    <h2>Connect agents</h2>
+    <p class="pair"><span id="c-from" class="chip"></span><span class="arrow-glyph">&rarr;</span><span id="c-to" class="chip"></span></p>
+    <label for="c-reason">Why are you connecting them?</label>
+    <textarea id="c-reason" rows="3" placeholder="e.g. b6 finishes the reference checks; tell da which entries changed so it can rebuild the PDF"></textarea>
+    <div class="note-grid">
+      <div>
+        <label class="check"><input type="checkbox" id="c-notify-from" checked> Tell <span id="c-from-2"></span></label>
+        <textarea id="c-text-from" rows="7" class="mono small"></textarea>
+      </div>
+      <div>
+        <label class="check"><input type="checkbox" id="c-notify-to" checked> Tell <span id="c-to-2"></span></label>
+        <textarea id="c-text-to" rows="7" class="mono small"></textarea>
+      </div>
+    </div>
+    <p class="muted small">The notes arrive from <strong>@organizer</strong> as messages from another session, so they cannot approve permissions or change settings. Each delivered note starts a turn in an idle agent.</p>
+    <p id="c-error" class="error" hidden></p>
+    <div class="actions">
+      <button type="button" class="btn" data-close>Cancel</button>
+      <button id="c-submit" value="ok" class="btn primary">Connect</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="board-dialog">
+  <form method="dialog" id="board-form">
+    <h2>New board</h2>
+    <p class="muted small">A board belongs to a folder. Sessions running in that folder (or below it) join the board automatically; you can add sessions from other folders by hand.</p>
+    <label for="b-folder">Folder</label>
+    <div class="folder-row">
+      <input id="b-folder" list="b-folders" class="mono" autocomplete="off"
+        placeholder="Type or paste a folder, e.g. C:\Users\you\Desktop\project">
+      <button type="button" id="b-browse" class="btn">Browse…</button>
+    </div>
+    <datalist id="b-folders"></datalist>
+    <p class="muted small">Windows paths (C:\…), WSL paths (/mnt/c/…, /home/…) and ~/… all work.</p>
+    <div id="b-places"></div>
+    <div id="b-browser" hidden></div>
+    <div id="b-suggest"></div>
+    <p id="b-error" class="error" hidden></p>
+    <div class="actions">
+      <button type="button" class="btn" data-close>Cancel</button>
+      <button id="b-submit" value="ok" class="btn primary">Create</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

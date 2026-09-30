@@ -1,0 +1,5 @@
+# Your own data: boards (chat ids, connection reasons) and the log of sent notes
+boards/
+logs/
+# Python cache
+__pycache__/
