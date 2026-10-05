@@ -5,3 +5,5 @@ logs/
 __pycache__/
 # Private notes (handoffs, scratch files)
 temp/
+# Claude Code (local settings, worktrees)
+.claude/
