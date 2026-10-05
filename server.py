@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import threading
 import time
+import unicodedata
 import uuid
 from datetime import datetime
 from http import HTTPStatus
@@ -844,13 +845,14 @@ AGENT_STATE_WORDS = {"working": "working", "blocked": "needs you", "done": "done
                      "failed": "failed", "stopped": "stopped"}
 
 
-def run_claude(args, cwd=None, timeout=60, input_text=None):
+def run_claude(args, cwd=None, timeout=60, input_text=None, text=True):
     """Run the claude CLI without a terminal and without this server's own
     Claude session variables, with input_text (if any) on stdin. Returns the
-    CompletedProcess."""
+    CompletedProcess; text=False keeps its output as bytes (text mode turns
+    every \\r into \\n)."""
     stdin = {"stdin": subprocess.DEVNULL} if input_text is None else {"input": input_text}
     return subprocess.run([CLAUDE_BIN, *args], cwd=cwd or str(Path.home()), capture_output=True,
-                          text=True, timeout=timeout, env=claude_env(), **stdin)
+                          text=text, timeout=timeout, env=claude_env(), **stdin)
 
 
 def background_rows(fresh=False):
@@ -1701,9 +1703,6 @@ def _prompt_background(bid, s, text):
     return {"how": "prompt", "copy": copy.group(1) if copy else None}
 
 
-SPINNER = re.compile(r"^\W{0,3}([A-Z][a-z]+ing….*|\d{1,3}|\W{1,3})$")
-
-
 def _job_of(body):
     job = str(body.get("jobId") or "")
     if not JOB_RE.fullmatch(job):
@@ -1729,13 +1728,89 @@ def delete_background(bid, body):
     return {"removed": job}
 
 
+TERM_TOKEN = re.compile(r"\x1b\[([0-9;?<>=]*)[ -/]*([@-~])|\x1b(?:\][^\x07\x1b]*(?:\x07|\x1b\\)|[()][0-9A-B]|.)"
+                        r"|([\x00-\x1a\x1c-\x1f\x7f])|([^\x00-\x1f\x7f]+)", re.S)
+
+
+def _cell_width(ch):
+    if unicodedata.combining(ch) or ch in "​‍︎️":
+        return 0
+    return 2 if unicodedata.east_asian_width(ch) in "WF" else 1
+
+
+def render_screen(raw):
+    """Replay terminal output on a screen and return the text it shows.
+    Claude Code paints its screen with cursor moves (ESC[9G jumps to column 9
+    instead of printing spaces) and redraws status lines in place, so just
+    stripping the escape codes glues words together and stacks every redraw."""
+    rows = {}  # row -> {column: character}
+    r = c = 0
+    for m in TERM_TOKEN.finditer(raw):
+        params, final, ctrl, text = m.groups()
+        if text:
+            row = rows.setdefault(r, {})
+            for ch in text:
+                w = _cell_width(ch)
+                if w == 0:
+                    if c:
+                        row[c - 1] = row.get(c - 1, " ") + ch
+                    continue
+                row[c] = ch
+                if w == 2:
+                    row[c + 1] = ""  # right half of a wide character
+                c += w
+        elif ctrl:
+            if ctrl == "\r":
+                c = 0
+            elif ctrl == "\n":
+                r += 1
+            elif ctrl == "\b":
+                c = max(c - 1, 0)
+            elif ctrl == "\t":
+                c = c // 8 * 8 + 8
+        elif final and not params.startswith(("?", "<", ">", "=")):
+            p = [int(x) if x else 0 for x in params.split(";")] if params else []
+            n = max(p[0], 1) if p else 1
+            if final in "Hf":
+                r, c = n - 1, (max(p[1], 1) if len(p) > 1 else 1) - 1
+            elif final == "A":
+                r = max(r - n, 0)
+            elif final in "Be":
+                r += n
+            elif final in "Ca":
+                c += n
+            elif final == "D":
+                c = max(c - n, 0)
+            elif final in "EF":
+                r, c = (r + n if final == "E" else max(r - n, 0)), 0
+            elif final in "G`":
+                c = n - 1
+            elif final == "d":
+                r = n - 1
+            elif final in "KJ":
+                mode = p[0] if p else 0
+                row = rows.get(r, {})
+                for col in list(row):
+                    if mode == 2 or (mode == 0 and col >= c) or (mode == 1 and col <= c):
+                        del row[col]
+                if final == "J":
+                    for other in list(rows):
+                        if mode in (2, 3) or (mode == 0 and other > r) or (mode == 1 and other < r):
+                            del rows[other]
+    lines = []
+    for i in range(max(rows, default=-1) + 1):
+        row = rows.get(i, {})
+        lines.append("".join(row.get(col, " ") for col in range(max(row, default=-1) + 1)).rstrip())
+    return "\n".join(lines)
+
+
 def background_logs(bid, body):
     """The last screen of a background agent (what it is asking, if blocked)."""
     job = _job_of(body)
-    proc = run_claude(["logs", job], timeout=30)
-    text = ANSI.sub("", (proc.stdout or "") + (proc.stderr or ""))
+    proc = run_claude(["logs", job], timeout=30, text=False)
+    out, err = (b.decode("utf-8", "replace") for b in (proc.stdout, proc.stderr))
+    text = render_screen(out) + "\n" + ANSI.sub("", err)
     lines = [l.rstrip() for l in text.splitlines()]
-    lines = [l for l in lines if not SPINNER.match(l.strip())]  # drop spinner frames
     lines = [l for i, l in enumerate(lines) if l or (i and lines[i - 1])]  # squeeze blank runs
     return {"text": "\n".join(lines[-60:]).strip() or "(nothing to show)"}
 
