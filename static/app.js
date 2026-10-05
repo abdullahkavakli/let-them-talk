@@ -66,7 +66,8 @@ function store(key, value) {
 const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const folderName = (cwd) => (cwd || "").replace(/\/+$/, "").split("/").pop() || cwd || "?";
 // The server reads the editor (Cursor, VS Code, ...) from the claude binary's path.
-const opener = (n) => n.background ? "Background" : n.editor ||
+// A background agent shown in a terminal (or editor) says so; see shownIn in server.py.
+const opener = (n) => n.background ? n.shownIn || "Background" : n.editor ||
   ({ "claude-vscode": "Editor", cli: "Terminal", "sdk-cli": "Headless" }[n.entrypoint] || n.entrypoint || "");
 const hostLabel = () => state.view?.host || "WSL";
 // Status of a card: busy/idle for chats; a background agent's own state.
@@ -100,14 +101,18 @@ const who = (s) => s.title
   : `@${s.name} (folder: ${s.cwd})`;
 
 function defaultNotes(src, dst, reason, tellSrc = true) {
-  const why = reason.trim() || "(no reason given)";
-  const start = (other) => `Start now: send @${other.name} your current view on this with ` +
+  // No reason is fine: the two then say what they work on and how they could help.
+  const why = reason.trim();
+  const whyLine = why ? `Why: ${why}\n` : "No reason given: tell each other briefly what you are working on " +
+    "and whether you can help each other.\n";
+  const ask = why ? "your current view on this" : "a short note on what you are working on";
+  const start = (other) => `Start now: send @${other.name} ${ask} with ` +
     `SendMessage, then reply when it answers. No reply to Let Them Talk is needed.`;
   return {
     from: `[Let Them Talk] Your user connected you to ${who(dst)} and wants you two to talk.\n` +
-      `Why: ${why}\n` + start(dst),
+      whyLine + start(dst),
     to: `[Let Them Talk] Your user connected ${who(src)} to you and wants you two to talk.\n` +
-      `Why: ${why}\n` + (tellSrc
+      whyLine + (tellSrc
         ? `@${src.name} will message you about this. When it does, reply to @${src.name} ` +
           `with SendMessage. No reply to Let Them Talk is needed.`
         : start(src)),
@@ -296,13 +301,13 @@ function renderWires() {
     hit.addEventListener("pointerdown", (e) => { e.stopPropagation(); select(); });
     path.addEventListener("pointerdown", (e) => { e.stopPropagation(); select(); });
     layer.append(hit, path);
-    const mark = c.status === "sending" ? "… " : c.status === "failed" ? "! " : "";
+    const reason = c.reason.trim();
     const label = el("div", {
       class: `wire-label ${c.status === "failed" ? "failed" : ""} ${selected ? "selected" : ""}`,
-      text: mark + (c.reason.trim() || "no reason given"),
+      text: c.status === "failed" ? "! not delivered" : (c.status === "sending" ? "… " : "") + (reason || "connected"),
       title: c.reason,
       "data-id": c.id, tabindex: 0, role: "button",
-      "aria-label": `${display(a)} to ${display(b)}: ${c.reason.trim() || "no reason given"}`,
+      "aria-label": `${display(a)} to ${display(b)}${reason ? `: ${reason}` : ""}${c.status === "failed" ? " (not delivered)" : ""}`,
       onpointerdown: (e) => { e.stopPropagation(); select(); },
     });
     const mid = midpoint(p, q);
@@ -481,7 +486,7 @@ function nodeDetails(n) {
       const other = nodeById(c.from === n.sessionId ? c.to : c.from);
       const dir = c.from === n.sessionId ? "→" : "←";
       return el("li", {}, el("a", {
-        href: "#", text: `${dir} ${other ? display(other) : "?"}: ${c.reason.trim() || "no reason given"}`,
+        href: "#", text: `${dir} ${other ? display(other) : "?"}${c.reason.trim() ? `: ${c.reason.trim()}` : ""}`,
         onclick: (e) => { e.preventDefault(); select_({ type: "wire", id: c.id }); },
       }));
     })) : el("p", { class: "muted small", text: n.messageBlock
@@ -1109,7 +1114,11 @@ async function sendTo(n, text, how) {
       : `Sent the message to ${display(n)}.`, res.result.copy ? "error" : "ok");
     return true;
   } catch (e) {
-    toast(e.message, "error", 0);
+    // A dropped connection (e.g. the server restarted) says nothing about delivery.
+    toast(e instanceof TypeError
+      ? "Lost the connection to Let Them Talk while sending (the server may have restarted). " +
+        "Check the chat before sending again."
+      : e.message, "error", 0);
     return false;
   }
 }
@@ -1154,39 +1163,51 @@ function chatMessage(m, activity) {
     class: "fold", text: label,
     onclick: () => { state.chatOpen[m.id] = !open; renderDrawer(); },
   });
-  if (m.role !== "claude") {
+  if (m.role === "user") {
     const long = m.text.length > FOLD_CHARS || m.text.split("\n").length > FOLD_LINES;
-    const who = m.role === "peer" ? `@${m.from || "another session"}` : m.via === "app" ? "You, from here" : "You";
-    return el("div", { class: `msg ${m.role}` },
-      el("div", { class: "msg-meta", text: `${who} · ${clock(m.at)}` }),
+    return el("div", { class: "msg user" },
+      el("div", { class: "msg-meta", text: `${m.via === "app" ? "You, from here" : "You"} · ${clock(m.at)}` }),
       el("div", { class: "bubble" + (long && !open ? " folded" : ""), text: m.text }),
       long && toggle(open ? "Show less" : "Show all"));
   }
-  const tldr = m.tldr;
+  // Claude's replies, and notes from other sessions (Claude writes those too),
+  // show as a TL;DR when long.
+  const peer = m.role === "peer", done = peer || m.done, tldr = m.tldr;
   let text = m.text, note = "", fold = null;
-  if (!m.done) {
+  if (!done) {
     text = preview(m.text);
     note = activity || "stopped";
   } else if (tldr && !open) {
     text = tldr.state === "done" ? tldr.text : preview(m.text);
     note = { done: "TL;DR", pending: "summarizing…", failed: "no TL;DR" }[tldr.state];
-    fold = "Full reply";
+    fold = peer ? "Show all" : "Full reply";
   } else if (tldr) {
     fold = tldr.state === "done" ? "TL;DR" : "Show less";
   }
-  return el("div", { class: "msg claude" },
-    el("div", { class: "msg-meta", text: ["Claude", clock(m.at), note].filter(Boolean).join(" · ") }),
-    el("div", { class: "bubble" + (m.done ? "" : " typing"), text }),
+  return el("div", { class: `msg ${m.role}` },
+    el("div", { class: "msg-meta",
+      text: [peer ? `@${m.from || "another session"}` : "Claude", clock(m.at), note].filter(Boolean).join(" · ") }),
+    el("div", { class: "bubble" + (done ? "" : " typing"), text }),
     fold && toggle(fold));
 }
 
 function sendSection(n) {
   if (!canReach(n)) return [];
   const asPrompt = promptable(n);
+  // A likely reply, grey like Claude Code's own suggestion. → on the empty box
+  // takes it (not Tab, which must keep moving focus for keyboard users).
+  const sg = !(state.outbox[n.sessionId] || []).length && state.chat[n.sessionId]?.suggest;
+  const suggest = sg?.text;
   const box = el("textarea", {
     id: "send-box", rows: 3, class: "send-box",
-    placeholder: asPrompt ? "Its next prompt" : "Your message",
+    placeholder: suggest ? `${suggest}  (→ to use)` : sg?.pending ? "Suggesting a reply…"
+      : asPrompt ? "Its next prompt" : "Your message",
     oninput: (e) => { state.drafts[n.sessionId] = e.target.value; },
+    onkeydown: (e) => {
+      if (e.key !== "ArrowRight" || !suggest || box.value) return;
+      e.preventDefault();
+      box.value = state.drafts[n.sessionId] = suggest;
+    },
   });
   box.value = state.drafts[n.sessionId] || "";
   // The drawer is redrawn every poll, so "sending" lives in state, not on this button.

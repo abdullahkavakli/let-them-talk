@@ -21,9 +21,10 @@ installed inside WSL, where the server runs.
   below it) appear on their own; ones from other folders are listed under
   *Add agents*. **New board** takes any existing folder (`C:\...`,
   `/mnt/c/...`, `~/...`), typed or picked with **Browse…**.
-- **Connect:** drag the blue handle on a card onto another card and write the
-  reason. You can edit or switch off either note before sending. The chat the
-  arrow starts from goes first; the other replies.
+- **Connect:** drag the blue handle on a card onto another card; a reason is
+  optional (without one, the two tell each other what they work on). You can
+  edit or switch off either note before sending. The chat the arrow starts
+  from goes first; the other replies.
 - **Arrows:** click one to see whether its notes arrived, resend failed ones
   or disconnect.
 - **New agent:** type a prompt, then open it as a chat in your editor (Cursor,
@@ -35,16 +36,17 @@ installed inside WSL, where the server runs.
   model of its latest reply.
 - **Details:** click a card.
   - **Recent messages:** the last 3 messages, like a phone: your prompts as
-    typed (including ones sent while it worked), notes from other sessions,
-    and Claude's finished replies as a short TL;DR (**Full reply** shows all
-    of it). While it works, a *now* line shows its current step; a question
+    typed (including ones sent while it worked), and Claude's finished
+    replies and notes from other sessions as a short TL;DR when they are
+    long (**Full reply** / **Show all** shows the whole text). While it works, a *now* line shows its current step; a question
     it asks you shows with its options, and *Waiting for you…* means it needs
     your permission.
   - **Send a message:** your text shows at once as your bubble (*sending…*,
     then *sent, not read yet*, then *You, from here* once the chat reads it).
     A running chat reads it between steps; an idle background agent wakes up
     with it as its next prompt. If sending fails, the text goes back into
-    the box.
+    the box. When the chat waits for you, the box shows a likely reply in
+    grey; press → to use it.
   - **Agents in this chat:** the workflows and subagents it started, with
     their state, model, time and tokens.
   - **Open in Cursor** (or your editor) shows the chat there.
@@ -55,6 +57,8 @@ installed inside WSL, where the server runs.
   conversation and can't be woken: its card says *needs restart*, and
   **Restart in terminal** runs `claude respawn <id>` in a terminal, where
   Claude Code can ask you to trust its folder.
+- A chat you send to the background keeps its card: the card, with its
+  arrows, moves to the background agent that goes on with it.
 - **Remove from board:** in a card's details; its arrows go too (you are
   asked first). A session that is still running goes back under *Add agents*.
 - **Arrange:** drag cards and the background; drag a panel's inner edge to
@@ -71,7 +75,8 @@ installed inside WSL, where the server runs.
   note is marked *sent*, *sent, reworded* or *failed*.
 - A TL;DR is written by `claude -p --model haiku` with no tools (about 7 s),
   once per finished reply of 280+ characters, only when you open that chat,
-  and kept in memory until the server restarts.
+  and kept in memory until the server restarts. The grey suggested reply is
+  made the same way, once per last reply.
 - Boards are stored in `boards/`, every delivery in `logs/relay.jsonl`.
 
 ## Limits
