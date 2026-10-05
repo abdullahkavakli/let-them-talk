@@ -98,7 +98,7 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: v
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
-.brand { font-weight: 650; font-size: 15px; }
+.brand { margin: 0; font-weight: 650; font-size: 15px; }
 .board-pick { display: flex; align-items: center; gap: 6px; color: var(--muted); }
 .board-pick select {
   font: inherit; color: var(--text); background: var(--panel-2);

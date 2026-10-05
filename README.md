@@ -3,7 +3,8 @@
 An agent organizer for Claude Code: a local board for your running sessions.
 Each session is a card; drag an arrow from one card to another, say why, and
 both get a note from `@let-them-talk` telling them who they are connected to
-and why.
+and why. Use it to set up simple multi-agent work by hand: start agents,
+connect them, and say who hands what to whom.
 
 ## Start
 
@@ -26,8 +27,9 @@ installed inside WSL, where the server runs.
 - **Arrows:** click one to see whether its notes arrived, resend failed ones
   or disconnect.
 - **New agent:** type a prompt, then open it as a chat in your editor (Cursor,
-  VS Code …; press Enter there) or start it as a **background agent** in a
-  folder Claude Code already trusts, with its permissions and model.
+  VS Code …; press Enter there) or start a **terminal/background agent** in a
+  folder Claude Code already trusts, with its permissions and model (its
+  terminal opens unless you untick that).
 - **Cards** show each chat's title and `@address` (notes use the address),
   where it runs (*Terminal*, *Cursor*, *VS Code* …, *Background*) and the
   model of its latest reply.
