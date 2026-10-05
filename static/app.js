@@ -220,12 +220,13 @@ function renderNodes() {
     seen.add(n.sessionId);
     let node = layer.querySelector(`[data-id="${n.sessionId}"]`);
     if (!node) {
-      node = el("div", { class: "node", "data-id": n.sessionId, "data-name": n.name });
+      node = el("div", { class: "node", "data-id": n.sessionId, "data-name": n.name, tabindex: 0, role: "button" });
       layer.append(node);
     }
     const st = cardStatus(n);
     node.className = "node" + (n.live ? "" : " ended") +
       (state.selected?.type === "node" && state.selected.id === n.sessionId ? " selected" : "");
+    node.setAttribute("aria-label", `${display(n)}, ${st.text}`);
     const pos = nodePos(n);
     node.style.left = `${pos.x}px`;
     node.style.top = `${pos.y}px`;
@@ -277,6 +278,8 @@ function midpoint(a, b) {
 function renderWires() {
   const layer = $("#wire-layer");
   const labels = $("#labels");
+  // Labels are rebuilt on every render; keep keyboard focus on the same one.
+  const focused = labels.contains(document.activeElement) ? document.activeElement.dataset.id : null;
   layer.replaceChildren();
   labels.replaceChildren();
   for (const c of state.view.board.connections) {
@@ -298,12 +301,15 @@ function renderWires() {
       class: `wire-label ${c.status === "failed" ? "failed" : ""} ${selected ? "selected" : ""}`,
       text: mark + (c.reason.trim() || "no reason given"),
       title: c.reason,
+      "data-id": c.id, tabindex: 0, role: "button",
+      "aria-label": `${display(a)} to ${display(b)}: ${c.reason.trim() || "no reason given"}`,
       onpointerdown: (e) => { e.stopPropagation(); select(); },
     });
     const mid = midpoint(p, q);
     label.style.left = `${mid.x}px`;
     label.style.top = `${mid.y}px`;
     labels.append(label);
+    if (c.id === focused) label.focus({ preventScroll: true });
   }
 }
 
@@ -319,7 +325,7 @@ function renderAvailable() {
   box.replaceChildren(...folders.map((cwd) => el("div", { class: "folder-group" },
     el("p", { class: "folder-name mono", text: cwd, title: cwd }),
     ...groups[cwd].map((s) => el("div", { class: "avail-row" },
-      el("span", { class: `dot ${s.status}`, title: s.status }),
+      el("span", { class: `dot ${s.status}`, title: s.status, role: "img", "aria-label": s.status }),
       el("span", { class: "name", text: display(s), title: [s.name && `@${s.name}`, onWindows(s) ? "Windows" : "WSL", opener(s), s.status].filter(Boolean).join(" · ") }),
       el("button", { class: "btn", text: "Add", onclick: () => addNode(s.sessionId) }))))));
 }
@@ -434,13 +440,22 @@ function wireDetails(c) {
       el("label", { class: "small check" }, notify, " Tell both agents"),
       el("button", {
         class: "btn danger", text: "Disconnect",
-        onclick: async () => { await act("disconnect", { id: c.id, notify: notify.checked }); closeDrawer(); },
+        onclick: async () => {
+          const told = notify.checked ? " Both agents will be told." : "";
+          if (!confirm(`Disconnect ${a ? display(a) : "?"} → ${b ? display(b) : "?"}?${told}`)) return;
+          await act("disconnect", { id: c.id, notify: notify.checked });
+          closeDrawer();
+        },
       })),
   ];
 }
 
 function nodeDetails(n) {
   const conns = state.view.board.connections.filter((c) => c.from === n.sessionId || c.to === n.sessionId);
+  // Agents this one can still be connected to, for connecting without dragging.
+  const targets = n.live && !n.messageBlock ? state.view.nodes.filter((o) =>
+    o.sessionId !== n.sessionId && o.live && !o.messageBlock &&
+    !conns.some((c) => c.from === n.sessionId && c.to === o.sessionId)) : [];
   return [
     el("h3", { text: display(n) }),
     el("dl", {},
@@ -471,7 +486,14 @@ function nodeDetails(n) {
       }));
     })) : el("p", { class: "muted small", text: n.messageBlock
       ? "None. This session can't be connected until it can receive notes."
+      : targets.length ? "None. Drag the blue handle onto another agent, or pick one below."
       : "None. Drag the blue handle onto another agent to connect them." }),
+    targets.length > 0 && el("div", { class: "drawer-actions connect-to" },
+      el("span", { class: "small muted", text: "Connect to" }),
+      ...targets.map((o) => el("button", {
+        class: "btn", id: `connect-${o.sessionId}`, text: display(o),
+        onclick: () => openConnectDialog(n.sessionId, o.sessionId),
+      }))),
     removeControls(n, conns),
   ];
 }
@@ -732,6 +754,31 @@ document.addEventListener("keydown", (evt) => {
   else if (state.selected && !document.querySelector("dialog[open]")) closeDrawer();
 });
 $("#drawer-close").addEventListener("click", closeDrawer);
+
+// Keyboard: Tab reaches cards and arrow labels; Enter or Space opens them.
+for (const layer of [$("#nodes"), $("#labels")]) {
+  layer.addEventListener("keydown", (evt) => {
+    if (evt.key !== "Enter" && evt.key !== " ") return;
+    const node = evt.target.closest(".node"), label = evt.target.closest(".wire-label");
+    if (!node && !label) return;
+    evt.preventDefault();
+    select_(node ? { type: "node", id: node.dataset.id } : { type: "wire", id: label.dataset.id });
+  });
+  layer.addEventListener("focusin", (evt) => revealFocused(evt.target));
+}
+
+// Pan a card or label reached with the keyboard fully into view. (The canvas
+// clips instead of scrolling, so the browser can't scroll it there itself.)
+function revealFocused(target) {
+  if (!target.matches(":focus-visible")) return;
+  const r = canvas.getBoundingClientRect(), b = target.getBoundingClientRect();
+  const dx = b.left < r.left ? r.left - b.left + 40 : b.right > r.right ? r.right - b.right - 40 : 0;
+  const dy = b.top < r.top ? r.top - b.top + 40 : b.bottom > r.bottom ? r.bottom - b.bottom - 40 : 0;
+  if (!dx && !dy) return;
+  state.pan = { x: Math.round(state.pan.x + dx), y: Math.round(state.pan.y + dy) };
+  $("#world").style.transform = `translate(${state.pan.x}px, ${state.pan.y}px)`;
+  store(`ltt.pan.${state.boardId}`, state.pan);
+}
 
 // ---------------------------------------------------------- connect dialog
 
@@ -1018,7 +1065,7 @@ $("#chat-form").addEventListener("submit", async (evt) => {
 // ------------------------------------------------------------------ toasts
 
 const toasts = $("#toasts");
-function toast(text, level = "info", ms = 7000) {
+function toast(text, level = "info", ms = level === "error" ? 7000 : 5000) {
   const t = el("div", { class: `toast ${level}` }, el("span", { text }),
     el("button", { class: "icon-btn", text: "×", "aria-label": "Dismiss", onclick: () => t.remove() }));
   toasts.append(t);
@@ -1216,7 +1263,8 @@ function backgroundSection(n) {
           ? (delete state.logs[n.sessionId], renderDrawer())
           : agentAction(n, "agent-logs", (r) => { state.logs[n.sessionId] = r.text; renderDrawer(); }) }),
       n.running && el("button", { class: "btn", text: "Stop",
-        onclick: () => agentAction(n, "agent-stop", () => toast(`Stopped ${display(n)}.`, "ok")) }),
+        onclick: () => confirm(`Stop ${display(n)}? It stops whatever it is doing now.`)
+          && agentAction(n, "agent-stop", () => toast(`Stopped ${display(n)}.`, "ok")) }),
       el("button", { class: "btn danger", text: "Delete agent",
         onclick: () => confirm(`Delete the background agent ${display(n)}? Its conversation stays on disk.`)
           && agentAction(n, "agent-delete", () => { toast(`Deleted ${display(n)}.`, "ok"); closeDrawer(); }) })),
