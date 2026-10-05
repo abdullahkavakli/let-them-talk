@@ -380,7 +380,10 @@ details.run > summary .dot { margin-top: 5px; }
 .browse-item:hover { background: var(--accent-soft); }
 
 .badge.model { color: var(--text); }
-.node .meta.badges { white-space: normal; overflow: visible; display: flex; flex-wrap: wrap; row-gap: 3px; }
+/* One line: long badges shorten with "…"; the state (idle, done, needs you) never does. */
+.node .meta.badges { display: flex; flex-wrap: nowrap; gap: 2px; }
+.node .meta.badges .badge { margin-right: 0; min-width: 0; font-size: 11px; padding: 0 4px; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node .meta.badges .badge.state { flex-shrink: 0; min-width: auto; }
 
 /* Activity: a fold-away section in the sidebar */
 #activity-box > summary { cursor: pointer; list-style: none; display: flex; align-items: center; }
