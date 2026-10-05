@@ -3,3 +3,5 @@ boards/
 logs/
 # Python cache
 __pycache__/
+# Private notes (handoffs, scratch files)
+temp/

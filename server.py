@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Agent Organizer: a local board for connecting Claude Code sessions.
+"""Let Them Talk: a local board for your Claude Code sessions.
 
-The server reads the session registry in ~/.claude/sessions/ to find live
-sessions, keeps boards (nodes, arrows, reasons) as JSON files in boards/, and
-delivers "the organizer connected you" notes through a short headless Claude
-session, the relay, which calls SendMessage. Standard library only.
+The server reads Claude Code's session registry (~/.claude/sessions) to find
+running chats, shows them as cards on boards (boards/*.json), lets you connect
+them, starts new agents (a Cursor/VS Code chat or a background agent) and
+sends them prompts and messages. Messages go through a short headless Claude
+run, the relay, which calls SendMessage. Standard library only.
 
 Run:  python3 server.py      then open http://localhost:8765
 """
@@ -29,8 +30,17 @@ APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
 BOARDS_DIR = APP_DIR / "boards"
 LOG_FILE = APP_DIR / "logs" / "relay.jsonl"
-REGISTRY_DIR = Path.home() / ".claude" / "sessions"
-PROJECTS_DIR = Path.home() / ".claude" / "projects"
+
+
+
+def setting(name, default=None):
+    """LTT_<name>, or the older ORGANIZER_<name>, from the environment."""
+    return os.environ.get(f"LTT_{name}") or os.environ.get(f"ORGANIZER_{name}") or default
+
+
+CLAUDE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+REGISTRY_DIR = CLAUDE_DIR / "sessions"
+PROJECTS_DIR = CLAUDE_DIR / "projects"
 
 
 def win_to_wsl(path):
@@ -44,8 +54,8 @@ def win_to_wsl(path):
 
 def _windows_home():
     """The Windows user folder as a WSL path, when this runs inside WSL."""
-    if os.environ.get("ORGANIZER_WINDOWS_HOME"):
-        return Path(os.environ["ORGANIZER_WINDOWS_HOME"])
+    if setting("WINDOWS_HOME"):
+        return Path(setting("WINDOWS_HOME"))
     cmd = shutil.which("cmd.exe") or "/mnt/c/Windows/System32/cmd.exe"
     if not os.path.exists(cmd):
         return None
@@ -67,13 +77,42 @@ WIN_PID_TTL = 3
 WIN_MESSAGING_MIN = (2, 1, 234)
 win_pid_cache = {"at": 0.0, "pids": set()}
 
+APP_NAME = "Let Them Talk"
 HOST = "127.0.0.1"
-PORT = int(os.environ.get("ORGANIZER_PORT", "8765"))
-RELAY_MODEL = os.environ.get("ORGANIZER_MODEL", "haiku")
-CLAUDE_BIN = (os.environ.get("ORGANIZER_CLAUDE") or shutil.which("claude")
+PORT = int(setting("PORT", "8765"))
+RELAY_MODEL = setting("MODEL", "haiku")
+CLAUDE_BIN = (setting("CLAUDE") or shutil.which("claude")
               or str(Path.home() / ".local" / "bin" / "claude"))
-RELAY_NAME = "organizer"
+RELAY_NAME = "let-them-talk"   # what chats see as the sender of notes
+RELAY_RE = re.compile(r"(let-them-talk|organizer)(-[\w-]+)?")  # hidden from the board
 RELAY_TIMEOUT = 180
+MAX_BODY = 1 << 20             # largest request body the API accepts
+
+
+def _host_label():
+    """What to call this machine's own sessions: WSL, Linux or macOS."""
+    try:
+        if "microsoft" in Path("/proc/version").read_text().lower():
+            return "WSL"
+    except OSError:
+        pass
+    return "macOS" if os.uname().sysname == "Darwin" else "Linux"
+
+
+HOST_LABEL = _host_label()
+ON_WSL = HOST_LABEL == "WSL"
+CSRF_HEADER = "X-Let-Them-Talk"
+# Variables a Claude Code session sets for its own children. If this server is
+# started from a Claude terminal, the claude processes it runs must not
+# inherit them, or they would act as parts of that session.
+SESSION_ENV = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET",
+               "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_CHILD_SESSION",
+               "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_JOB_DIR", "CLAUDE_CODE_SESSION_ATTENDED",
+               "TRACEPARENT", "TRACESTATE")
+
+
+def claude_env():
+    return {k: v for k, v in os.environ.items() if k not in SESSION_ENV}
 PRUNE_AFTER = 120  # seconds an ended, unconnected session stays on a board
 ACTIVITY_KEEP = 60
 
@@ -186,6 +225,208 @@ def session_model(sid):
 def label(s):
     """How the board names a session in text: its title, else its address."""
     return f"\"{s['title']}\"" if s.get("title") else f"@{s['name']}"
+
+
+# ------------------------------------------------------ recent chat messages
+#
+# The drawer shows a chat's last few messages like a phone conversation: the
+# user's prompts as typed, notes from other sessions, and each of Claude's
+# replies as a TL;DR written by a short headless run (once per reply).
+
+CHAT_LAST = 3
+CHAT_TAIL = 1 << 20      # bytes first read from the end of a transcript; doubled until enough
+TLDR_MIN = 280           # replies shorter than this are shown as they are
+TLDR_INPUT = 12000       # characters of a reply sent to be summarized
+TLDR_TIMEOUT = 90
+TLDR_RETRY = 120         # seconds before a failed summary is tried again
+TLDR_SYSTEM = (
+    "You write a TL;DR of one reply from a coding assistant, for a chat preview. "
+    "One or two short sentences, at most 200 characters, in the same language as "
+    "the reply. Say what was done or found and anything the user must do. Prefer "
+    "plain words over jargon. Plain text only, no markdown, no preamble."
+)
+END_STOPS = ("end_turn", "stop_sequence")
+CONTEXT_TAGS = re.compile(r"<(ide_[a-z_]+|system-reminder)>.*?</\1>\s*", re.S)
+USER_NOTE_RE = re.compile(r"\[[^\]\n]+\] Message from your user:\s*")  # see message_note()
+PEER_RE = re.compile(r'<cross-session-message[^>]*?from-name="([^"]*)"[^>]*>\s*(.*?)\s*</cross-session-message>', re.S)
+tldr_lock = threading.Lock()
+tldr_cache = {}  # reply id -> {"state": pending|done|failed, "text", "at"}
+tldr_slots = threading.Semaphore(2)
+
+
+def _text_of(content):
+    if isinstance(content, str):
+        return content
+    return "\n".join(b.get("text") or "" for b in content or []
+                     if isinstance(b, dict) and b.get("type") == "text")
+
+
+def _doing(block):
+    """A tool call as a short "what it is doing now" line."""
+    desc = " ".join(str((block.get("input") or {}).get("description") or "").split())
+    return desc[:120] if desc else _tool_summary(block)
+
+
+def _chat_messages(lines):
+    """Transcript lines -> (messages, working, asking, doing). A reply is the
+    text of the latest assistant message in its turn, so "let me check" lines
+    written on the way are replaced by the answer. asking: the questions of an
+    AskUserQuestion call still waiting for the user's answer. doing: the
+    latest tool call of an unfinished turn."""
+    msgs, reply, working, ended_by, asking, doing = [], None, False, None, None, None
+    for raw in lines:
+        try:
+            rec = json.loads(raw)
+        except ValueError:
+            continue
+        if rec.get("isSidechain") or rec.get("type") not in ("user", "assistant", "attachment"):
+            continue
+        m = rec.get("message") or {}
+        at = (_ms(rec.get("timestamp")) or 0) / 1000
+        if rec["type"] == "attachment":
+            # A message typed while Claude was working is queued into the
+            # running turn and recorded only as this attachment.
+            att = rec.get("attachment") or {}
+            if att.get("type") != "queued_command" or att.get("commandMode") == "task-notification":
+                continue
+            typed = CONTEXT_TAGS.sub("", _text_of(att.get("prompt"))).strip()
+            if typed and not typed.startswith("<"):
+                msgs.append({"id": rec.get("uuid"), "role": "user", "text": typed, "at": at})
+                reply = None  # what Claude writes next comes after it
+            continue
+        if rec["type"] == "user":
+            content = m.get("content")
+            results = [b.get("tool_use_id") for b in content if isinstance(b, dict)
+                       and b.get("type") == "tool_result"] if isinstance(content, list) else []
+            if results:
+                if asking and asking["id"] in results:
+                    asking = None
+                continue
+            origin = (rec.get("origin") or {}).get("kind")
+            text = _text_of(content)
+            typed = CONTEXT_TAGS.sub("", text).strip()
+            if (origin is None and typed and not typed.startswith(("<", "[Request interrupted"))
+                    and not rec.get("isMeta") and not rec.get("isCompactSummary")):
+                origin = "human"  # written before Claude Code recorded where messages come from
+            if origin == "human":
+                if typed:
+                    msgs.append({"id": rec.get("uuid"), "role": "user", "text": typed, "at": at})
+            elif origin == "peer":
+                hit = PEER_RE.search(text)
+                sender, body = (hit.group(1), hit.group(2)) if hit else ("", text.strip())
+                mine = RELAY_RE.fullmatch(sender) and USER_NOTE_RE.match(body)
+                if mine:  # sent from this app's Send box: the user's own words
+                    msgs.append({"id": rec.get("uuid"), "role": "user", "via": "app", "at": at,
+                                 "text": body[mine.end():]})
+                else:
+                    msgs.append({"id": rec.get("uuid"), "role": "peer", "at": at,
+                                 "from": sender, "text": body})
+            elif origin:
+                pass  # a task notification: starts a turn, not shown
+            elif text.startswith("[Request interrupted"):
+                working, asking, doing = False, None, None
+                if reply:
+                    reply["done"] = True
+                continue
+            else:
+                continue  # tool results, skill bodies, command output
+            reply, working, asking, doing = None, True, None, None
+            continue
+        # One API message is split into a record per block, each carrying the
+        # message's stop_reason, so the thinking block of the final answer
+        # already says end_turn before its text arrives.
+        mid = m.get("id") or rec.get("uuid")
+        for b in m.get("content") or []:
+            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") != "AskUserQuestion":
+                doing = _doing(b)
+            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "AskUserQuestion":
+                qs = (b.get("input") or {}).get("questions") or []
+                asking = {"id": b.get("id"), "questions": [
+                    {"question": str(q.get("question") or ""),
+                     "options": [str(o.get("label") or "") for o in q.get("options") or [] if isinstance(o, dict)]}
+                    for q in qs if isinstance(q, dict)]}
+        text = _text_of(m.get("content")).strip()
+        done = m.get("stop_reason") in END_STOPS
+        if text:
+            if reply is None or (reply["done"] and mid != ended_by):
+                reply = {"id": mid, "role": "claude", "text": text, "at": at, "done": done}
+                msgs.append(reply)
+            elif reply["id"] == mid:
+                reply["text"] += "\n\n" + text
+            else:
+                reply.update(id=mid, text=text, at=at)
+        if reply:
+            reply["done"] = done
+        ended_by = mid if done else None
+        working = not done
+        if done:
+            doing = None
+    return msgs, working, asking, doing
+
+
+def _tldr(key, text):
+    if len(text) > TLDR_INPUT:
+        text = text[:TLDR_INPUT // 2] + "\n[…]\n" + text[-TLDR_INPUT // 2:]
+    entry = {"state": "failed", "text": "", "at": time.time()}
+    with tldr_slots:
+        try:
+            proc = run_claude(["-p", "--model", RELAY_MODEL, "--name", f"{RELAY_NAME}-tldr",
+                               "--tools", "", "--no-session-persistence", "--output-format", "json",
+                               "--system-prompt", TLDR_SYSTEM],
+                              cwd=APP_DIR, timeout=TLDR_TIMEOUT, input_text=text)
+            res = json.loads(proc.stdout)
+            out = str(res.get("result") or "").replace("`", "").replace("**", "").strip()
+            if out and not res.get("is_error"):
+                entry.update(state="done", text=out)
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            pass
+    entry["at"] = time.time()
+    with tldr_lock:
+        tldr_cache[key] = entry
+
+
+def _tldr_for(reply):
+    """The cached TL;DR of a finished reply; starts writing it if needed."""
+    key = reply["id"]
+    with tldr_lock:
+        hit = tldr_cache.get(key)
+        if hit and not (hit["state"] == "failed" and time.time() - hit["at"] > TLDR_RETRY):
+            return {"state": hit["state"], "text": hit["text"]}
+        tldr_cache[key] = {"state": "pending", "text": "", "at": time.time()}
+    threading.Thread(target=_tldr, args=(key, reply["text"]), daemon=True).start()
+    return {"state": "pending", "text": ""}
+
+
+def session_chat(sid):
+    """The last CHAT_LAST messages of a session, read from the end of its
+    transcript, with a TL;DR for each finished reply long enough to need one."""
+    if not SID_RE.fullmatch(sid or ""):
+        raise ValueError("bad session id")
+    session_title(sid)  # finds the transcript
+    path = title_cache.get(sid, {}).get("path")
+    msgs, working, asking, doing = [], False, None, None
+    if path is not None:
+        try:
+            size = path.stat().st_size
+            tail = CHAT_TAIL
+            with path.open("rb") as f:
+                while True:
+                    start = max(0, size - tail)
+                    f.seek(start)
+                    lines = f.read(size - start).splitlines()
+                    msgs, working, asking, doing = _chat_messages(lines[1:] if start else lines)
+                    # one more than shown: the first one may have begun before the tail
+                    if start == 0 or len(msgs) > CHAT_LAST:
+                        break
+                    tail *= 2
+        except OSError:
+            pass
+    msgs = msgs[-CHAT_LAST:]
+    for m in msgs:
+        if m["role"] == "claude" and m["done"] and len(m["text"]) >= TLDR_MIN:
+            m["tldr"] = _tldr_for(m)
+    return {"sessionId": sid, "messages": msgs, "working": working,
+            "asking": asking and asking["questions"], "doing": working and doing or None}
 
 
 # ------------------------------------------------------ agents in a session
@@ -455,8 +696,20 @@ def session_agents(sid):
             "direct": direct_agents(sdir, live), "workflows": workflow_runs(sdir, live)}
 
 
+HAS_PROC = Path("/proc/self/stat").exists()
+
+
 def _proc_start(pid):
-    """Start time of a process (field 22 of /proc/<pid>/stat), or None."""
+    """Start time of a process (field 22 of /proc/<pid>/stat), or None if it
+    isn't running. Without /proc (macOS) only liveness is known: ""."""
+    if not HAS_PROC:
+        try:
+            os.kill(pid, 0)
+            return ""
+        except PermissionError:
+            return ""
+        except OSError:
+            return None
     try:
         stat = Path(f"/proc/{pid}/stat").read_text()
     except OSError:
@@ -505,7 +758,11 @@ EDITOR_PATHS = [("/.cursor-server/", "Cursor"), ("\\.cursor\\", "Cursor"),
                 ("\\.vscode-insiders\\", "VS Code Insiders"),
                 ("/.vscode-server/", "VS Code"), ("\\.vscode\\", "VS Code"),
                 ("/.windsurf-server/", "Windsurf"), ("\\.windsurf\\", "Windsurf"),
-                ("/.vscodium-server/", "VSCodium"), ("\\.vscode-oss\\", "VSCodium")]
+                ("/.vscodium-server/", "VSCodium"), ("\\.vscode-oss\\", "VSCodium"),
+                # desktop editors on Linux and macOS
+                ("/.cursor/extensions/", "Cursor"), ("/.vscode-insiders/extensions/", "VS Code Insiders"),
+                ("/.vscode/extensions/", "VS Code"), ("/.windsurf/extensions/", "Windsurf"),
+                ("/.vscode-oss/extensions/", "VSCodium")]
 POWERSHELL = (shutil.which("powershell.exe")
               or "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe")
 exe_cache = {}      # (pid, procStart) -> binary path of a WSL session
@@ -523,7 +780,11 @@ def wsl_exe(pid, proc_start):
         try:
             exe_cache[key] = os.readlink(f"/proc/{pid}/exe")
         except OSError:
-            exe_cache[key] = ""
+            try:  # no /proc (macOS): ask ps for the program path
+                exe_cache[key] = subprocess.run(["ps", "-o", "comm=", "-p", str(pid)], capture_output=True,
+                                                text=True, timeout=5).stdout.strip()
+            except (OSError, subprocess.SubprocessError):
+                exe_cache[key] = ""
     return exe_cache[key]
 
 
@@ -561,8 +822,72 @@ def _session(reg, platform, cwd, block, exe=""):
         "kind": reg.get("kind", ""),
         "entrypoint": reg.get("entrypoint", ""),
         "version": reg.get("version", ""),
-        "pid": reg["pid"],
+        "pid": reg.get("pid"),
         "startedAt": reg.get("startedAt"),
+        "background": reg.get("kind") == "bg",
+        "jobId": reg.get("jobId"),
+        "running": reg.get("pid") is not None,
+    }
+
+
+# ------------------------------------------------------ background agents
+#
+# Background agents (claude --bg) run under Claude Code's supervisor. While a
+# process runs it has a registry file of kind "bg"; afterwards the agent still
+# exists (done, stopped, waiting for you) and can be woken with a new prompt.
+# `claude agents --json --all` is the documented way to list them.
+
+AGENTS_TTL = 2.5
+agents_cache = {"at": 0.0, "rows": []}
+agents_lock = threading.Lock()
+AGENT_STATE_WORDS = {"working": "working", "blocked": "needs you", "done": "done",
+                     "failed": "failed", "stopped": "stopped"}
+
+
+def run_claude(args, cwd=None, timeout=60, input_text=None):
+    """Run the claude CLI without a terminal and without this server's own
+    Claude session variables, with input_text (if any) on stdin. Returns the
+    CompletedProcess."""
+    stdin = {"stdin": subprocess.DEVNULL} if input_text is None else {"input": input_text}
+    return subprocess.run([CLAUDE_BIN, *args], cwd=cwd or str(Path.home()), capture_output=True,
+                          text=True, timeout=timeout, env=claude_env(), **stdin)
+
+
+def background_rows(fresh=False):
+    """Background rows of `claude agents --json --all`, cached briefly."""
+    with agents_lock:
+        if not fresh and time.time() - agents_cache["at"] < AGENTS_TTL:
+            return agents_cache["rows"]
+        try:
+            data = json.loads(run_claude(["agents", "--json", "--all"], timeout=20).stdout or "[]")
+            rows = [r for r in data if isinstance(r, dict) and r.get("kind") == "background"
+                    and r.get("sessionId") and r.get("id")]
+        except (OSError, subprocess.SubprocessError, ValueError):
+            rows = agents_cache["rows"]  # keep the last good answer
+        agents_cache.update(at=time.time(), rows=rows)
+        return rows
+
+
+def has_transcript(sid):
+    session_title(sid)  # finds the transcript
+    return title_cache.get(sid, {}).get("path") is not None
+
+
+def _background_session(row):
+    """A background agent that has no running process right now. Without a
+    transcript (stopped before its first reply finished) Claude Code can't
+    wake it, only restart it: `claude respawn`."""
+    sid = row["sessionId"]
+    resumable = has_transcript(sid)
+    return {
+        "editor": None, "sessionId": sid, "name": row.get("name") or row["id"],
+        "title": session_title(sid) or row.get("name"), "model": session_model(sid),
+        "cwd": row.get("cwd", ""), "winCwd": None, "platform": "wsl",
+        "messageBlock": "This background agent isn't running right now. Send it a prompt to wake it."
+        if resumable else "This background agent has no saved conversation, so it can't be woken; restart it first.",
+        "status": "asleep", "kind": "bg", "entrypoint": "cli", "version": "",
+        "pid": None, "startedAt": row.get("startedAt"), "background": True,
+        "jobId": row["id"], "running": False, "resumable": resumable,
     }
 
 
@@ -575,15 +900,26 @@ def live_sessions():
         if pid in relay_pids:
             continue
         started = _proc_start(pid)
-        if started is None or (reg.get("procStart") and str(reg["procStart"]) != started):
+        if started is None or (started and reg.get("procStart") and str(reg["procStart"]) != started):
             continue
         sock = reg.get("messagingSocketPath")
         if not sock or not os.path.exists(sock):
             continue
         name = reg.get("name") or ""
-        if re.fullmatch(r"organizer(-[\w-]+)?", name) and reg.get("kind") != "interactive":
-            continue  # a relay from this app or an earlier run
+        if RELAY_RE.fullmatch(name) and reg.get("kind") not in ("interactive", "bg"):
+            continue  # a relay from this app (or from its Agent Organizer days)
         sessions.append(_session(reg, "wsl", reg.get("cwd", ""), None, wsl_exe(pid, started)))
+    # background agents: add state to the running ones, list the sleeping ones
+    seen = {x["sessionId"] for x in sessions}
+    for row in background_rows():
+        match = next((x for x in sessions if x["sessionId"] == row["sessionId"]), None)
+        if match is None and row["sessionId"] not in seen:
+            match = _background_session(row)
+            sessions.append(match)
+        if match is not None:
+            match.update(background=True, jobId=row["id"], agentState=row.get("state"),
+                         agentStateText=AGENT_STATE_WORDS.get(row.get("state"), row.get("state")),
+                         waitingFor=row.get("waitingFor"))
     if WIN_REGISTRY_DIR is not None:
         win_regs = list(_read_registry(WIN_REGISTRY_DIR))
         pids = windows_claude_pids() if win_regs else set()
@@ -594,7 +930,7 @@ def live_sessions():
                 block = ("This Windows session's Claude Code is too old to receive messages; "
                          "update Claude Code on Windows.")
             else:
-                block = "The organizer can't deliver notes to Windows sessions yet."
+                block = f"{APP_NAME} can't deliver notes to Windows sessions yet."
             exe = windows_exe(reg["pid"]) if reg.get("entrypoint") == "claude-vscode" else ""
             sessions.append(_session(reg, "windows", win_to_wsl(reg.get("cwd", "")), block, exe))
     counts = {}
@@ -665,6 +1001,12 @@ def normalize_folder(raw):
                          "/mnt/c/Users/you/project or ~/project.")
     path = os.path.normpath(path)
     if not os.path.isdir(path):
+        drive = re.match(r"/mnt/([a-z])(/|$)", path)
+        if drive and not os.path.ismount(f"/mnt/{drive.group(1)}"):
+            # e.g. a Google Drive letter that appeared after WSL started
+            letter = drive.group(1)
+            raise ValueError(f"Drive {letter.upper()}: isn't mounted in WSL, so {path} can't be reached. "
+                             f"Mount it with: sudo mount -t drvfs {letter.upper()}: /mnt/{letter}")
         raise ValueError(f"No such folder: {path}")
     return path
 
@@ -753,9 +1095,14 @@ def sync_board(board, live):
     for s in live:
         sid = s["sessionId"]
         node = board["nodes"].get(sid)
-        if node is None and in_folder(s["cwd"], board["folder"]) and sid not in board["hidden"]:
+        adopt = board.setdefault("adopt", [])
+        wanted = sid in adopt or (s.get("jobId") and s["jobId"] in adopt)
+        if node is None and sid not in board["hidden"] and (wanted or in_folder(s["cwd"], board["folder"])):
             x, y = free_slot(board)
             node = board["nodes"][sid] = {"x": x, "y": y}
+            changed = True
+        if wanted:  # a chat this board started: it's on the board now
+            board["adopt"] = [a for a in adopt if a not in (sid, s.get("jobId"))]
             changed = True
         if node is not None:
             fresh = {"name": s["name"], "cwd": s["cwd"], "platform": s["platform"],
@@ -764,6 +1111,8 @@ def sync_board(board, live):
                 fresh["title"] = s["title"]
             if s["model"]:
                 fresh["model"] = s["model"]
+            if s["editor"]:
+                fresh["editor"] = s["editor"]
             if any(node.get(k) != v for k, v in fresh.items()):
                 node.update(fresh)
                 changed = True
@@ -795,12 +1144,15 @@ def board_view(bid):
             **(s or {"sessionId": sid, "name": node.get("name", sid[:8]),
                      "title": node.get("title"), "cwd": node.get("cwd", ""),
                      "platform": node.get("platform", "wsl"), "winCwd": node.get("winCwd"),
-                     "model": node.get("model"),
+                     "model": node.get("model"), "editor": node.get("editor"),
                      "status": "ended"}),
             "x": node["x"], "y": node["y"], "live": s is not None,
         })
     others = [s for s in live if s["sessionId"] not in board["nodes"]]
     return {
+        "host": HOST_LABEL,
+        "launches": [dict((k, v) for k, v in l.items() if k != "known")
+                     for l in launches.values() if l["board"] == bid and time.time() - l["at"] < 600],
         "board": {k: board[k] for k in ("id", "title", "folder", "connections", "activity")},
         "nodes": nodes, "available": others, "boards": list_boards(),
     }
@@ -822,29 +1174,29 @@ def default_notes(src, dst, reason, tell_src=True):
     someone always goes first."""
     why = reason.strip() or "(no reason given)"
     start = lambda other: (f"Start now: send @{other['name']} your current view on this with "
-                           f"SendMessage, then reply when it answers. No reply to the organizer is needed.")
+                           f"SendMessage, then reply when it answers. No reply to Let Them Talk is needed.")
     to_src = (
-        f"[Agent organizer] Your user connected you to {who(dst)} and wants you two to talk.\n"
+        f"[Let Them Talk] Your user connected you to {who(dst)} and wants you two to talk.\n"
         f"Why: {why}\n" + start(dst)
     )
     to_dst = (
-        f"[Agent organizer] Your user connected {who(src)} to you and wants you two to talk.\n"
+        f"[Let Them Talk] Your user connected {who(src)} to you and wants you two to talk.\n"
         f"Why: {why}\n" + (
             f"@{src['name']} will message you about this. When it does, reply to @{src['name']} "
-            f"with SendMessage. No reply to the organizer is needed." if tell_src else start(src))
+            f"with SendMessage. No reply to Let Them Talk is needed." if tell_src else start(src))
     )
     return to_src, to_dst
 
 
 def tag(s):
-    """Title plus address, e.g. "R8 fixes" (@thesis-git-da)."""
+    """Title plus address, e.g. "Fix the login test" (@api-worker)."""
     return f"\"{s['title']}\" (@{s['name']})" if s.get("title") else f"@{s['name']}"
 
 
 def disconnect_note(src, dst, reason):
     why = f" ({reason.strip()})" if reason.strip() else ""
     return (
-        f"[Agent organizer] Your user removed the connection "
+        f"[Let Them Talk] Your user removed the connection "
         f"{tag(src)} -> {tag(dst)}{why}. Stop sending messages for that purpose. "
         f"No reply is needed."
     )
@@ -853,8 +1205,8 @@ def disconnect_note(src, dst, reason):
 # ------------------------------------------------------------------- relay
 
 RELAY_SYSTEM = (
-    "You are the message relay of the user's Agent Organizer, a local tool the "
-    "user runs to connect their own Claude Code sessions on this machine. Your "
+    "You are the message relay of Let Them Talk, a local tool the user runs to "
+    "connect and manage their own Claude Code sessions on this machine. Your "
     "only job is to deliver the messages you are given, verbatim, with the "
     "SendMessage tool."
 )
@@ -886,7 +1238,7 @@ def relay_send(items):
     states = [{"state": "failed", "detail": "the relay made no SendMessage call"} for _ in items]
     meta = {"cost_usd": None, "seconds": None, "error": None}
     try:
-        proc = subprocess.Popen(cmd, cwd=APP_DIR, stdin=subprocess.DEVNULL,
+        proc = subprocess.Popen(cmd, cwd=APP_DIR, stdin=subprocess.DEVNULL, env=claude_env(),
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     except OSError as e:
         meta["error"] = f"could not start claude: {e}"
@@ -1168,10 +1520,268 @@ def remove_node(bid, body):
         send_disconnect_notes(bid, removed)
 
 
+# ------------------------------------------------ managing agents from here
+
+PERMISSION_MODES = ("auto", "acceptEdits", "plan", "manual", "dontAsk")
+JOB_RE = re.compile(r"[0-9a-f]{8}")
+BG_LINE = re.compile(r"^backgrounded · ([0-9a-f]{8})", re.M)
+COPY_LINE = re.compile(r"started a copy as ([0-9a-f]{8})")
+ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][0-9A-B]|[\x00-\x08\x0b-\x1f]")
+launches = {}   # launch id -> a New agent request that opens an editor chat
+LAUNCH_WAIT = 90
+
+
+def find_session(sid):
+    s = next((x for x in live_sessions() if x["sessionId"] == sid), None)
+    if s is None:
+        raise ValueError("That chat isn't running any more.")
+    return s
+
+
+def _cli_error(proc, folder=None):
+    err = ((proc.stderr or "") + "\n" + (proc.stdout or "")).strip()
+    if "Workspace not trusted" in err:
+        return (f"Claude Code doesn't trust {folder or 'this folder'} yet. Open a terminal there, "
+                f"run claude once and accept the trust prompt, then try again.")
+    return err[:500] or f"claude exited with code {proc.returncode}"
+
+
+def _agent_name(prompt, name):
+    name = " ".join((name or "").split())[:60]
+    if not name:
+        words = re.sub(r"[^\w\s-]", "", prompt).split()[:6]
+        name = " ".join(words)[:40] or "new agent"
+    return "agent " + name if RELAY_RE.fullmatch(name) else name
+
+
+def start_background(bid, body):
+    """New agent, in the background: the prompt is its first real prompt."""
+    prompt = str(body.get("prompt") or "").strip()
+    if not prompt:
+        raise ValueError("A background agent needs a prompt to start with.")
+    folder = normalize_folder(str(body.get("folder") or ""))
+    mode = body.get("permissionMode") or "auto"
+    if mode not in PERMISSION_MODES:
+        raise ValueError(f"Unknown permission mode: {mode}")
+    name = _agent_name(prompt, body.get("name"))
+    args = ["--bg", "--name", name, "--permission-mode", mode]
+    model = str(body.get("model") or "").strip()
+    if model:
+        if not re.fullmatch(r"[\w.\[\]-]{1,60}", model):
+            raise ValueError("That model name has characters Claude Code won't accept.")
+        args += ["--model", model]
+    proc = run_claude(args + ["--", prompt], cwd=folder, timeout=90)
+    found = BG_LINE.search(proc.stdout or "")
+    if not found:
+        raise ValueError(_cli_error(proc, folder))
+    job = found.group(1)
+    with lock:
+        board = load_board(bid)
+        board.setdefault("adopt", []).append(job)
+        add_activity(board, f"Started background agent \"{name}\" in {folder}")
+        save_board(board)
+    background_rows(fresh=True)
+    if body.get("openTerminal"):
+        open_terminal(job, folder)
+    return {"jobId": job, "name": name}
+
+
+def start_editor_chat(bid, body):
+    """New agent, as a Cursor / VS Code chat. The page opens the editor link;
+    this watches for the new chat to appear and hands it the prompt."""
+    prompt = str(body.get("prompt") or "").strip()
+    lid = uuid.uuid4().hex[:10]
+    launches[lid] = {
+        "id": lid, "board": bid, "at": time.time(), "prompt": prompt,
+        "editor": str(body.get("editor") or ""), "state": "waiting",
+        "detail": "Waiting for the new chat to open…", "session": None,
+        "known": {s["sessionId"] for s in live_sessions()},
+    }
+    threading.Thread(target=_watch_launch, args=(lid,), daemon=True).start()
+    return {"launchId": lid}
+
+
+def _watch_launch(lid):
+    job = launches[lid]
+    while time.time() - job["at"] < LAUNCH_WAIT:
+        time.sleep(1.5)
+        fresh = [s for s in live_sessions() if s["sessionId"] not in job["known"]
+                 and s.get("entrypoint") == "claude-vscode"
+                 and (s.get("startedAt") or 0) / 1000 >= job["at"] - 5]
+        if not fresh:
+            continue
+        s = min(fresh, key=lambda x: x.get("startedAt") or 0)
+        job["session"] = {"sessionId": s["sessionId"], "name": s["name"]}
+        with lock:
+            board = load_board(job["board"])
+            if board is not None:
+                board.setdefault("adopt", []).append(s["sessionId"])
+                save_board(board)
+        if not job["prompt"]:
+            job.update(state="done", detail="The new chat is open.")
+            return
+        if s.get("messageBlock"):
+            job.update(state="failed", detail=f"The new chat opened, but {s['messageBlock']} "
+                                              "Paste the prompt into it yourself.")
+            return
+        job.update(state="sending", detail="Sending your prompt to the new chat…")
+        text = (f"[{APP_NAME}] Your user started this chat from {APP_NAME} with this prompt:"
+                f"\n\n{job['prompt']}")
+        states, _ = relay_send([{"to": s["name"], "text": text}])
+        ok = states[0]["state"] != "failed"
+        job.update(state="done" if ok else "failed",
+                   detail="The new chat got your prompt." if ok
+                   else f"The chat opened, but the prompt didn't arrive: {states[0]['detail']}")
+        with lock:
+            board = load_board(job["board"])
+            if board is not None:
+                add_activity(board, f"New chat @{s['name']}: prompt " + ("sent" if ok else "not sent"),
+                             "ok" if ok else "error")
+                save_board(board)
+        return
+    job.update(state="failed", detail="No new chat appeared. Is the editor open? "
+                                      "The prompt was not sent.")
+
+
+def message_note(text):
+    return f"[{APP_NAME}] Message from your user:\n\n{text}"
+
+
+def send_to_session(bid, body):
+    """Send a chat your text. A background agent that isn't busy gets it as a
+    real prompt (it wakes up with it); any other running chat gets it as a
+    message, which it reads between steps."""
+    sid, text = body.get("sessionId"), str(body.get("text") or "").strip()
+    if not text:
+        raise ValueError("Write something to send.")
+    s = find_session(sid)
+    as_prompt = s.get("background") and s.get("status") != "busy" and s.get("agentState") != "working" \
+        and body.get("how") != "message"
+    if as_prompt:
+        return _prompt_background(bid, s, text)
+    if s.get("messageBlock"):
+        raise ValueError(s["messageBlock"])
+    states, _ = relay_send([{"to": s["name"], "text": message_note(text)}])
+    ok = states[0]["state"] != "failed"
+    with lock:
+        board = load_board(bid)
+        add_activity(board, f"Message to {label(s)}: " + ("sent" if ok else "failed"), "ok" if ok else "error")
+        save_board(board)
+    if not ok:
+        raise ValueError(f"The message didn't arrive: {states[0]['detail']}")
+    return {"how": "message"}
+
+
+def _prompt_background(bid, s, text):
+    """Wake a background agent with a new prompt, in place (stop it first if
+    its process is still alive, or Claude Code would start a copy)."""
+    job = s["jobId"]
+    if s.get("running"):
+        run_claude(["stop", job], timeout=30)
+        for _ in range(20):
+            row = next((r for r in background_rows(fresh=True) if r["id"] == job), None)
+            if row is None or not row.get("pid"):
+                break
+            time.sleep(0.5)
+    # no flags: a background agent keeps its saved options (mode, model,
+    # name), and passing any would make Claude Code start a copy instead
+    proc = run_claude(["--resume", s["sessionId"], "--bg", "--", text], cwd=s["cwd"] or None, timeout=90)
+    if not BG_LINE.search(proc.stdout or ""):
+        raise ValueError(_cli_error(proc, s["cwd"]))
+    copy = COPY_LINE.search(proc.stderr or "")
+    with lock:
+        board = load_board(bid)
+        if copy:
+            board.setdefault("adopt", []).append(copy.group(1))
+            add_activity(board, f"Prompt to {label(s)} started a copy ({copy.group(1)})", "error")
+        else:
+            add_activity(board, f"Prompt to {label(s)}: sent", "ok")
+        save_board(board)
+    background_rows(fresh=True)
+    return {"how": "prompt", "copy": copy.group(1) if copy else None}
+
+
+SPINNER = re.compile(r"^\W{0,3}([A-Z][a-z]+ing….*|\d{1,3}|\W{1,3})$")
+
+
+def _job_of(body):
+    job = str(body.get("jobId") or "")
+    if not JOB_RE.fullmatch(job):
+        raise ValueError("That isn't a background agent.")
+    return job
+
+
+def stop_background(bid, body):
+    job = _job_of(body)
+    proc = run_claude(["stop", job], timeout=30)
+    if proc.returncode != 0:
+        raise ValueError(_cli_error(proc))
+    background_rows(fresh=True)
+    return {"stopped": job}
+
+
+def delete_background(bid, body):
+    job = _job_of(body)
+    proc = run_claude(["rm", job], timeout=60)
+    if proc.returncode != 0:
+        raise ValueError(_cli_error(proc))
+    background_rows(fresh=True)
+    return {"removed": job}
+
+
+def background_logs(bid, body):
+    """The last screen of a background agent (what it is asking, if blocked)."""
+    job = _job_of(body)
+    proc = run_claude(["logs", job], timeout=30)
+    text = ANSI.sub("", (proc.stdout or "") + (proc.stderr or ""))
+    lines = [l.rstrip() for l in text.splitlines()]
+    lines = [l for l in lines if not SPINNER.match(l.strip())]  # drop spinner frames
+    lines = [l for i, l in enumerate(lines) if l or (i and lines[i - 1])]  # squeeze blank runs
+    return {"text": "\n".join(lines[-60:]).strip() or "(nothing to show)"}
+
+
+def open_terminal(job, cwd=None, command=None):
+    """Open a terminal window attached to a background agent, where you can
+    watch it and answer its questions (or run another command for it there).
+    Falls back to telling the command."""
+    command = command or f"claude attach {job}"
+    try:
+        if ON_WSL:
+            distro = os.environ.get("WSL_DISTRO_NAME")
+            inner = (["wsl.exe"] + (["-d", distro] if distro else []) +
+                     (["--cd", cwd] if cwd else []) + ["--", "bash", "-lc", command])
+            wt = shutil.which("wt.exe")
+            launch = [wt, "-w", "new", *inner] if wt else \
+                [shutil.which("cmd.exe") or "/mnt/c/Windows/System32/cmd.exe", "/c", "start", "", *inner]
+        elif HOST_LABEL == "macOS":
+            where = (cwd or "~").replace("\\", "\\\\").replace('"', '\\"')
+            script = f'tell application "Terminal" to do script "cd \\"{where}\\" && {command}"'
+            launch = ["osascript", "-e", script]
+        elif shutil.which("x-terminal-emulator"):
+            launch = ["x-terminal-emulator", "-e", "bash", "-lc", command]
+        else:
+            return {"opened": False, "command": command}
+        subprocess.Popen(launch, cwd="/mnt/c" if ON_WSL else None, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=claude_env())
+        return {"opened": True, "command": command}
+    except OSError:
+        return {"opened": False, "command": command}
+
+
+def attach_background(bid, body):
+    """A terminal on the agent; for one that can't be woken, one that restarts
+    it, since only an interactive terminal can answer Claude Code's question
+    about trusting its folder (the home folder is trusted per session)."""
+    job = _job_of(body)
+    row = next((r for r in background_rows() if r["id"] == job), {})
+    restart = row and not row.get("pid") and not has_transcript(row["sessionId"])
+    return open_terminal(job, row.get("cwd"), f"claude respawn {job}" if restart else None)
+
+
 # -------------------------------------------------------------------- http
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "AgentOrganizer/1"
+    server_version = "LetThemTalk/1"
 
     def log_message(self, fmt, *args):
         pass
@@ -1185,6 +1795,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
+        # never inside another site's frame (the page can start agents)
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(data)
 
@@ -1199,6 +1813,12 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 sid = parse_qs(url.query).get("session", [""])[0]
                 return self._send(HTTPStatus.OK, session_agents(sid))
+            except ValueError as e:
+                return self._send(HTTPStatus.BAD_REQUEST, {"error": str(e)})
+        if url.path == "/api/chat":
+            try:
+                sid = parse_qs(url.query).get("session", [""])[0]
+                return self._send(HTTPStatus.OK, session_chat(sid))
             except ValueError as e:
                 return self._send(HTTPStatus.BAD_REQUEST, {"error": str(e)})
         if url.path == "/api/state":
@@ -1223,9 +1843,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         # The custom header forces a CORS preflight, which this server never
         # answers, so other web pages cannot drive it.
-        if not self._host_ok() or self.headers.get("X-Organizer") != "1":
+        if not self._host_ok() or self.headers.get(CSRF_HEADER) != "1":
             return self._send(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if not 0 <= length <= MAX_BODY:
+            return self._send(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "request too large"})
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
         except ValueError:
@@ -1246,6 +1871,13 @@ class Handler(BaseHTTPRequestHandler):
                     "disconnect": lambda: disconnect(bid, body),
                     "resend": lambda: resend(bid, body.get("id")),
                     "start": lambda: start_conversation(bid, body.get("id")),
+                    "launch-background": lambda: start_background(bid, body),
+                    "launch-editor": lambda: start_editor_chat(bid, body),
+                    "send": lambda: send_to_session(bid, body),
+                    "agent-stop": lambda: stop_background(bid, body),
+                    "agent-delete": lambda: delete_background(bid, body),
+                    "agent-logs": lambda: background_logs(bid, body),
+                    "agent-attach": lambda: attach_background(bid, body),
                     "layout": lambda: update_layout(bid, body),
                     "add": lambda: add_node(bid, body),
                     "remove": lambda: remove_node(bid, body),
@@ -1261,7 +1893,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     BOARDS_DIR.mkdir(exist_ok=True)
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
-    print(f"Agent Organizer running at http://localhost:{PORT}  (Ctrl+C to stop)")
+    print(f"{APP_NAME} running at http://localhost:{PORT}  (Ctrl+C to stop)")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

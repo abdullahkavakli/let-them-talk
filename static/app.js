@@ -14,7 +14,9 @@ const state = {
   connecting: null,      // {from, click} while drawing an arrow
   pollTimer: null,
   agents: {},            // sessionId -> /api/agents response for the open drawer
+  chat: {},              // sessionId -> /api/chat response for the open drawer
   runOpen: {},           // runId (or "direct:<sid>") -> expanded in the drawer
+  chatOpen: {},          // message id -> shown in full in the drawer
 };
 
 // ------------------------------------------------------------------ helpers
@@ -41,7 +43,7 @@ function svg(tag, attrs = {}) {
 async function api(path, body) {
   const opts = body === undefined ? {} : {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Organizer": "1" },
+    headers: { "Content-Type": "application/json", "X-Let-Them-Talk": "1" },
     body: JSON.stringify(body),
   };
   const res = await fetch(path, opts);
@@ -50,18 +52,32 @@ async function api(path, body) {
   return data;
 }
 
+// Saved UI state lives under "ltt."; values saved by earlier versions under
+// "organizer." are still read.
 function store(key, value) {
   try {
-    if (value === undefined) return JSON.parse(localStorage.getItem(key));
-    localStorage.setItem(key, JSON.stringify(value));
+    if (value !== undefined) return localStorage.setItem(key, JSON.stringify(value));
+    let raw = localStorage.getItem(key);
+    if (raw === null && key.startsWith("ltt.")) raw = localStorage.getItem(`organizer.${key.slice(4)}`);
+    return JSON.parse(raw);
   } catch { return null; }
 }
 
 const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const folderName = (cwd) => (cwd || "").replace(/\/+$/, "").split("/").pop() || cwd || "?";
 // The server reads the editor (Cursor, VS Code, ...) from the claude binary's path.
-const opener = (n) => n.editor ||
+const opener = (n) => n.background ? "Background" : n.editor ||
   ({ "claude-vscode": "Editor", cli: "Terminal", "sdk-cli": "Headless" }[n.entrypoint] || n.entrypoint || "");
+const hostLabel = () => state.view?.host || "WSL";
+// Status of a card: busy/idle for chats; a background agent's own state.
+const BG_DOT = { working: "busy", blocked: "needs", done: "idle", stopped: "ended", failed: "failed" };
+function cardStatus(n) {
+  if (!n.live) return { dot: "ended", text: "ended" };
+  if (n.background && n.resumable === false) return { dot: "ended", text: "needs restart" };
+  if (n.background) return { dot: BG_DOT[n.agentState] || (n.running ? n.status : "ended"),
+    text: n.agentStateText || (n.running ? n.status : "asleep") };
+  return { dot: n.status, text: n.status };
+}
 // Cards show the title Claude Code gave the session; @name is its address.
 const display = (n) => n.title || (n.name ? `@${n.name}` : `session ${n.sessionId.slice(0, 8)}`);
 const where = (n) => n.winCwd || n.cwd;  // Windows sessions keep their C:\ path
@@ -86,14 +102,14 @@ const who = (s) => s.title
 function defaultNotes(src, dst, reason, tellSrc = true) {
   const why = reason.trim() || "(no reason given)";
   const start = (other) => `Start now: send @${other.name} your current view on this with ` +
-    `SendMessage, then reply when it answers. No reply to the organizer is needed.`;
+    `SendMessage, then reply when it answers. No reply to Let Them Talk is needed.`;
   return {
-    from: `[Agent organizer] Your user connected you to ${who(dst)} and wants you two to talk.\n` +
+    from: `[Let Them Talk] Your user connected you to ${who(dst)} and wants you two to talk.\n` +
       `Why: ${why}\n` + start(dst),
-    to: `[Agent organizer] Your user connected ${who(src)} to you and wants you two to talk.\n` +
+    to: `[Let Them Talk] Your user connected ${who(src)} to you and wants you two to talk.\n` +
       `Why: ${why}\n` + (tellSrc
         ? `@${src.name} will message you about this. When it does, reply to @${src.name} ` +
-          `with SendMessage. No reply to the organizer is needed.`
+          `with SendMessage. No reply to Let Them Talk is needed.`
         : start(src)),
   };
 }
@@ -102,7 +118,7 @@ function defaultNotes(src, dst, reason, tellSrc = true) {
 
 async function start() {
   const data = await api("/api/state");
-  const wanted = new URLSearchParams(location.hash.slice(1)).get("board") || store("organizer.board");
+  const wanted = new URLSearchParams(location.hash.slice(1)).get("board") || store("ltt.board");
   const ids = data.boards.map((b) => b.id);
   if (ids.length === 0) {
     fillBoardSelect([]);
@@ -123,9 +139,9 @@ function selectBoard(id) {
   state.boardId = id;
   state.selected = null;
   state.localPos = {};
-  state.pan = store(`organizer.pan.${id}`) || { x: 0, y: 0 };
+  state.pan = store(`ltt.pan.${id}`) || { x: 0, y: 0 };
   state.fitPending = true;  // re-center once if the saved pan hides every card
-  store("organizer.board", id);
+  store("ltt.board", id);
   history.replaceState(null, "", `#board=${id}`);
   closeDrawer();
   poll();
@@ -137,7 +153,7 @@ async function poll() {
     try {
       state.view = await api(`/api/state?board=${encodeURIComponent(state.boardId)}`);
       render();
-      if (state.selected?.type === "node") loadAgents(state.selected.id);
+      if (state.selected?.type === "node") loadDetails(state.selected.id);
     } catch (e) {
       console.warn("poll failed", e);
     }
@@ -163,6 +179,7 @@ function render() {
   renderWires();
   renderAvailable();
   renderActivity();
+  renderLaunches();
   if (state.selected) renderDrawer();
 }
 
@@ -191,7 +208,7 @@ function fitView() {
   const y0 = Math.min(...boxes.map((b) => b.y0)), y1 = Math.max(...boxes.map((b) => b.y1));
   const place = (lo, hi, size) => (hi - lo > size - 80 ? 40 - lo : (size - (hi - lo)) / 2 - lo);
   state.pan = { x: Math.round(place(x0, x1, r.width)), y: Math.round(place(y0, y1, r.height)) };
-  store(`organizer.pan.${state.boardId}`, state.pan);
+  store(`ltt.pan.${state.boardId}`, state.pan);
   $("#world").style.transform = `translate(${state.pan.x}px, ${state.pan.y}px)`;
   renderWires();
 }
@@ -206,7 +223,7 @@ function renderNodes() {
       node = el("div", { class: "node", "data-id": n.sessionId, "data-name": n.name });
       layer.append(node);
     }
-    const status = n.live ? n.status : "ended";
+    const st = cardStatus(n);
     node.className = "node" + (n.live ? "" : " ended") +
       (state.selected?.type === "node" && state.selected.id === n.sessionId ? " selected" : "");
     const pos = nodePos(n);
@@ -216,16 +233,17 @@ function renderNodes() {
     node.replaceChildren(
       el("span", { class: "port in" }),
       el("div", { class: "title" },
-        el("span", { class: `dot ${status}`, title: status }),
+        el("span", { class: `dot ${st.dot}`, title: st.text }),
         el("span", { class: "name", text: display(n), title: display(n) })),
       el("div", { class: "meta", text: `${n.name ? `@${n.name} · ` : ""}${folderName(where(n).replace(/\\/g, "/"))}`,
         title: `${n.name ? `Address: @${n.name}\n` : ""}Folder: ${where(n)}` }),
       el("div", { class: "meta badges" },
-        el("span", { class: `badge ${onWindows(n) ? "win" : ""}`, text: onWindows(n) ? "Windows" : "WSL",
+        el("span", { class: `badge ${onWindows(n) ? "win" : ""}`, text: onWindows(n) ? "Windows" : hostLabel(),
           title: n.messageBlock || "" }),
         opener(n) && el("span", { class: "badge", text: opener(n) }),
         n.model && el("span", { class: "badge model", text: modelName(n.model), title: n.model }),
-        el("span", { class: "badge", text: status }),
+        el("span", { class: `badge ${st.dot === "needs" ? "warn" : ""}`, text: st.text,
+          title: n.waitingFor ? `Waiting for: ${n.waitingFor}` : "" }),
         n.ambiguous && el("span", { class: "badge warn", text: "name shared", title: "Another running session has this name; /rename one of them" })),
       ...(n.live && !n.messageBlock ? [el("span", { class: "port out", title: "Drag onto another agent to connect" })] : []),
     );
@@ -315,8 +333,8 @@ function renderActivity() {
 }
 
 // Activity is folded away unless you open it; the choice is remembered.
-$("#activity-box").open = store("organizer.activityOpen") === true;
-$("#activity-box").addEventListener("toggle", () => store("organizer.activityOpen", $("#activity-box").open));
+$("#activity-box").open = store("ltt.activityOpen") === true;
+$("#activity-box").addEventListener("toggle", () => store("ltt.activityOpen", $("#activity-box").open));
 
 // ------------------------------------------------------------------- drawer
 
@@ -324,16 +342,29 @@ function select_(sel) {
   state.selected = sel;
   render();
   renderDrawer();
-  if (sel.type === "node") loadAgents(sel.id);
+  if (sel.type === "node") loadDetails(sel.id);
 }
 
-async function loadAgents(sid) {
-  try {
-    state.agents[sid] = await api(`/api/agents?session=${encodeURIComponent(sid)}`);
-  } catch (e) {
-    state.agents[sid] = { error: e.message };
-  }
+async function loadDetails(sid) {
+  const get = (path) => api(`${path}?session=${encodeURIComponent(sid)}`).catch((e) => ({ error: e.message }));
+  [state.agents[sid], state.chat[sid]] = await Promise.all([get("/api/agents"), get("/api/chat")]);
+  settleOutbox(sid);
   if (state.selected?.type === "node" && state.selected.id === sid) renderDrawer();
+}
+
+// Drop sent messages the chat now shows itself (or that have scrolled past
+// its last few messages). Each shown message settles one sent one.
+function settleOutbox(sid) {
+  const out = state.outbox[sid], msgs = state.chat[sid]?.messages;
+  if (!out?.length || !msgs) return;
+  const mine = msgs.filter((m) => m.role === "user");
+  state.outbox[sid] = out.filter((o) => {
+    if (msgs.length && msgs[0].at > o.at) return false;
+    const i = mine.findIndex((m) => m.at >= o.at - 30 && (m.via === "app" || m.text.trim() === o.text));
+    if (i < 0) return true;
+    mine.splice(i, 1);
+    return false;
+  });
 }
 
 function closeDrawer() {
@@ -346,6 +377,16 @@ function renderDrawer() {
   const body = $("#drawer-body");
   const sel = state.selected;
   if (!sel) return;
+  const active = document.activeElement;
+  const keep = active?.id && body.contains(active)
+    ? { id: active.id, start: active.selectionStart, end: active.selectionEnd } : null;
+  try { drawDrawer(body, sel); } finally {
+    const e = keep && document.getElementById(keep.id);
+    if (e) { e.focus(); try { e.setSelectionRange(keep.start, keep.end); } catch { /* not a text box */ } }
+  }
+}
+
+function drawDrawer(body, sel) {
   if (sel.type === "wire") {
     const c = connById(sel.id);
     if (!c) return closeDrawer();
@@ -405,12 +446,20 @@ function nodeDetails(n) {
     el("dl", {},
       el("dt", { text: "Address" }), el("dd", { class: "mono small", text: `@${n.name}` }),
       el("dt", { text: "Status" }), el("dd", { text: n.live ? n.status : "session ended" }),
-      el("dt", { text: "Runs on" }), el("dd", { text: onWindows(n) ? "Windows" : "WSL" }),
+      el("dt", { text: "Runs on" }), el("dd", { text: onWindows(n) ? "Windows" : hostLabel() }),
       el("dt", { text: "Folder" }), el("dd", { class: "mono small", text: where(n) }),
       n.messageBlock && [el("dt", { text: "Notes" }), el("dd", { class: "small", text: `Can't receive notes. ${n.messageBlock}` })],
       n.live && [el("dt", { text: "Opened in" }), el("dd", { text: opener(n) || "?" })],
       n.model && [el("dt", { text: "Model" }), el("dd", { text: modelName(n.model) })],
       el("dt", { text: "Session" }), el("dd", { class: "mono small", text: n.sessionId })),
+    n.editor && el("div", { class: "drawer-actions" }, el("button", {
+      class: "btn primary", text: n.live ? `Open in ${n.editor}` : `Reopen in ${n.editor}`,
+      title: `Shows this chat in ${n.editor}`,
+      onclick: () => { window.location.href = editorLink(n.editor, { session: n.sessionId }); },
+    })),
+    ...chatSection(n),
+    ...sendSection(n),
+    ...(n.background ? backgroundSection(n) : []),
     ...agentsSection(n),
     el("h2", { text: "Connections" }),
     conns.length ? el("ul", {}, ...conns.map((c) => {
@@ -490,7 +539,7 @@ function group(key, openByDefault, summary, body) {
   return d;
 }
 
-function runGroup(r) {
+function runGroup(r, n) {
   const phases = [...r.phases];
   for (const a of r.agents) if (a.phase && !phases.includes(a.phase)) phases.push(a.phase);
   const body = [];
@@ -504,6 +553,15 @@ function runGroup(r) {
     body.push(...inPhase.map((a) => agentRow(a, a.label)));
   }
   if (!r.agents.length) body.push(el("p", { class: "muted small", text: "No agents recorded yet." }));
+  if (n && canReach(n)) {
+    const ask = r.status === "running"
+      ? ["Ask it to stop this workflow", `Please stop the workflow "${r.name}" (run ${r.runId}) now and tell me where it got to.`]
+      : ["killed", "stopped", "failed"].includes(r.status)
+        ? ["Ask it to resume this workflow", `Please resume the workflow "${r.name}" (run ${r.runId}) from where it stopped.`]
+        : null;
+    if (ask) body.unshift(el("div", { class: "drawer-actions run-actions" }, el("button", {
+      class: "btn", text: ask[0], onclick: () => sendTo(n, ask[1]) })));
+  }
   return group(r.runId, r.status === "running", [
     el("span", { class: stateClass(r.status), title: r.status }),
     el("div", { class: "run-head" },
@@ -526,7 +584,7 @@ function agentsSection(n) {
   const running = direct.filter((a) => a.state === "running").length +
     runs.reduce((k, r) => k + r.agents.filter((a) => a.state === "running").length, 0);
   if (running) head.textContent = `Agents in this chat · ${running} running`;
-  const out = [head, ...runs.map(runGroup)];
+  const out = [head, ...runs.map((r) => runGroup(r, n))];
   if (direct.length) {
     const live = direct.filter((a) => a.state === "running").length;
     out.push(group(`direct:${n.sessionId}`, true, [
@@ -653,7 +711,7 @@ canvas.addEventListener("pointerup", async (evt) => {
   canvas.classList.remove("panning");
   if (!d) return;
   if (d.kind === "pan") {
-    if (d.moved) store(`organizer.pan.${state.boardId}`, state.pan);
+    if (d.moved) store(`ltt.pan.${state.boardId}`, state.pan);
     else if (state.selected) closeDrawer();
     return;
   }
@@ -747,13 +805,21 @@ $("#connect-form").addEventListener("submit", async (evt) => {
 
 // ------------------------------------------------------------ board dialog
 
+// The two dialogs that ask for a folder share one browser.
+const pickers = {
+  board: { input: $("#b-folder"), box: $("#b-browser"), error: $("#b-error") },
+  agent: { input: $("#n-folder"), box: $("#n-browser"), error: $("#n-error") },
+};
+
+const placeButtons = (places, ui) => places.map((pl) => el("button", {
+  type: "button", class: "btn place", text: pl.label, title: pl.path, onclick: () => browse(pl.path, ui),
+}));
+
 function openBoardDialog(folders, boards, places = []) {
   const have = new Set(boards.map((b) => b.folder));
   const free = folders.filter((f) => !have.has(f));
   $("#b-folders").replaceChildren(...folders.map((f) => el("option", { value: f })));
-  $("#b-places").replaceChildren(...places.map((pl) => el("button", {
-    type: "button", class: "btn place", text: pl.label, title: pl.path, onclick: () => browse(pl.path),
-  })));
+  $("#b-places").replaceChildren(...placeButtons(places, pickers.board));
   $("#b-suggest").replaceChildren(
     ...(free.length ? [el("span", { class: "small muted", text: "Folders with running sessions:" })] : []),
     ...free.map((f) => el("button", {
@@ -768,30 +834,31 @@ function openBoardDialog(folders, boards, places = []) {
 }
 
 // Folder browser: click a folder to go into it; the box above always holds
-// the folder you are in, so Create uses it.
-async function browse(path) {
-  const box = $("#b-browser");
+// the folder you are in, so Create (or Start agent) uses it.
+async function browse(path, ui = pickers.board) {
+  const { input, box, error } = ui;
   try {
     const d = await api("/api/dirs", { path });
-    $("#b-folder").value = d.path;
-    $("#b-error").hidden = true;
+    input.value = d.path;
+    error.hidden = true;
     const into = (name) => `${d.path.replace(/\/+$/, "")}/${name}`;
     box.replaceChildren(
       el("div", { class: "browse-head" },
-        el("button", { type: "button", class: "btn", text: "↑ Up", disabled: !d.parent, onclick: () => browse(d.parent) }),
+        el("button", { type: "button", class: "btn", text: "↑ Up", disabled: !d.parent, onclick: () => browse(d.parent, ui) }),
         el("span", { class: "mono small", text: d.path, title: d.path })),
       el("div", { class: "browse-list" }, ...(d.dirs.length
-        ? d.dirs.map((name) => el("button", { type: "button", class: "browse-item", text: name, onclick: () => browse(into(name)) }))
+        ? d.dirs.map((name) => el("button", { type: "button", class: "browse-item", text: name, onclick: () => browse(into(name), ui) }))
         : [el("p", { class: "muted small", text: "No subfolders here." })])),
       ...(d.truncated ? [el("p", { class: "muted small", text: "Showing the first 1000 folders." })] : []));
     box.hidden = false;
   } catch (e) {
-    $("#b-error").textContent = e.message;
-    $("#b-error").hidden = false;
+    error.textContent = e.message;
+    error.hidden = false;
   }
 }
 
 $("#b-browse").addEventListener("click", () => browse($("#b-folder").value.trim()));
+$("#n-browse").addEventListener("click", () => browse(nd.folder.value.trim(), pickers.agent));
 
 $("#new-board").addEventListener("click", async () => {
   const data = await api("/api/state");
@@ -817,7 +884,7 @@ for (const btn of document.querySelectorAll("[data-close]")) {
 }
 
 start().catch((e) => {
-  document.body.prepend(el("p", { class: "error", text: `Could not reach the organizer server: ${e.message}` }));
+  document.body.prepend(el("p", { class: "error", text: `Could not reach the Let Them Talk server: ${e.message}` }));
 });
 
 $("#fit-view").addEventListener("click", fitView);
@@ -845,5 +912,314 @@ function resizable(panel, handle, key, def, dir) {
   });
   handle.addEventListener("dblclick", () => { set(def); store(key, def); });
 }
-resizable($(".sidebar"), $("#sidebar-resizer"), "organizer.sidebarW", 280, +1);
-resizable($("#drawer"), $("#drawer-resizer"), "organizer.drawerW", 360, -1);
+resizable($(".sidebar"), $("#sidebar-resizer"), "ltt.sidebarW", 280, +1);
+resizable($("#drawer"), $("#drawer-resizer"), "ltt.drawerW", 360, -1);
+
+// ------------------------------------------------ open chats in the editor
+//
+// The Claude extension handles <editor>://anthropic.claude-code/open with
+// ?prompt= (a new chat, prompt typed in but not sent) or ?session= (that chat).
+
+const EDITOR_SCHEMES = { "Cursor": "cursor", "VS Code": "vscode",
+  "VS Code Insiders": "vscode-insiders", "Windsurf": "windsurf", "VSCodium": "vscodium" };
+
+function editorLink(editor, params) {
+  // The editor decodes the link once before the extension reads its query,
+  // so each value is encoded twice to arrive intact (&, +, %, ş ...).
+  const query = Object.entries(params).filter(([, v]) => v)
+    .map(([k, v]) => `${k}=${encodeURIComponent(encodeURIComponent(v))}`).join("&");
+  return `${EDITOR_SCHEMES[editor] || "vscode"}://anthropic.claude-code/open${query ? `?${query}` : ""}`;
+}
+
+function defaultEditor() {
+  const saved = store("ltt.editor");
+  if (saved && EDITOR_SCHEMES[saved]) return saved;
+  const counts = {};
+  for (const n of state.view?.nodes || []) if (n.editor) counts[n.editor] = (counts[n.editor] || 0) + 1;
+  return Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] || "VS Code";
+}
+
+// ------------------------------------------------------------- New agent
+//
+// Chat in the editor: the server watches for the new chat and hands it the
+// prompt as a message. Background agent: `claude --bg` with the prompt as its
+// real first prompt, in a folder you pick.
+
+const nd = {
+  dialog: $("#chat-dialog"), prompt: $("#n-prompt"), editor: $("#n-editor"),
+  folder: $("#n-folder"), name: $("#n-name"), mode: $("#n-mode"), model: $("#n-model"),
+  terminal: $("#n-terminal"), note: $("#n-note"), error: $("#n-error"), submit: $("#n-submit"),
+};
+const whereTo = () => document.querySelector('input[name="n-where"]:checked').value;
+
+function refreshAgentDialog() {
+  const bg = whereTo() === "background";
+  $("#n-editor-box").hidden = bg;
+  $("#n-bg-box").hidden = !bg;
+  for (const e of document.querySelectorAll(".n-editor-name")) e.textContent = nd.editor.value;
+  nd.submit.textContent = bg ? "Start agent" : `Open in ${nd.editor.value}`;
+  nd.note.textContent = bg && /haiku/i.test(nd.model.value) && nd.mode.value === "auto"
+    ? "With Haiku, auto mode may not be available; the agent then asks before it acts."
+    : bg ? "Claude Code must already trust the folder (run claude there once and accept)." : "";
+}
+
+$("#new-chat").addEventListener("click", () => {
+  const pick = defaultEditor();
+  nd.editor.replaceChildren(...Object.keys(EDITOR_SCHEMES).map((e) =>
+    el("option", { value: e, text: e, selected: e === pick })));
+  const folders = [state.view?.board.folder, ...(state.view?.folders || [])].filter(Boolean);
+  $("#n-folders").replaceChildren(...[...new Set(folders)].map((f) => el("option", { value: f })));
+  nd.folder.value = state.view?.board.folder || "";
+  pickers.agent.box.hidden = true;
+  api("/api/state").then((d) => $("#n-places").replaceChildren(...placeButtons(d.places || [], pickers.agent)))
+    .catch(() => {});
+  nd.error.hidden = true;
+  refreshAgentDialog();
+  nd.dialog.showModal();
+  nd.prompt.focus();
+});
+
+for (const e of [nd.editor, nd.mode, nd.model, ...document.querySelectorAll('input[name="n-where"]')]) {
+  e.addEventListener("change", refreshAgentDialog);
+  e.addEventListener("input", refreshAgentDialog);
+}
+
+$("#chat-form").addEventListener("submit", async (evt) => {
+  if (evt.submitter?.value !== "ok") return;
+  evt.preventDefault();
+  const prompt = nd.prompt.value.trim();
+  const fail = (msg) => { nd.error.textContent = msg; nd.error.hidden = false; nd.submit.disabled = false; };
+  nd.submit.disabled = true;
+  try {
+    if (whereTo() === "background") {
+      if (!prompt) return fail("A background agent needs a prompt to start with.");
+      const res = await api(`/api/board/${state.boardId}/launch-background`, {
+        prompt, folder: nd.folder.value.trim(), name: nd.name.value.trim(),
+        permissionMode: nd.mode.value, model: nd.model.value.trim(), openTerminal: nd.terminal.checked,
+      });
+      toast(`Started background agent "${res.result.name}". It will appear on this board in a moment.`, "ok");
+    } else {
+      const editor = nd.editor.value;
+      store("ltt.editor", editor);
+      await api(`/api/board/${state.boardId}/launch-editor`, { prompt, editor });
+      window.location.href = editorLink(editor, {});  // opens an empty chat; the server sends the prompt
+    }
+    nd.dialog.close();
+    nd.prompt.value = "";
+    nd.name.value = "";
+    poll();
+  } catch (e) {
+    fail(e.message);
+  } finally {
+    nd.submit.disabled = false;
+  }
+});
+
+// ------------------------------------------------------------------ toasts
+
+const toasts = $("#toasts");
+function toast(text, level = "info", ms = 7000) {
+  const t = el("div", { class: `toast ${level}` }, el("span", { text }),
+    el("button", { class: "icon-btn", text: "×", "aria-label": "Dismiss", onclick: () => t.remove() }));
+  toasts.append(t);
+  if (ms) setTimeout(() => t.remove(), ms);
+  return t;
+}
+
+// Editor chats started from here: show how handing over the prompt went.
+const launchShown = {};
+function renderLaunches() {
+  for (const l of state.view?.launches || []) {
+    const seenState = launchShown[l.id];
+    if (seenState === l.state) continue;
+    launchShown[l.id] = l.state;
+    const level = l.state === "done" ? "ok" : l.state === "failed" ? "error" : "info";
+    const t = toast(l.detail, level, l.state === "failed" ? 0 : 7000);
+    if (l.state === "failed" && l.prompt) {
+      t.insertBefore(el("button", { class: "btn", text: "Copy prompt",
+        onclick: () => navigator.clipboard?.writeText(l.prompt) }), t.lastChild);
+    }
+  }
+}
+
+// ------------------------------------------------ managing a chat from here
+
+state.drafts = {};  // sessionId -> text typed into its Send box
+state.sending = new Set();  // sessionIds with a Send in flight
+state.outbox = {};  // sessionId -> [{text, at, state}] sent from here, not yet in its chat
+state.logs = {};    // sessionId -> last screen of a background agent
+
+// A chat can take text from here if it is running and can receive messages,
+// or if it is a background agent (which wakes up with a prompt).
+const canReach = (n) => n.live && (n.background || !n.messageBlock);
+const promptable = (n) => n.background && n.agentState !== "working" && n.status !== "busy";
+
+async function sendTo(n, text, how) {
+  try {
+    const res = await api(`/api/board/${state.boardId}/send`, { sessionId: n.sessionId, text, how });
+    toast(res.result.how === "prompt"
+      ? (res.result.copy ? `Claude Code started a copy (${res.result.copy}) instead of waking it.` : `Sent the prompt to ${display(n)}.`)
+      : `Sent the message to ${display(n)}.`, res.result.copy ? "error" : "ok");
+    return true;
+  } catch (e) {
+    toast(e.message, "error", 0);
+    return false;
+  }
+}
+
+// The chat's last messages, phone style: prompts as typed, Claude's replies
+// as a TL;DR the server writes once the reply is finished.
+const FOLD_CHARS = 400, FOLD_LINES = 8, PREVIEW_CHARS = 200;
+const preview = (text) => text.length > PREVIEW_CHARS ? `${text.slice(0, PREVIEW_CHARS).trimEnd()}…` : text;
+
+function chatSection(n) {
+  const data = state.chat[n.sessionId];
+  const head = el("h2", { text: "Recent messages" });
+  if (!data) return [head, el("p", { class: "muted small", text: "Loading…" })];
+  if (data.error) return [head, el("p", { class: "error small", text: data.error })];
+  const msgs = data.messages, outbox = state.outbox[n.sessionId] || [];
+  if (!msgs.length && !outbox.length) return [head, el("p", { class: "muted small", text: "No messages yet." })];
+  // A turn that hasn't ended may be waiting on you: a question, or a permission prompt.
+  const asking = n.live && data.asking;
+  const activity = !(n.live && data.working) ? ""
+    : asking || n.status === "waiting" || n.agentState === "blocked" ? "waiting for you" : "working…";
+  // What it is doing right now (its latest tool call), so the chat never sits on an old line.
+  const now = activity && !asking;
+  return [head, el("div", { class: "chat" },
+    ...msgs.map((m) => chatMessage(m, activity)),
+    ...outbox.map((o) => el("div", { class: "msg user pending" },
+      el("div", { class: "msg-meta", text: `You · ${o.state === "sending" ? "sending…" : "sent, not read yet"}` }),
+      el("div", { class: "bubble", text: o.text }))),
+    asking && el("div", { class: "msg claude" },
+      el("div", { class: "msg-meta", text: "Claude · asking you" }),
+      el("div", { class: "bubble asking" }, ...asking.map((q) => el("div", { class: "question" },
+        el("div", { text: q.question }),
+        q.options.length && el("ul", {}, ...q.options.map((o) => el("li", { text: o }))))))),
+    now && el("div", { class: "msg claude" },
+      el("div", { class: "msg-meta", text: `Claude · now · ${activity}` }),
+      el("div", { class: "bubble typing",
+        text: data.doing || (activity === "waiting for you" ? "Waiting for you…" : "Working…") })))];
+}
+
+function chatMessage(m, activity) {
+  const open = !!state.chatOpen[m.id];
+  const toggle = (label) => el("button", {
+    class: "fold", text: label,
+    onclick: () => { state.chatOpen[m.id] = !open; renderDrawer(); },
+  });
+  if (m.role !== "claude") {
+    const long = m.text.length > FOLD_CHARS || m.text.split("\n").length > FOLD_LINES;
+    const who = m.role === "peer" ? `@${m.from || "another session"}` : m.via === "app" ? "You, from here" : "You";
+    return el("div", { class: `msg ${m.role}` },
+      el("div", { class: "msg-meta", text: `${who} · ${clock(m.at)}` }),
+      el("div", { class: "bubble" + (long && !open ? " folded" : ""), text: m.text }),
+      long && toggle(open ? "Show less" : "Show all"));
+  }
+  const tldr = m.tldr;
+  let text = m.text, note = "", fold = null;
+  if (!m.done) {
+    text = preview(m.text);
+    note = activity || "stopped";
+  } else if (tldr && !open) {
+    text = tldr.state === "done" ? tldr.text : preview(m.text);
+    note = { done: "TL;DR", pending: "summarizing…", failed: "no TL;DR" }[tldr.state];
+    fold = "Full reply";
+  } else if (tldr) {
+    fold = tldr.state === "done" ? "TL;DR" : "Show less";
+  }
+  return el("div", { class: "msg claude" },
+    el("div", { class: "msg-meta", text: ["Claude", clock(m.at), note].filter(Boolean).join(" · ") }),
+    el("div", { class: "bubble" + (m.done ? "" : " typing"), text }),
+    fold && toggle(fold));
+}
+
+function sendSection(n) {
+  if (!canReach(n)) return [];
+  const asPrompt = promptable(n);
+  const box = el("textarea", {
+    id: "send-box", rows: 3, class: "send-box",
+    placeholder: asPrompt ? "Its next prompt" : "Your message",
+    oninput: (e) => { state.drafts[n.sessionId] = e.target.value; },
+  });
+  box.value = state.drafts[n.sessionId] || "";
+  // The drawer is redrawn every poll, so "sending" lives in state, not on this button.
+  const sending = state.sending.has(n.sessionId);
+  const button = el("button", {
+    class: "btn primary", disabled: sending,
+    text: sending ? "Sending…" : asPrompt ? "Send prompt" : "Send message",
+    onclick: async () => {
+      const sid = n.sessionId, text = box.value.trim();
+      if (!text) return box.focus();
+      // Shown in the chat at once, like a phone; it gives way to the real
+      // message once the chat has read it (see settleOutbox).
+      const out = { text, at: Date.now() / 1000, state: "sending" };
+      (state.outbox[sid] ||= []).push(out);
+      state.drafts[sid] = "";
+      state.sending.add(sid);
+      renderDrawer();
+      try {
+        if (await sendTo(n, text)) {
+          out.state = "sent";
+        } else {
+          state.outbox[sid] = state.outbox[sid].filter((o) => o !== out);
+          // Back into the box to fix and resend, unless something new was typed meanwhile.
+          if (!(state.drafts[sid] || "").trim()) state.drafts[sid] = text;
+        }
+      } finally {
+        state.sending.delete(sid);
+        renderDrawer();
+        poll();
+      }
+    },
+  });
+  return [
+    el("h2", { text: asPrompt ? "Send a prompt" : "Send a message" }),
+    box,
+    el("p", { class: "muted small", text: asPrompt
+      ? "It wakes up with this as your next prompt, as if you had typed it."
+      : "It arrives as a message from Let Them Talk and is read between its steps." }),
+    el("div", { class: "drawer-actions" }, button),
+  ];
+}
+
+async function agentAction(n, action, done) {
+  try {
+    const res = await api(`/api/board/${state.boardId}/${action}`, { jobId: n.jobId });
+    done?.(res.result);
+  } catch (e) {
+    toast(e.message, "error", 0);
+  }
+  poll();
+}
+
+function backgroundSection(n) {
+  // No saved conversation: whatever state it last reported, Claude Code can
+  // only restart it, and only in a terminal (see attach_background).
+  const restart = n.resumable === false;
+  const blocked = !restart && n.agentState === "blocked";
+  return [
+    el("h2", { text: "Background agent" }),
+    restart && el("p", { class: "small warn-text",
+      text: "It has no saved conversation (it was stopped before its first reply finished), so it can't be " +
+        "woken or answered. Restart it in a terminal first, then send it a prompt. Claude Code may ask " +
+        "you there to trust its folder." }),
+    blocked && el("p", { class: "small warn-text",
+      text: `It's waiting for you (${n.waitingFor || "an answer"}). Open it in a terminal to answer.` }),
+    el("div", { class: "drawer-actions" },
+      el("button", { class: blocked || restart ? "btn primary" : "btn", text: restart ? "Restart in terminal" : "Open in terminal",
+        onclick: () => agentAction(n, "agent-attach", (r) => r.opened
+          ? toast(restart ? `Opened a terminal that restarts it (${r.command}).` : "Opened a terminal window attached to it.", "ok")
+          : toast(`Run this in a terminal: ${r.command}`, "info", 0)) }),
+      !restart && el("button", { class: "btn",
+        text: state.logs[n.sessionId] ? "Hide its screen" : blocked ? "What is it asking?" : "Show its screen",
+        onclick: () => state.logs[n.sessionId]
+          ? (delete state.logs[n.sessionId], renderDrawer())
+          : agentAction(n, "agent-logs", (r) => { state.logs[n.sessionId] = r.text; renderDrawer(); }) }),
+      n.running && el("button", { class: "btn", text: "Stop",
+        onclick: () => agentAction(n, "agent-stop", () => toast(`Stopped ${display(n)}.`, "ok")) }),
+      el("button", { class: "btn danger", text: "Delete agent",
+        onclick: () => confirm(`Delete the background agent ${display(n)}? Its conversation stays on disk.`)
+          && agentAction(n, "agent-delete", () => { toast(`Deleted ${display(n)}.`, "ok"); closeDrawer(); }) })),
+    state.logs[n.sessionId] && el("pre", { class: "logs mono", text: state.logs[n.sessionId] }),
+  ];
+}

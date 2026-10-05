@@ -3,15 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agent Organizer</title>
+<title>Let Them Talk</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <header class="topbar">
-  <span class="brand">Agent Organizer</span>
+  <span class="brand">Let Them Talk</span>
   <label class="board-pick">Board
     <select id="board-select" aria-label="Board"></select>
   </label>
+  <button id="new-chat" class="btn primary">New agent</button>
   <button id="new-board" class="btn">New board</button>
   <button id="fit-view" class="btn" title="Bring every card into view">Fit view</button>
   <span class="spacer"></span>
@@ -75,7 +76,7 @@
     <h2>Connect agents</h2>
     <p class="pair"><span id="c-from" class="chip"></span><span class="arrow-glyph">&rarr;</span><span id="c-to" class="chip"></span></p>
     <label for="c-reason">Why are you connecting them?</label>
-    <textarea id="c-reason" rows="3" placeholder="e.g. b6 finishes the reference checks; tell da which entries changed so it can rebuild the PDF"></textarea>
+    <textarea id="c-reason" rows="3" placeholder="e.g. api-worker finishes the migration; tell reviewer which files changed"></textarea>
     <div class="note-grid">
       <div>
         <label class="check"><input type="checkbox" id="c-notify-from" checked> Tell <span id="c-from-2"></span></label>
@@ -86,11 +87,72 @@
         <textarea id="c-text-to" rows="7" class="mono small"></textarea>
       </div>
     </div>
-    <p class="muted small">The notes arrive from <strong>@organizer</strong> as messages from another session, so they cannot approve permissions or change settings. Each delivered note starts a turn in an idle agent.</p>
+    <p class="muted small">The notes arrive from <strong>@let-them-talk</strong> as messages from another session, so they cannot approve permissions or change settings. Each delivered note starts a turn in an idle agent.</p>
     <p id="c-error" class="error" hidden></p>
     <div class="actions">
       <button type="button" class="btn" data-close>Cancel</button>
       <button id="c-submit" value="ok" class="btn primary">Connect</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="chat-dialog">
+  <form method="dialog" id="chat-form">
+    <h2>New agent</h2>
+    <label for="n-prompt">What should it do?</label>
+    <textarea id="n-prompt" rows="5" placeholder="e.g. Run the test suite and fix whatever fails"></textarea>
+    <div class="where">
+      <label class="choice"><input type="radio" name="n-where" value="editor" checked>
+        <span><strong>Chat in <span class="n-editor-name">Cursor</span></strong>
+        <span class="muted small">A new chat tab opens in the editor window you used last, in that
+        window's folder. Your prompt arrives as a message from Let Them Talk.</span></span></label>
+      <label class="choice"><input type="radio" name="n-where" value="background">
+        <span><strong>Background agent</strong>
+        <span class="muted small">Starts right away in the folder you pick, with your prompt as its
+        first prompt. Watch it here or open it in a terminal.</span></span></label>
+    </div>
+    <div id="n-editor-box" class="n-grid">
+      <label for="n-editor">Editor</label>
+      <select id="n-editor"></select>
+    </div>
+    <div id="n-bg-box" hidden>
+      <label for="n-folder">Folder it works in</label>
+      <div class="folder-row">
+        <input id="n-folder" class="mono" list="n-folders" autocomplete="off"
+          placeholder="Type or paste a folder, or click Browse">
+        <button type="button" id="n-browse" class="btn">Browse…</button>
+      </div>
+      <datalist id="n-folders"></datalist>
+      <div id="n-places"></div>
+      <div id="n-browser" hidden></div>
+      <div class="n-grid">
+        <label for="n-name">Name</label>
+        <input id="n-name" placeholder="optional; taken from the prompt">
+        <label for="n-mode">Permissions</label>
+        <select id="n-mode">
+          <option value="auto" selected>auto: decides safe actions itself</option>
+          <option value="acceptEdits">acceptEdits: edits files, asks for the rest</option>
+          <option value="plan">plan: only plans, changes nothing</option>
+          <option value="manual">manual: asks before every action</option>
+          <option value="dontAsk">dontAsk: skips what would need asking</option>
+        </select>
+        <label for="n-model">Model</label>
+        <select id="n-model">
+          <option value="" selected>Default (your Claude Code setting)</option>
+          <option value="fable">Fable</option>
+          <option value="opus">Opus</option>
+          <option value="sonnet">Sonnet</option>
+          <option value="haiku">Haiku</option>
+        </select>
+        <span></span>
+        <label class="check"><input type="checkbox" id="n-terminal"> Open a terminal window to watch it</label>
+      </div>
+    </div>
+    <p id="n-note" class="muted small"></p>
+    <p id="n-error" class="error" hidden></p>
+    <div class="actions">
+      <button type="button" class="btn" data-close>Cancel</button>
+      <button id="n-submit" value="ok" class="btn primary">Start agent</button>
     </div>
   </form>
 </dialog>
@@ -102,7 +164,7 @@
     <label for="b-folder">Folder</label>
     <div class="folder-row">
       <input id="b-folder" list="b-folders" class="mono" autocomplete="off"
-        placeholder="Type or paste a folder, e.g. C:\Users\you\Desktop\project">
+        placeholder="Type or paste a folder, e.g. C:\Users\you\project">
       <button type="button" id="b-browse" class="btn">Browse…</button>
     </div>
     <datalist id="b-folders"></datalist>
@@ -117,6 +179,8 @@
     </div>
   </form>
 </dialog>
+
+<div id="toasts" aria-live="polite"></div>
 
 <script src="/static/app.js"></script>
 </body>
