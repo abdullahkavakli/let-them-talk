@@ -38,9 +38,11 @@ installed inside WSL, where the server runs.
   - **Recent messages:** the last 3 messages, like a phone: your prompts as
     typed (including ones sent while it worked), and Claude's finished
     replies and notes from other sessions as a short TL;DR when they are
-    long (**Full reply** / **Show all** shows the whole text). While it works, a *now* line shows its current step; a question
-    it asks you shows with its options, and *Waiting for you…* means it needs
-    your permission.
+    long (**Full reply** / **Show all** shows the whole text). While it
+    works, a *now* line shows its current step. A question it asks you shows
+    with its options (for a background agent also a permission prompt or a
+    plan to approve, read off its screen), with a button that opens where you
+    answer it.
   - **Send a message:** your text shows at once as your bubble (*sending…*,
     then *sent, not read yet*, then *You, from here* once the chat reads it).
     A running chat reads it between steps; an idle background agent wakes up
@@ -96,6 +98,32 @@ installed inside WSL, where the server runs.
   other.
 - A folder on a drive WSL hasn't mounted (e.g. Google Drive's `G:`) can't be
   used; mount it with `sudo mount -t drvfs G: /mnt/g`.
+
+## Claude Code's own suggestion (optional)
+
+Claude Code saves the grey suggestion it shows nowhere, so the mod in
+`mods/let-them-talk-suggestions` sends it to the app, and the Send box shows
+the same text as the chat's own prompt box:
+
+- When Claude Code makes its own (only while the chat's window is focused),
+  the mod passes it on.
+- When it doesn't (the window is in the background, or a background agent has
+  none) and the app has that chat's details open, the mod makes one the way
+  Claude Code does: one tool-less reply of the chat's own model over its
+  cached conversation, about a tenth of a turn's input. It goes into the chat's
+  prompt box too, so both still match. Nothing is made for chats nobody has open
+  (it keeps checking for 5 minutes after the reply), and at most one per turn.
+
+Chats with the mod show that suggestion or nothing; chats without it get a
+haiku guess. To load it in every chat started from then on, add its absolute
+path to the `env` block of `~/.claude/settings.json` (it talks to port 8765;
+edit `hooks/register.ts` if you changed `LTT_PORT`):
+
+```json
+{ "env": { "CLAUDE_CODE_PLUGIN_DIRS": "/path/to/agent-organizer/mods/let-them-talk-suggestions" } }
+```
+
+For a single chat: `claude --plugin-dir mods/let-them-talk-suggestions`.
 
 ## Settings
 

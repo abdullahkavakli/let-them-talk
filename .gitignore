@@ -7,3 +7,6 @@ __pycache__/
 temp/
 # Claude Code (local settings, worktrees)
 .claude/
+# Written by Claude Code each time it loads a mod
+mods/*/.claude-plugin/types/
+mods/*/tsconfig.json

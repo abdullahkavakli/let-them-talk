@@ -463,6 +463,13 @@ function nodeDetails(n) {
     !conns.some((c) => c.from === n.sessionId && c.to === o.sessionId)) : [];
   return [
     el("h3", { text: display(n) }),
+    // The facts fold into one line; the choice is remembered.
+    el("details", {
+      class: "info", open: store("ltt.infoOpen") === true,
+      ontoggle: (e) => store("ltt.infoOpen", e.target.open),
+    }, el("summary", { class: "muted small",
+      text: [n.live ? n.status : "session ended", n.model && modelName(n.model), n.live && opener(n)]
+        .filter(Boolean).join(" · ") }),
     el("dl", {},
       el("dt", { text: "Address" }), el("dd", { class: "mono small", text: `@${n.name}` }),
       el("dt", { text: "Status" }), el("dd", { text: n.live ? n.status : "session ended" }),
@@ -471,7 +478,7 @@ function nodeDetails(n) {
       n.messageBlock && [el("dt", { text: "Notes" }), el("dd", { class: "small", text: `Can't receive notes. ${n.messageBlock}` })],
       n.live && [el("dt", { text: "Opened in" }), el("dd", { text: opener(n) || "?" })],
       n.model && [el("dt", { text: "Model" }), el("dd", { text: modelName(n.model) })],
-      el("dt", { text: "Session" }), el("dd", { class: "mono small", text: n.sessionId })),
+      el("dt", { text: "Session" }), el("dd", { class: "mono small", text: n.sessionId }))),
     n.editor && el("div", { class: "drawer-actions" }, el("button", {
       class: "btn primary", text: n.live ? `Open in ${n.editor}` : `Reopen in ${n.editor}`,
       title: `Shows this chat in ${n.editor}`,
@@ -1139,22 +1146,57 @@ function chatSection(n) {
   const asking = n.live && data.asking;
   const activity = !(n.live && data.working) ? ""
     : asking || n.status === "waiting" || n.agentState === "blocked" ? "waiting for you" : "working…";
+  // A plan written in plan mode waits for approval in its own window.
+  const planToApprove = !asking && data.plan && activity === "waiting for you";
   // What it is doing right now (its latest tool call), so the chat never sits on an old line.
-  const now = activity && !asking;
+  const now = activity && !asking && !planToApprove;
   return [head, el("div", { class: "chat" },
     ...msgs.map((m) => chatMessage(m, activity)),
     ...outbox.map((o) => el("div", { class: "msg user pending" },
       el("div", { class: "msg-meta", text: `You · ${o.state === "sending" ? "sending…" : "sent, not read yet"}` }),
       el("div", { class: "bubble", text: o.text }))),
-    asking && el("div", { class: "msg claude" },
-      el("div", { class: "msg-meta", text: "Claude · asking you" }),
-      el("div", { class: "bubble asking" }, ...asking.map((q) => el("div", { class: "question" },
-        el("div", { text: q.question }),
-        q.options.length && el("ul", {}, ...q.options.map((o) => el("li", { text: o }))))))),
+    // Typed in its own window while it works; it reads them between steps.
+    ...(n.live && data.queued || []).map((q) => el("div", { class: "msg user pending" },
+      el("div", { class: "msg-meta", text: `You · ${clock(q.at)} · queued` }),
+      el("div", { class: "bubble", text: q.text }))),
+    (asking || planToApprove) && el("div", { class: "msg claude" },
+      el("div", { class: "msg-meta", text: asking ? "Claude · asking you" : "Claude · plan to approve" }),
+      el("div", { class: "bubble asking" },
+        data.plan && planBlock(n, data.plan),
+        ...(asking || []).map((q) => el("div", { class: "question" },
+          q.question && el("div", { text: q.question }),
+          q.options.length && el("ul", {}, ...q.options.map((o) => el("li", { text: o })))))),
+      answerButton(n)),
     now && el("div", { class: "msg claude" },
       el("div", { class: "msg-meta", text: `Claude · now · ${activity}` }),
       el("div", { class: "bubble typing",
         text: data.doing || (activity === "waiting for you" ? "Waiting for you…" : "Working…") })))];
+}
+
+// The app can't answer for you; this opens where you can.
+function answerButton(n) {
+  if (n.background && n.running) return el("button", {
+    class: "fold", text: "Open its terminal to answer",
+    onclick: () => agentAction(n, "agent-attach", (r) => r.opened
+      ? toast("Opened a terminal window attached to it.", "ok")
+      : toast(`Run this in a terminal: ${r.command}`, "info", 0)),
+  });
+  if (n.editor) return el("button", {
+    class: "fold", text: `Answer in ${n.editor}`,
+    onclick: () => { window.location.href = editorLink(n.editor, { session: n.sessionId }); },
+  });
+  return el("div", { class: "msg-meta", text: "Answer it in its terminal." });
+}
+
+function planBlock(n, plan) {
+  const key = `plan:${n.sessionId}`, open = !!state.chatOpen[key];
+  const lines = plan.text.split("\n"), long = lines.length > 8;
+  return el("div", { class: "plan" },
+    el("div", { class: "plan-text", text: open || !long ? plan.text : `${lines.slice(0, 8).join("\n")}\n…` }),
+    long && el("button", {
+      class: "fold", text: open ? "Hide the plan" : "Show the whole plan",
+      onclick: () => { state.chatOpen[key] = !open; renderDrawer(); },
+    }));
 }
 
 function chatMessage(m, activity) {
