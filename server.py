@@ -293,6 +293,19 @@ def _text_of(content):
                      if isinstance(b, dict) and b.get("type") == "text")
 
 
+COMMAND_NAME = re.compile(r"<command-name>\s*(.*?)\s*</command-name>", re.S)
+COMMAND_ARGS = re.compile(r"<command-args>\s*(.*?)\s*</command-args>", re.S)
+
+
+def _command_line(text):
+    """A slash command as the user typed it ("/handoff args"), not its record's tags."""
+    name = COMMAND_NAME.search(text)
+    if not name:
+        return text
+    args = COMMAND_ARGS.search(text)
+    return f"{name.group(1)} {args.group(1) if args else ''}".strip()
+
+
 def _peer_message(uuid, text, at):
     """A cross-session message: the user's own words when this app's Send box
     sent it, else a note from another session."""
@@ -347,7 +360,7 @@ def _chat_messages(lines):
             att = rec.get("attachment") or {}
             if att.get("type") != "queued_command" or att.get("commandMode") == "task-notification":
                 continue
-            typed = CONTEXT_TAGS.sub("", _text_of(att.get("prompt"))).strip()
+            typed = _command_line(CONTEXT_TAGS.sub("", _text_of(att.get("prompt"))).strip())
             if typed.startswith("<cross-session-message"):
                 msgs.append(_peer_message(rec.get("uuid"), typed, at))
             elif typed and not typed.startswith("<"):
@@ -371,6 +384,7 @@ def _chat_messages(lines):
                     and not rec.get("isMeta") and not rec.get("isCompactSummary")):
                 origin = "human"  # written before Claude Code recorded where messages come from
             if origin == "human":
+                typed = _command_line(typed)
                 if typed:
                     msgs.append({"id": rec.get("uuid"), "role": "user", "text": typed, "at": at})
             elif origin == "peer":
@@ -420,7 +434,7 @@ def _chat_messages(lines):
             doing, plan = None, None
     read = [(m["text"], m["at"]) for m in msgs if m["role"] == "user"]
     queued = [{"text": t, "at": q["at"]} for q in queued
-              if (t := CONTEXT_TAGS.sub("", q["text"]).strip()) and not t.startswith("<")
+              if (t := _command_line(CONTEXT_TAGS.sub("", q["text"]).strip())) and not t.startswith("<")
               and not any(text == t and at >= q["at"] - 1 for text, at in read)]
     return msgs, working, asking, doing, queued, plan
 
@@ -548,6 +562,11 @@ def session_chat(sid):
         except OSError:
             pass
     msgs = msgs[-CHAT_LAST:]
+    live = next((x for x in live_sessions() if x["sessionId"] == sid), None) if working else None
+    if live and live.get("status") in ("idle", "asleep") and live.get("agentState") not in ("working", "blocked"):
+        # The transcript left a turn open (a cancelled command, a crash), but
+        # Claude Code says the chat is idle: believe it.
+        working, asking = False, None
     for m in msgs:
         # notes from other sessions are written by Claude too
         if (m["role"] == "peer" or m["role"] == "claude" and m["done"]) and len(m["text"]) >= TLDR_MIN:
@@ -557,7 +576,7 @@ def session_chat(sid):
     if working and not questions:
         # A permission prompt or a plan to approve isn't in the transcript until
         # it is answered; a background agent's screen shows it.
-        s = next((x for x in live_sessions() if x["sessionId"] == sid), None)
+        s = live
         if s and s.get("jobId") and s.get("running") and (
                 s.get("agentState") == "blocked" or s.get("status") == "waiting"):
             on_screen = screen_question(s["jobId"])
