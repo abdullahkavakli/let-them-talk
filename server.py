@@ -11,13 +11,17 @@ Run:  python3 server.py      then open http://localhost:8765
 """
 import base64
 import csv
+import fcntl
 import hashlib
 import json
 import os
 import re
+import select
 import shutil
 import signal
+import struct
 import subprocess
+import termios
 import threading
 import time
 import unicodedata
@@ -2304,16 +2308,19 @@ def send_to_session(bid, body):
 
 
 def _prompt_background(bid, s, text):
-    """Wake a background agent with a new prompt, in place (stop it first if
-    its process is still alive, or Claude Code would start a copy)."""
+    """Give a background agent a new prompt, in place. A running one gets it
+    typed into its prompt box, so it keeps running and a terminal attached
+    to it stays open and shows the prompt; one whose process has ended is
+    woken with it."""
     job = s["jobId"]
     if s.get("running"):
-        run_claude(["stop", job], timeout=30)
-        for _ in range(20):
-            row = next((r for r in background_rows(fresh=True) if r["id"] == job), None)
-            if row is None or not row.get("pid"):
-                break
-            time.sleep(0.5)
+        _type_prompt(s, text)
+        with lock:
+            board = load_board(bid)
+            add_activity(board, f"Prompt to {label(s)}: sent", "ok")
+            save_board(board)
+        background_rows(fresh=True)
+        return {"how": "prompt", "copy": None}
     # no flags: a background agent keeps its saved options (mode, model,
     # name), and passing any would make Claude Code start a copy instead
     proc = run_claude(["--resume", s["sessionId"], "--bg", "--", text], cwd=s["cwd"] or None, timeout=90)
@@ -2330,6 +2337,138 @@ def _prompt_background(bid, s, text):
         save_board(board)
     background_rows(fresh=True)
     return {"how": "prompt", "copy": copy.group(1) if copy else None}
+
+
+# Claude Code has no command that hands a running background agent a prompt,
+# and stopping it to resume with one closes every terminal attached to it. So
+# the app attaches too, in a terminal of its own, and types the prompt as you
+# would: Claude Code records it as yours, and an attached terminal shows it.
+TYPE_CHUNK = 100   # characters per write; one big burst would count as a paste,
+                   # which Claude Code passes on as pasted text, not your words
+TYPE_READY = 10    # seconds `claude attach` gets to draw the prompt box
+TYPE_STARTED = 10  # seconds the agent gets to record the prompt
+DIM = re.compile(r"\x1b\[2m([^\x1b]*)\x1b\[22m")
+type_lock = threading.Lock()
+
+
+def _prompt_box(raw, suggestion=""):
+    """What a background agent's prompt box holds, from its screen as
+    `claude logs` prints it: "" when empty (or showing only its grey
+    suggestion), None when no prompt box is showing (a question, a
+    permission prompt or a menu takes its place)."""
+    lines = [l.rstrip() for l in render_screen(raw).splitlines()]
+    rules = [i for i, l in enumerate(lines) if l.strip().startswith("─────")]
+    if len(rules) < 2:
+        return None
+    top, bottom = rules[-2], rules[-1]
+    box = lines[top + 1:bottom]
+    if not box or not box[0].lstrip().startswith("❯") or OPTION.match(box[0]) \
+            or any(OPTION.match(l) for l in lines[bottom + 1:]):
+        return None
+    text = " ".join(" ".join(box).replace("\xa0", " ").lstrip()[1:].split())
+    grey = {" ".join(m.replace("\xa0", " ").split()) for m in DIM.findall(raw)}
+    if text in grey or (suggestion and suggestion.startswith(text.rstrip("…").rstrip())):
+        return ""
+    return text
+
+
+def _typed_keys(text):
+    """Text as keystrokes in chunks: a new line is backslash + Enter (Claude
+    Code's way to start one), and control characters are dropped."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\t", "    ")
+    text = re.sub(r"[\x00-\x09\x0b-\x1f\x7f]", "", text)
+    if text.endswith("\\"):
+        text += " "  # or the final Enter would start a new line instead of sending
+    keys = []
+    for n, line in enumerate(text.split("\n")):
+        if n:
+            keys += ["\\", "\r"]
+        keys += [line[i:i + TYPE_CHUNK] for i in range(0, len(line), TYPE_CHUNK)]
+    return keys
+
+
+def _prompted_since(sid, since):
+    """Whether the chat's transcript has a prompt from you newer than since."""
+    session_title(sid)  # finds the transcript
+    path = title_cache.get(sid, {}).get("path")
+    if path is None:
+        return False
+    try:
+        with path.open("rb") as f:
+            f.seek(max(0, f.seek(0, 2) - AGENT_TAIL))
+            tail = f.read().splitlines()
+    except OSError:
+        return False
+    for raw in reversed(tail):
+        try:
+            rec = json.loads(raw)
+        except ValueError:
+            continue
+        if (_ms(rec.get("timestamp")) or 0) / 1000 < since - 1:
+            return False
+        if rec.get("type") == "user" and isinstance((rec.get("message") or {}).get("content"), str):
+            return True
+    return False
+
+
+def _type_prompt(s, text):
+    """Type a prompt into a running background agent's prompt box and send it."""
+    job = s["jobId"]
+    with type_lock:
+        raw = run_claude(["logs", job], timeout=30, text=False).stdout.decode("utf-8", "replace")
+        suggestion = " ".join(str((job_state(job) or {}).get("suggestedReply") or "").split())
+        box = _prompt_box(raw, suggestion)
+        if box is None:
+            raise ValueError("It's showing a question or a menu instead of its prompt box. "
+                             "Answer it in its terminal first.")
+        if box:
+            raise ValueError("Its prompt box already has text typed in its terminal. "
+                             "Send or clear it there first.")
+        master, slave = os.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+        env = {**claude_env(), "TERM": "xterm-256color"}
+        try:
+            proc = subprocess.Popen([CLAUDE_BIN, "attach", job], stdin=slave, stdout=slave,
+                                    stderr=slave, env=env, start_new_session=True)
+        finally:
+            os.close(slave)
+        seen = bytearray()
+
+        def drain(seconds):  # read what it draws, or the terminal fills up and it stalls
+            end = time.time() + seconds
+            while time.time() < end:
+                if select.select([master], [], [], 0.02)[0]:
+                    try:
+                        seen.extend(os.read(master, 65536))
+                    except OSError:
+                        return
+
+        since = time.time()
+        try:
+            while "❯".encode() not in seen and time.time() - since < TYPE_READY and proc.poll() is None:
+                drain(0.2)
+            if "❯".encode() not in seen:
+                raise ValueError("Couldn't open its prompt box: "
+                                 f"{_plain(seen.decode('utf-8', 'replace'))[-200:] or 'no answer'}")
+            drain(0.3)
+            for key in _typed_keys(text):
+                os.write(master, key.encode())
+                drain(0.05 if key in ("\\", "\r") else 0.02)
+            drain(0.4)
+            os.write(master, b"\r")
+            drain(1.0)
+        finally:
+            proc.send_signal(signal.SIGHUP)  # leave as a closed window would; the agent runs on
+            try:
+                proc.wait(5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            os.close(master)
+    deadline = since + TYPE_STARTED
+    while not _prompted_since(s["sessionId"], since):
+        if time.time() > deadline:
+            raise ValueError("It was typed into its prompt box but hasn't started on it. Look at its terminal.")
+        time.sleep(0.5)
 
 
 def _job_of(body):

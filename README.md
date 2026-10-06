@@ -52,8 +52,11 @@ installed inside WSL, where the server runs.
     answer it.
   - **Send a message:** your text shows at once as your bubble (*sending…*,
     then *sent, not read yet*, then *You, from here* once the chat reads it).
-    A running chat reads it between steps; an idle background agent wakes up
-    with it as its next prompt. If sending fails, the text goes back into
+    A running chat reads it between steps. An idle background agent gets it
+    as its next prompt, typed into its prompt box as if you typed it there:
+    it keeps running, and its open terminal stays and shows it (if you have
+    unsent text in that terminal, or it is asking you something there,
+    nothing is typed). If sending fails, the text goes back into
     the box. When the chat waits for you, the box shows a likely reply in
     grey; press Tab (or →) to use it. Enter sends, Shift+Enter adds a line.
   - **Agents in this chat:** the workflows and subagents it started, with
