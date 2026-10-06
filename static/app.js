@@ -21,6 +21,7 @@ const state = {
   talkBusy: {},          // arrow id -> a /api/talk request is in flight
   talkLimit: {},         // arrow id -> how many messages to load ("Show earlier" raises it)
   notifyOff: {},         // arrow id -> "Tell both agents" unticked (kept across redraws)
+  removeNotifyOff: {},   // sessionId -> "Tell connected agents" unticked (kept across redraws)
   showSubs: store("ltt.subagents") === true,  // running subagents drawn on the board
   subSpot: {},           // sessionId -> where its subagents sat, relative to its card
   subInfo: {},           // "sessionId:agentId" -> /api/subagent response for the open drawer
@@ -72,6 +73,9 @@ function store(key, value) {
 }
 
 const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+// The time, with the date in front when it isn't today (conversations span days).
+const when = (t) => new Date(t * 1000).toDateString() === new Date().toDateString() ? clock(t)
+  : `${new Date(t * 1000).toLocaleDateString([], { month: "short", day: "numeric" })} ${clock(t)}`;
 const folderName = (cwd) => (cwd || "").replace(/\/+$/, "").split("/").pop() || cwd || "?";
 // A path as one span per folder name (with its slash), kept together by CSS,
 // so a long path wraps between folder names, never inside one.
@@ -820,7 +824,9 @@ function removeControls(n, conns) {
     const other = nodeById(c.from === n.sessionId ? c.to : c.from);
     return other?.live || n.live;
   }).length;
-  const notify = el("input", { type: "checkbox", id: "r-notify", checked: liveEnds > 0 });
+  // its state lives in `state`: the drawer is redrawn on every poll
+  const notify = el("input", { type: "checkbox", id: "r-notify", checked: liveEnds > 0 && !state.removeNotifyOff[n.sessionId],
+    onchange: (e) => { state.removeNotifyOff[n.sessionId] = !e.target.checked; } });
   const arrows = conns.length === 1 ? "its arrow" : `its ${conns.length} arrows`;
   return el("div", { class: "drawer-actions" },
     liveEnds > 0 && el("label", { class: "small check" }, notify, " Tell connected agents"),
@@ -1666,6 +1672,9 @@ function planBlock(n, plan) {
     }));
 }
 
+const TALK_MAX = 500;  // the server's cap on one conversation load
+const TALK_STATE = { unread: "not read yet", unknown: "read state unknown" };
+
 // An arrow's conversation: its first chat on the left, the other on the right,
 // the app's own notes in between; messages from before the arrow are faded.
 function talkSection(c) {
@@ -1678,15 +1687,15 @@ function talkSection(c) {
   let marked = !data.messages[0].before;  // no divider when nothing came before the arrow
   for (const m of data.messages) {
     if (!marked && !m.before) {
-      items.push(el("p", { class: "talk-divider", text: `Arrow connected · ${clock(data.createdAt)}` }));
+      items.push(el("p", { class: "talk-divider", text: `Arrow connected · ${when(data.createdAt)}` }));
       marked = true;
     }
     items.push(talkMessage(m, c));
   }
-  const earlier = data.total - data.messages.length;
+  const earlier = data.total - data.messages.length, limit = state.talkLimit[c.id] || 50;
   return [head,
-    earlier > 0 && el("button", { class: "fold", text: `Show ${Math.min(earlier, 50)} earlier`,
-      onclick: () => { state.talkLimit[c.id] = (state.talkLimit[c.id] || 50) + 50; loadTalk(c.id); } }),
+    earlier > 0 && limit < TALK_MAX && el("button", { class: "fold", text: `Show ${Math.min(earlier, 50)} earlier`,
+      onclick: () => { state.talkLimit[c.id] = limit + 50; loadTalk(c.id); } }),
     el("div", { class: "chat talk" }, ...items)];
 }
 
@@ -1696,8 +1705,8 @@ function talkMessage(m, c) {
   const long = m.text.length > FOLD_CHARS || m.text.split("\n").length > FOLD_LINES;
   const side = m.kind === "app" ? "sys" : m.from === c.from ? "left" : "right";
   const meta = m.kind === "app"
-    ? `Let Them Talk → ${name(m.to)} · ${clock(m.at)}${m.state ? ` · ${STATE_TEXT[m.state] || m.state}` : ""}`
-    : `${name(m.from)} · ${clock(m.at)}${m.state === "unread" ? " · not read yet" : ""}`;
+    ? `Let Them Talk → ${name(m.to)} · ${when(m.at)}${m.state ? ` · ${STATE_TEXT[m.state] || m.state}` : ""}`
+    : `${name(m.from)} · ${when(m.at)}${TALK_STATE[m.state] ? ` · ${TALK_STATE[m.state]}` : ""}`;
   return el("div", { class: `msg ${side}${m.before ? " before" : ""}` },
     el("div", { class: "msg-meta", text: meta }),
     el("div", { class: "bubble" + (long && !open ? " folded" : ""), text: m.text }),

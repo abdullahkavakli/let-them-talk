@@ -243,12 +243,12 @@ def _peer_record(c, line):
 
 def peer_log(sid):
     """What a session received from other sessions and sent to them, from its
-    transcript: {"recv": {msg_id: {at, from, text}}, "sent": {msg_id: {at, to,
-    text}}}. Only bytes appended since the last call are read."""
+    transcript: {"found", "recv": {msg_id: {at, from, text}}, "sent": {msg_id:
+    {at, to, text}}}. Only bytes appended since the last call are read."""
     session_title(sid)  # finds and caches the transcript's path
     path = (title_cache.get(sid) or {}).get("path")
     if path is None:
-        return {"recv": {}, "sent": {}}
+        return {"found": False, "recv": {}, "sent": {}}
     with peer_lock:
         c = peer_cache.setdefault(str(path), {"offset": 0, "recv": {}, "sent": {}, "calls": {}})
         try:
@@ -274,7 +274,7 @@ def peer_log(sid):
                     f.seek(c["offset"])
         except OSError:
             pass
-        return {"recv": dict(c["recv"]), "sent": dict(c["sent"])}
+        return {"found": True, "recv": dict(c["recv"]), "sent": dict(c["sent"])}
 
 
 model_cache = {}  # transcript path -> ((mtime_ns, size), model)
@@ -1689,31 +1689,44 @@ def talk_history(bid, conn_id, limit=TALK_LIMIT):
     sides = {a: [a, *past.get(a, [])], b: [b, *past.get(b, [])]}
     logs = {}
     for end, sids in sides.items():
-        merged = {"recv": {}, "sent": {}}
+        merged = {"found": False, "recv": {}, "sent": {}}
         for sid in sids:
             got = peer_log(sid)
-            for k in merged:
+            merged["found"] = merged["found"] or got["found"]
+            for k in ("recv", "sent"):
                 for mid, m in got[k].items():
                     merged[k].setdefault(mid, m)
         logs[end] = merged
     names = {end: {x for sid in sids for x in ((board["nodes"].get(sid) or {}).get("name"),
                                                 (board["nodes"].get(sid) or {}).get("title")) if x}
              for end, sids in sides.items()}
-    pids = {s["sessionId"]: s.get("pid") for s in live_sessions()}
+    live = {s["sessionId"]: s for s in live_sessions()}
+    # A message belongs to this arrow by its msg_id (in both transcripts) or by
+    # the receiver's own socket. Names are a last resort, used only when one
+    # side's transcript is gone: two chats can share a name.
     msgs = {}
     for src, dst in ((a, b), (b, a)):
         sent, recv = logs[src]["sent"], logs[dst]["recv"]
+        dst_live = live.get(dst) or {}
+        dst_sock = f"/{dst_live['pid']}.sock" if dst_live.get("pid") else None
+        dst_start = (dst_live.get("startedAt") or 0) / 1000
         for mid, s in sent.items():
+            if mid in recv:
+                state = "read"
+            elif dst_sock and s["to"].endswith(dst_sock) and s["at"] >= dst_start:
+                state = "unread"  # delivered to dst's socket, not in its transcript yet
+            elif not logs[dst]["found"] and _bare_address(s["to"]) in names[dst]:
+                state = "unknown"  # dst's transcript is gone: matched by name only
+            else:
+                continue
             got = recv.get(mid)
-            to_dst = (_bare_address(s["to"]) in names[dst]
-                      or (pids.get(dst) and s["to"].endswith(f"/{pids[dst]}.sock")))
-            if got or to_dst:
-                msgs[mid] = {"id": mid, "from": src, "to": dst, "at": s["at"], "kind": "peer",
-                             "text": got["text"] if got else s["text"], "state": "read" if got else "unread"}
-        for mid, got in recv.items():  # the sender's own transcript may be gone
-            if mid not in msgs and got["from"] in names[src]:
-                msgs[mid] = {"id": mid, "from": src, "to": dst, "at": got["at"], "kind": "peer",
-                             "text": got["text"], "state": "read"}
+            msgs[mid] = {"id": mid, "from": src, "to": dst, "at": s["at"], "kind": "peer",
+                         "text": got["text"] if got else s["text"], "state": state}
+        if not logs[src]["found"]:  # src's transcript is gone: what dst got from that name
+            for mid, got in recv.items():
+                if mid not in msgs and got["from"] in names[src]:
+                    msgs[mid] = {"id": mid, "from": src, "to": dst, "at": got["at"], "kind": "peer",
+                                 "text": got["text"], "state": "read"}
     for end, sid in (("from", a), ("to", b)):  # the notes this app delivered for the arrow
         note = (conn.get("notes") or {}).get(end) or {}
         if note.get("enabled") and (note.get("sentText") or note.get("text")):
