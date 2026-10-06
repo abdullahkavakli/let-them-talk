@@ -481,8 +481,9 @@ function select_(sel) {
 }
 
 async function loadDetails(sid) {
-  const get = (path) => api(`${path}?session=${encodeURIComponent(sid)}`).catch((e) => ({ error: e.message }));
-  [state.agents[sid], state.chat[sid]] = await Promise.all([get("/api/agents"), get("/api/chat")]);
+  const get = (path, more = "") => api(`${path}?session=${encodeURIComponent(sid)}${more}`).catch((e) => ({ error: e.message }));
+  // watch=1: this drawer is open, so the chat's mod may make it a suggestion
+  [state.agents[sid], state.chat[sid]] = await Promise.all([get("/api/agents"), get("/api/chat", "&watch=1")]);
   settleOutbox(sid);
   if (state.selected?.type === "node" && state.selected.id === sid) renderDrawer();
 }

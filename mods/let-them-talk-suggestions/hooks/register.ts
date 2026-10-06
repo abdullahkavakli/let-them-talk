@@ -1,20 +1,21 @@
 import type { Register } from 'claude-code'
 
 // Let Them Talk (this repo) shows each chat's suggested next prompt in its
-// Send box: the same one this chat's prompt box shows.
+// Send box: exactly what this chat's own prompt box shows, or nothing.
 //
-// - When Claude Code makes its own suggestion (only while this chat's window
-//   is focused), it is passed on as it is shown.
-// - When it doesn't (the window is in the background, or a background agent
-//   has none) and Let Them Talk has this chat open, one is made the way
-//   Claude Code makes its own: one tool-less reply of this chat's model over
-//   its own conversation, while that is still cached. It goes both to the app
-//   and into this chat's prompt box, so the two show the same text.
+// - When Claude Code shows its own suggestion, it is passed on.
+// - When it made none (the terminal is unfocused, or a background agent has
+//   nobody attached) and Let Them Talk has this chat open, one is made the
+//   way Claude Code makes its own ($.model.fork over the cached conversation)
+//   and shown in this chat's prompt box too, so both match.
+// - A background agent that ends its turn waiting on you is left alone:
+//   Claude Code makes that one itself and saves it, and the app reads it there.
+// Only text the box really shows is reported; otherwise "none".
 
 const APP = 'http://localhost:8765' // Let Them Talk's default port (LTT_PORT)
 const HEADERS = { 'Content-Type': 'application/json', 'X-Let-Them-Talk': '1' }
 const TICK_MS = 2000
-const OWN_WAIT_MS = 8000 // Claude Code makes its own within a few seconds of the turn's end
+const OWN_WAIT_MS = 12000 // Claude Code makes its own within a few seconds of the turn's end
 const WINDOW_MS = 300_000 // after that the conversation may no longer be cached (server: MOD_WINDOW)
 const HELLO_EVERY_MS = 300_000 // so the app keeps counting this chat as having the mod
 
@@ -31,6 +32,11 @@ isn't obvious, reply with a single hyphen. Reply with only the suggestion.`
 
 const SILENT = /^\W*(-|none|nothing|silence|no suggestion.*|nothing to suggest.*|done)\W*$|^[[(].*[\])]$/i
 
+/** What to tell the app about a suggestion: the text only if the box shows it. */
+export function report(text: string | undefined, isShown: boolean, made: 'claude' | 'fork') {
+  return text?.trim() && isShown ? { text, made } : { text: '', made: 'none' as const }
+}
+
 export function cleanSuggestion(text: string): string | undefined {
   const line = text.trim().split('\n')[0].trim().replace(/^["'“”]+|["'“”]+$/g, '').trim()
   return line && !SILENT.test(line) && line.split(/\s+/).length <= 12 ? line : undefined
@@ -44,6 +50,7 @@ export const register: Register = on => {
   let busy = false
   let helloFor: string | undefined
   let sinceHello = 0
+  let unsent: string | undefined // a report the app didn't take (it was down), sent again next tick
 
   // Work after a turn outlives the turn's own hooks, so a timer started here does it.
   on('session.start', async ($, e, next) => {
@@ -60,11 +67,14 @@ export const register: Register = on => {
           sinceHello += TICK_MS
           if (sessionId !== helloFor || sinceHello >= HELLO_EVERY_MS) {
             await $.http.fetch(`${APP}/api/suggestion/hello`, {
-              method: 'POST', headers: HEADERS,
-              body: JSON.stringify({ sessionId, surface: e.surface }),
+              method: 'POST', headers: HEADERS, body: JSON.stringify({ sessionId }),
             })
             helloFor = sessionId
             sinceHello = 0
+          }
+          if (unsent) {
+            const sent = await $.http.fetch(`${APP}/api/suggestion`, { method: 'POST', headers: HEADERS, body: unsent })
+            if (sent.ok) unsent = undefined
           }
           if (!pending) return
           pending.waited += TICK_MS
@@ -80,12 +90,11 @@ export const register: Register = on => {
           const reply = await $.model.fork({ prompt: PROMPT })
           const text = reply.isAnswered ? cleanSuggestion(reply.text) : undefined
           if (ownFor === forTurn || forTurn !== turn || forStarts !== starts) return // a newer turn
-          if (text) await $.prompt.suggest({ text })
-          // made "none" tells the app this turn has nothing, so it stops waiting for one
-          await $.http.fetch(`${APP}/api/suggestion`, {
-            method: 'POST', headers: HEADERS,
-            body: JSON.stringify({ sessionId, text: text ?? '', made: text ? 'fork' : 'none' }),
-          })
+          const shown = text ? await $.prompt.suggest({ text }) : undefined
+          // "none" tells the app this turn has nothing, so it stops waiting for one
+          const body = JSON.stringify({ sessionId, ...report(text, shown?.isShown === true, 'fork') })
+          const sent = await $.http.fetch(`${APP}/api/suggestion`, { method: 'POST', headers: HEADERS, body })
+          if (!sent.ok) unsent = body
         } catch {
           // Let Them Talk isn't running, or the fork failed: nothing to show.
         } finally {
@@ -101,13 +110,14 @@ export const register: Register = on => {
     // Claude Code's own guess; one this mod (a plugin) proposed is already sent.
     if (e.origin?.kind === 'plugin' || !e.text.trim()) return shown
     ownFor = turn
+    let body: string | undefined
     try {
       const sessionId = await $.session.id()
-      await $.http.fetch(`${APP}/api/suggestion`, {
-        method: 'POST', headers: HEADERS, body: JSON.stringify({ sessionId, text: e.text, made: 'claude' }),
-      })
+      body = JSON.stringify({ sessionId, ...report(e.text, shown.isShown, 'claude') })
+      const sent = await $.http.fetch(`${APP}/api/suggestion`, { method: 'POST', headers: HEADERS, body })
+      if (!sent.ok) unsent = body
     } catch {
-      // Let Them Talk isn't running: the suggestion shows here all the same.
+      unsent = body // Let Them Talk isn't running: the suggestion shows here all the same
     }
     return shown
   })

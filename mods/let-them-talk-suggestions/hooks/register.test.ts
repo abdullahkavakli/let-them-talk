@@ -1,5 +1,5 @@
 import { test, expect } from 'claude-code/testing'
-import { cleanSuggestion } from './register'
+import { cleanSuggestion, report } from './register'
 
 // Sending needs the chat's id ($.session.id) and making one needs its
 // conversation ($.model.fork), which only a real session has; those paths
@@ -28,4 +28,12 @@ test('keeps a made suggestion only when it reads like one', () => {
   expect(cleanSuggestion('Nothing to suggest.')).toBe(undefined)
   expect(cleanSuggestion('(silence)')).toBe(undefined)
   expect(cleanSuggestion('one two three four five six seven eight nine ten eleven twelve thirteen')).toBe(undefined)
+})
+
+test('reports a suggestion only when the box shows it', () => {
+  expect(report('commit it', true, 'claude')).toEqual({ text: 'commit it', made: 'claude' })
+  expect(report('commit it', false, 'claude')).toEqual({ text: '', made: 'none' })
+  expect(report('yes', true, 'fork')).toEqual({ text: 'yes', made: 'fork' })
+  expect(report(undefined, true, 'fork')).toEqual({ text: '', made: 'none' })
+  expect(report('   ', true, 'claude')).toEqual({ text: '', made: 'none' })
 })

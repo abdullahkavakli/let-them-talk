@@ -80,8 +80,7 @@ installed inside WSL, where the server runs.
   note is marked *sent*, *sent, reworded* or *failed*.
 - A TL;DR is written by `claude -p --model haiku` with no tools (about 7 s),
   once per finished reply of 280+ characters, only when you open that chat,
-  and kept in memory until the server restarts. The grey suggested reply is
-  made the same way, once per last reply.
+  and kept in memory until the server restarts.
 - Boards are stored in `boards/`, every delivery in `logs/relay.jsonl`.
 
 ## Limits
@@ -102,33 +101,36 @@ installed inside WSL, where the server runs.
 - A folder on a drive WSL hasn't mounted (e.g. Google Drive's `G:`) can't be
   used; mount it with `sudo mount -t drvfs G: /mnt/g`.
 
-## Claude Code's own suggestion (optional)
+## Claude Code's own suggestion
 
-The Send box shows the same grey suggestion as the chat's own prompt box.
-For a background agent the app reads it off the agent's screen (`claude
-logs`, the dim text on the prompt line), with no setup. Claude Code saves it
-nowhere else, so for chats in a terminal or an editor the mod in
-`mods/let-them-talk-suggestions` sends it to the app:
+The Send box shows the same grey suggestion as the chat's own prompt box, or
+nothing:
 
-- When Claude Code makes its own (only while the chat's window is focused),
-  the mod passes it on.
-- When it doesn't (the window is in the background, or a background agent has
-  none) and the app has that chat's details open, the mod makes one the way
-  Claude Code does: one tool-less reply of the chat's own model over its
-  cached conversation, about a tenth of a turn's input. It goes into the chat's
-  prompt box too, so both still match. Nothing is made for chats nobody has open
-  (it keeps checking for 5 minutes after the reply), and at most one per turn.
+- **A background agent that ends its turn waiting on you:** Claude Code saves
+  its suggestion in `~/.claude/jobs/<id>/state.json` (the one `claude agents`
+  offers with Tab), and the app reads it there. No setup, any agent.
+- **Terminal chats, and background turns that don't wait on you:** Claude Code
+  saves the suggestion nowhere, so the mod in `mods/let-them-talk-suggestions`
+  passes it on as it is shown. When Claude Code makes none (the window isn't
+  focused, or nobody is attached) and the app has that chat's details open,
+  the mod makes one the way Claude Code does (one tool-less reply of the chat's
+  own model over its cached conversation) and puts it in the chat's prompt box
+  too, so both match. At most one per turn, and none for chats nobody has open.
+- **Chats in Cursor or VS Code** show none, like their own composer: the
+  extension doesn't ask Claude Code for suggestions.
+- **Chats started before the mod was loaded** show none until restarted.
 
-Chats with the mod show that suggestion or nothing; chats without it get a
-haiku guess. To load it in every chat started from then on, add its absolute
-path to the `env` block of `~/.claude/settings.json` (it talks to port 8765;
-edit `hooks/register.ts` if you changed `LTT_PORT`):
+To load the mod in every chat started from then on, add its absolute path to
+the `env` block of `~/.claude/settings.json` (it talks to port 8765; edit
+`hooks/register.ts` if you changed `LTT_PORT`):
 
 ```json
 { "env": { "CLAUDE_CODE_PLUGIN_DIRS": "/path/to/agent-organizer/mods/let-them-talk-suggestions" } }
 ```
 
 For a single chat: `claude --plugin-dir mods/let-them-talk-suggestions`.
+The job file isn't an official Claude Code interface; if an update moves it,
+those agents show nothing rather than wrong text.
 
 ## Settings
 
