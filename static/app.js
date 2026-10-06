@@ -20,6 +20,7 @@ const state = {
   showSubs: store("ltt.subagents") === true,  // running subagents drawn on the board
   subSpot: {},           // sessionId -> where its subagents sat, relative to its card
   subInfo: {},           // "sessionId:agentId" -> /api/subagent response for the open drawer
+  subAll: {},            // sessionId -> all its subagents shown, not just the first five
 };
 
 // ------------------------------------------------------------------ helpers
@@ -419,9 +420,9 @@ function subChip(old, layer, item, n) {
   }
   const a = item.agent;
   const age = a?.startedAt ? fmtDur(Date.now() - a.startedAt) : null;
-  const name = a ? a.label : `+${item.more} more running`;
+  const name = a ? a.label : item.more ? `+${item.more} more running` : "Show fewer";
   const meta = a ? [age, a.workflow ? `${a.workflow} · ${a.kind}` : a.kind].filter(Boolean).join(" · ")
-    : "Click to see them all";
+    : item.more ? "Click to show them all" : `Only the first ${SUB_MAX - 1}`;
   chip.dataset.parent = n.sessionId;
   chip.dataset.agent = a ? a.id : "";
   chip.classList.toggle("more", !a);
@@ -431,8 +432,8 @@ function subChip(old, layer, item, n) {
   if (chip.querySelector(".sub-meta").textContent !== meta) chip.querySelector(".sub-meta").textContent = meta;
   chip.title = [a && a.label, a?.workflow && `Workflow: ${a.workflow}`, a && `Type: ${a.kind}`,
     a?.model && `Model: ${modelName(a.model)}`, age && `Running for ${age}`, a?.lastTool && `Now: ${a.lastTool}`,
-    `Started by ${display(n)}`, a ? "Click to see what it is doing" : "Click to see them all"].filter(Boolean).join("\n");
-  chip.setAttribute("aria-label", `${name}, running, started by ${display(n)}`);
+    `Started by ${display(n)}`, a && "Click to see what it is doing"].filter(Boolean).join("\n");
+  chip.setAttribute("aria-label", a ? `${name}, running, started by ${display(n)}` : `${name}, ${display(n)}`);
   return chip;
 }
 
@@ -448,9 +449,13 @@ function renderSubagents() {
     const subs = n.live && n.subagents || [];
     if (!subs.length) continue;
     running += subs.length;
-    const cut = subs.length > SUB_MAX ? SUB_MAX - 1 : subs.length;
+    // Past SUB_MAX, the rest fold into "+N more", which unfolds them all
+    // (and turns into "Show fewer"); same element, so focus stays on it.
+    const fold = subs.length > SUB_MAX;
+    if (!fold) delete state.subAll[n.sessionId];
+    const cut = fold && !state.subAll[n.sessionId] ? SUB_MAX - 1 : subs.length;
     const items = subs.slice(0, cut).map((a) => ({ key: `${n.sessionId}:${a.id}`, agent: a }));
-    if (subs.length > cut) items.push({ key: `${n.sessionId}:more`, more: subs.length - cut });
+    if (fold) items.push({ key: `${n.sessionId}:fold`, more: subs.length - cut });
     const col = subColumn(n, items.length * SUB_H + (items.length - 1) * SUB_GAP, taken);
     taken.push(col);
     state.subSpot[n.sessionId] = { dx: col.dx, dy: col.dy };
@@ -482,11 +487,14 @@ function renderSubagents() {
 }
 
 // A subagent's own details: what it is doing, its state, its task. The
-// "+N more" card opens its chat instead.
+// "+N more" / "Show fewer" card unfolds or folds the column instead.
 function openSubCard(chip) {
-  if (!nodeById(chip.dataset.parent)) return;
-  if (chip.dataset.agent) openSub(chip.dataset.parent, chip.dataset.agent, chip.querySelector(".sub-name").textContent);
-  else select_({ type: "node", id: chip.dataset.parent });
+  const parent = chip.dataset.parent;
+  if (!nodeById(parent)) return;
+  if (chip.dataset.agent) return openSub(parent, chip.dataset.agent, chip.querySelector(".sub-name").textContent);
+  if (state.subAll[parent]) delete state.subAll[parent];
+  else state.subAll[parent] = true;
+  renderSubagents();
 }
 
 function openSub(parent, id, label) {
