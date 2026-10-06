@@ -48,7 +48,7 @@ installed inside WSL, where the server runs.
     A running chat reads it between steps; an idle background agent wakes up
     with it as its next prompt. If sending fails, the text goes back into
     the box. When the chat waits for you, the box shows a likely reply in
-    grey; press → to use it.
+    grey; press Tab (or →) to use it. Enter sends, Shift+Enter adds a line.
   - **Agents in this chat:** the workflows and subagents it started, with
     their state, model, time and tokens.
   - **Open in Cursor** (or your editor) shows the chat there.
@@ -101,9 +101,11 @@ installed inside WSL, where the server runs.
 
 ## Claude Code's own suggestion (optional)
 
-Claude Code saves the grey suggestion it shows nowhere, so the mod in
-`mods/let-them-talk-suggestions` sends it to the app, and the Send box shows
-the same text as the chat's own prompt box:
+The Send box shows the same grey suggestion as the chat's own prompt box.
+For a background agent the app reads it off the agent's screen (`claude
+logs`, the dim text on the prompt line), with no setup. Claude Code saves it
+nowhere else, so for chats in a terminal or an editor the mod in
+`mods/let-them-talk-suggestions` sends it to the app:
 
 - When Claude Code makes its own (only while the chat's window is focused),
   the mod passes it on.

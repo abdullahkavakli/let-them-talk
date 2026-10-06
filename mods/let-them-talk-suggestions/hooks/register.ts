@@ -48,6 +48,8 @@ export const register: Register = on => {
   // Work after a turn outlives the turn's own hooks, so a timer started here does it.
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    // A headless run (claude -p, such as the app's own TL;DR runs) has no prompt box.
+    if (!e.isInteractive) return started
     $.clock.every(TICK_MS, () => {
       if (busy) return
       busy = true
@@ -58,7 +60,8 @@ export const register: Register = on => {
           sinceHello += TICK_MS
           if (sessionId !== helloFor || sinceHello >= HELLO_EVERY_MS) {
             await $.http.fetch(`${APP}/api/suggestion/hello`, {
-              method: 'POST', headers: HEADERS, body: JSON.stringify({ sessionId }),
+              method: 'POST', headers: HEADERS,
+              body: JSON.stringify({ sessionId, surface: e.surface }),
             })
             helloFor = sessionId
             sinceHello = 0

@@ -1360,17 +1360,25 @@ function chatMessage(m, activity) {
 function sendSection(n) {
   if (!canReach(n)) return [];
   const asPrompt = promptable(n);
-  // A likely reply, grey like Claude Code's own suggestion. → on the empty box
-  // takes it (not Tab, which must keep moving focus for keyboard users).
+  // A likely reply, grey like Claude Code's own suggestion. On the empty box Tab
+  // (or →) takes it and a second Tab moves on as usual. Enter sends,
+  // Shift+Enter adds a line, and an empty box sends nothing.
   const sg = !(state.outbox[n.sessionId] || []).length && state.chat[n.sessionId]?.suggest;
   const suggest = sg?.text;
   const box = el("textarea", {
     id: "send-box", rows: 3, class: "send-box",
-    placeholder: suggest ? `${suggest}  (→ to use)` : sg?.pending ? "Suggesting a reply…"
+    placeholder: suggest ? `${suggest}  (Tab to use)` : sg?.pending ? "Suggesting a reply…"
       : asPrompt ? "Its next prompt" : "Your message",
     oninput: (e) => { state.drafts[n.sessionId] = e.target.value; },
     onkeydown: (e) => {
-      if (e.key !== "ArrowRight" || !suggest || box.value) return;
+      if (e.isComposing) return;
+      const plain = !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey;
+      if (e.key === "Enter" && plain) {
+        e.preventDefault();
+        if (box.value.trim()) button.click();
+        return;
+      }
+      if (!((e.key === "Tab" && plain) || e.key === "ArrowRight") || !suggest || box.value) return;
       e.preventDefault();
       box.value = state.drafts[n.sessionId] = suggest;
     },
@@ -1409,9 +1417,10 @@ function sendSection(n) {
   return [
     el("h2", { text: asPrompt ? "Send a prompt" : "Send a message" }),
     box,
-    el("p", { class: "muted small", text: asPrompt
+    el("p", { class: "muted small", text: (asPrompt
       ? "It wakes up with this as your next prompt, as if you had typed it."
-      : "It arrives as a message from Let Them Talk and is read between its steps." }),
+      : "It arrives as a message from Let Them Talk and is read between its steps.") +
+      " Enter sends; Shift+Enter adds a line." }),
     el("div", { class: "drawer-actions" }, button),
   ];
 }

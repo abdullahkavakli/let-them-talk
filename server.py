@@ -333,6 +333,7 @@ def _chat_messages(lines):
     into the running turn)."""
     msgs, reply, working, ended_by, asking, doing, queued = [], None, False, None, None, None, []
     plan = None  # a plan file written in the running turn (plan mode asks to approve it)
+    turn_replies = []  # every reply bubble of the running turn (a message read mid-turn splits them)
     for raw in lines:
         try:
             rec = json.loads(raw)
@@ -399,6 +400,7 @@ def _chat_messages(lines):
             else:
                 continue  # tool results, skill bodies, command output
             reply, working, asking, doing, plan = None, True, None, None, None
+            turn_replies = []
             continue
         # One API message is split into a record per block, each carrying the
         # message's stop_reason, so the thinking block of the final answer
@@ -422,6 +424,7 @@ def _chat_messages(lines):
             if reply is None or (reply["done"] and mid != ended_by):
                 reply = {"id": mid, "role": "claude", "text": text, "at": at, "done": done}
                 msgs.append(reply)
+                turn_replies.append(reply)
             elif reply["id"] == mid:
                 reply["text"] += "\n\n" + text
             else:
@@ -432,6 +435,8 @@ def _chat_messages(lines):
         working = not done
         if done:
             doing, plan = None, None
+            for earlier in turn_replies:  # the turn ended: none of its bubbles "stopped"
+                earlier["done"] = True
     read = [(m["text"], m["at"]) for m in msgs if m["role"] == "user"]
     queued = [{"text": t, "at": q["at"]} for q in queued
               if (t := _command_line(CONTEXT_TAGS.sub("", q["text"]).strip())) and not t.startswith("<")
@@ -482,6 +487,35 @@ def _tldr_for(reply):
                          f"<reply>\n{_clip(reply['text'])}\n</reply>", "tldr")
 
 
+SUGGEST_FILE = APP_DIR / "logs" / "suggestions.json"  # so a server restart loses none
+SUGGEST_KEEP = 86400  # seconds an entry is kept on disk
+suggest_lock = threading.Lock()
+
+
+def load_suggestions():
+    try:
+        saved = json.loads(SUGGEST_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    own_suggest.update(saved.get("own") or {})
+    has_mod.update(saved.get("mod") or {})
+
+
+def _save_suggestions():
+    with suggest_lock:
+        cutoff = time.time() - SUGGEST_KEEP
+        for table, when in ((own_suggest, lambda v: v["at"]), (has_mod, lambda v: v)):
+            for sid in [k for k, v in table.items() if when(v) < cutoff]:
+                del table[sid]
+        try:
+            SUGGEST_FILE.parent.mkdir(exist_ok=True)
+            tmp = SUGGEST_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"own": own_suggest, "mod": has_mod}), encoding="utf-8")
+            tmp.replace(SUGGEST_FILE)
+        except OSError:
+            pass  # memory still has it
+
+
 def take_suggestion(body):
     """POST /api/suggestion from the mod: the text its prompt box now shows."""
     sid = str(body.get("sessionId") or "")
@@ -492,6 +526,7 @@ def take_suggestion(body):
     # made "none": the mod looked and its chat has nothing to suggest
     own_suggest[sid] = {"text": text, "at": time.time(), "made": made}
     has_mod[sid] = time.time()
+    _save_suggestions()
     return {"stored": True}
 
 
@@ -501,6 +536,7 @@ def mod_hello(body):
     if not SID_RE.fullmatch(sid):
         raise ValueError("needs a sessionId")
     has_mod[sid] = time.time()
+    _save_suggestions()
     return {"ok": True}
 
 
@@ -510,13 +546,24 @@ def suggestion_wanted(sid):
     return {"wanted": time.time() - watched.get(sid, 0) < WATCH_WINDOW}
 
 
+SCREEN_WAIT = 12  # seconds after a reply Claude Code may still be drawing its suggestion
+
+
 def _suggestion(sid, msgs):
-    """What the chat's prompt box shows for its last reply. A chat with the
-    mod gets exactly that, or nothing once it had time to send one (no guess
-    that could differ from its terminal); a chat without it gets haiku's guess."""
+    """What the chat's prompt box shows for its last reply: what the mod sent,
+    else what a background agent's screen shows. A chat with the mod gets
+    nothing once it had time to send one (no guess that could differ from its
+    terminal); any other chat gets haiku's guess."""
     own, reply_at, now = own_suggest.get(sid), msgs[-1]["at"], time.time()
     if own and own["at"] >= reply_at - 1:
         return {"text": own["text"], "from": own["made"]} if own["text"] else None
+    s = next((x for x in live_sessions() if x["sessionId"] == sid), None)
+    if s and s.get("jobId") and s.get("running"):
+        on_screen = screen_suggestion(s["jobId"])
+        if on_screen:
+            return {"text": on_screen, "from": "terminal"}
+        if now - reply_at < SCREEN_WAIT:
+            return {"pending": True}
     if now - has_mod.get(sid, 0) < MOD_FRESH:
         # reading this chat marks it watched, so the mod makes one on its next tick
         return {"pending": True} if now - reply_at < MOD_WINDOW else None
@@ -2064,6 +2111,31 @@ def screen_question(job):
     return dict(found) if found else None
 
 
+prompt_cache = {}  # job -> (read at, the suggestion on its prompt line or None)
+DIM = re.compile(r"\x1b\[2m([^\x1b]*)\x1b\[22m")
+
+
+def screen_suggestion(job):
+    """The grey suggestion on a background agent's prompt line, read off its
+    screen: Claude Code draws it dim, while text typed into the box is not."""
+    hit = prompt_cache.get(job)
+    if hit and time.time() - hit[0] < SCREEN_TTL:
+        return hit[1]
+    found = None
+    try:
+        raw = run_claude(["logs", job], timeout=30, text=False).stdout.decode("utf-8", "replace")
+        lines = render_screen(raw).splitlines()
+        prompt = next((l for l in reversed(lines) if l.lstrip().startswith("❯")), "")
+        text = " ".join(prompt.lstrip()[1:].replace("\xa0", " ").split())
+        dim = {" ".join(m.group(1).replace("\xa0", " ").split()) for m in DIM.finditer(raw)}
+        if text and text in dim:
+            found = text
+    except (OSError, subprocess.SubprocessError):
+        pass
+    prompt_cache[job] = (time.time(), found)
+    return found
+
+
 def _read_plan(path):
     """A plan file under ~/.claude/plans, for the chat to show (cut long)."""
     p = Path(path).expanduser()
@@ -2236,6 +2308,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     BOARDS_DIR.mkdir(exist_ok=True)
+    load_suggestions()
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"{APP_NAME} running at http://localhost:{PORT}  (Ctrl+C to stop)")
     try:
