@@ -601,8 +601,9 @@ dialog label.choice:has(input:checked) { border-color: var(--accent); background
 #activity-box > summary { margin: 0; padding: 10px 14px; border-radius: 999px; background: var(--field); }
 #activity-box[open] > summary { margin-bottom: 8px; }
 #drawer h3 { font-size: 20px; font-weight: 700; letter-spacing: -.3px; line-height: 1.25; padding-right: 44px; }
-#drawer .close { width: 36px; height: 36px; border-radius: 50%; background: var(--field); color: var(--text); font-size: 18px; }
-#drawer .close:hover { background: var(--field-hover); }
+/* the panel's contents scroll under it: the field tint over a solid fill */
+#drawer .close { z-index: 1; width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(var(--field), var(--field)), var(--panel); color: var(--text); font-size: 18px; }
+#drawer .close:hover { background: linear-gradient(var(--field-hover), var(--field-hover)), var(--panel); }
 .bubble { border-radius: 18px 18px 18px 6px; background: var(--panel); }
 .msg.user .bubble { border-radius: 18px 18px 6px 18px; background: var(--accent); color: var(--on-accent); }
 dialog h2 { font-size: 22px; font-weight: 700; letter-spacing: -.3px; }
