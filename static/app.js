@@ -107,12 +107,21 @@ const who = (s) => s.title
   : `@${s.name} (folder: ${s.cwd})`;
 
 function defaultNotes(src, dst, reason, tellSrc = true) {
-  // No reason is fine: the two then say what they work on and how they could help.
   const why = reason.trim();
-  const whyLine = why ? `Why: ${why}\n` : "No reason given: tell each other briefly what you are working on " +
-    "and whether you can help each other.\n";
-  const ask = why ? "your current view on this" : "a short note on what you are working on";
-  const start = (other) => `Start now: send @${other.name} ${ask} with ` +
+  if (!why) {
+    // No reason is fine: then the point is that each knows what the other is doing.
+    const start = (other) => `Start now: send @${other.name} what you are doing, in a few lines, with ` +
+      `SendMessage. No reply to Let Them Talk is needed.`;
+    return {
+      from: `[Let Them Talk] Your user wants you and ${who(dst)} to know what each other is doing.\n` + start(dst),
+      to: `[Let Them Talk] Your user wants you and ${who(src)} to know what each other is doing.\n` + (tellSrc
+        ? `@${src.name} will send you what it is doing. When it does, send @${src.name} what you are ` +
+          `doing, in a few lines, with SendMessage. No reply to Let Them Talk is needed.`
+        : start(src)),
+    };
+  }
+  const whyLine = `Why: ${why}\n`;
+  const start = (other) => `Start now: send @${other.name} your current view on this with ` +
     `SendMessage, then reply when it answers. No reply to Let Them Talk is needed.`;
   return {
     from: `[Let Them Talk] Your user connected you to ${who(dst)} and wants you two to talk.\n` +

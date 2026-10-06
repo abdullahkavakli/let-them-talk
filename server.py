@@ -1524,21 +1524,28 @@ def default_notes(src, dst, reason, tell_src=True):
     """Notes for an arrow src -> dst: src starts the conversation and dst
     replies. If src is not told, dst gets the start instruction instead, so
     someone always goes first."""
-    # No reason is fine: the two then say what they work on and how they could help.
     why = reason.strip()
-    why_line = (f"Why: {why}\n" if why else
-                "No reason given: tell each other briefly what you are working on and "
-                "whether you can help each other.\n")
-    ask = "your current view on this" if why else "a short note on what you are working on"
-    start = lambda other: (f"Start now: send @{other['name']} {ask} with "
+    if not why:
+        # No reason is fine: then the point is that each knows what the other is doing.
+        start = lambda other: (f"Start now: send @{other['name']} what you are doing, in a few lines, with "
+                               f"SendMessage. No reply to Let Them Talk is needed.")
+        to_src = (f"[Let Them Talk] Your user wants you and {who(dst)} to know what each other "
+                  f"is doing.\n" + start(dst))
+        to_dst = (f"[Let Them Talk] Your user wants you and {who(src)} to know what each other "
+                  f"is doing.\n" + (
+                      f"@{src['name']} will send you what it is doing. When it does, send @{src['name']} "
+                      f"what you are doing, in a few lines, with SendMessage. No reply to Let Them Talk "
+                      f"is needed." if tell_src else start(src)))
+        return to_src, to_dst
+    start = lambda other: (f"Start now: send @{other['name']} your current view on this with "
                            f"SendMessage, then reply when it answers. No reply to Let Them Talk is needed.")
     to_src = (
         f"[Let Them Talk] Your user connected you to {who(dst)} and wants you two to talk.\n"
-        + why_line + start(dst)
+        f"Why: {why}\n" + start(dst)
     )
     to_dst = (
         f"[Let Them Talk] Your user connected {who(src)} to you and wants you two to talk.\n"
-        + why_line + (
+        f"Why: {why}\n" + (
             f"@{src['name']} will message you about this. When it does, reply to @{src['name']} "
             f"with SendMessage. No reply to Let Them Talk is needed." if tell_src else start(src))
     )
