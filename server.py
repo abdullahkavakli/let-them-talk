@@ -1311,8 +1311,12 @@ def live_sessions():
         if not sock or not os.path.exists(sock):
             continue
         name = reg.get("name") or ""
-        if RELAY_RE.fullmatch(name) and reg.get("kind") not in ("interactive", "bg"):
-            continue  # a relay from this app (or from its Agent Organizer days)
+        # This app's own headless runs (notes, TL;DRs, suggestions; also from
+        # its Agent Organizer days). Claude Code now registers `claude -p` as
+        # kind "interactive" too, so its headless entrypoint marks them.
+        if RELAY_RE.fullmatch(name) and (reg.get("entrypoint") == "sdk-cli"
+                                         or reg.get("kind") not in ("interactive", "bg")):
+            continue
         sessions.append(_session(reg, "wsl", reg.get("cwd", ""), None, wsl_exe(pid, started)))
     # background agents: add state to the running ones, list the sleeping ones
     seen = {x["sessionId"] for x in sessions}
