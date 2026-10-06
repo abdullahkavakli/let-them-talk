@@ -1057,6 +1057,7 @@ for (const item of document.querySelectorAll(".topbar .board-pick, .topbar .seg,
   glass(item, { scale: 10, blur: 2 });
 }
 for (const dialog of document.querySelectorAll("dialog")) glass(dialog, { scale: 24, blur: 10 });
+glass($("#appearance"), { scale: 14, blur: 6 });
 
 // Appearance: the theme (system, light or dark) and how tinted the glass is,
 // from clear to tinted like iOS 27's Liquid Glass setting. Both are remembered.

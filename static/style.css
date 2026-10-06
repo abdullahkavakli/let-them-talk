@@ -507,7 +507,7 @@ body { position: relative; }
 #empty { left: calc(var(--side) + 24px); }
 
 .sidebar, #drawer, dialog,
-.topbar .board-pick, .topbar .seg, .topbar .hint {
+.topbar .board-pick, .topbar .seg, .topbar .hint, #appearance {
   background: rgb(var(--glass-rgb) / var(--ga));
   border: 1px solid var(--glass-edge);
   box-shadow: inset 0 1.5px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-lo),
@@ -571,7 +571,7 @@ dialog label.choice:has(input:checked) { border-color: var(--accent); background
 .node.selected { box-shadow: 0 0 0 3px var(--accent-soft), var(--card-shadow); }
 
 @media (prefers-reduced-transparency: reduce) {
-  .sidebar, #drawer, dialog, .topbar .board-pick, .topbar .seg, .topbar .hint {
+  .sidebar, #drawer, dialog, .topbar .board-pick, .topbar .seg, .topbar .hint, #appearance {
     background: var(--panel) !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
   }
 }
@@ -579,9 +579,22 @@ dialog label.choice:has(input:checked) { border-color: var(--accent); background
 /* the rest of the mockup: name atop the sidebar, folder in a field, Activity
    as a row at the bottom, a bigger details header and dialog titles, your
    own messages in solid blue, and the Appearance controls */
-.sidebar .brand { margin: 0 0 -6px; font-size: 17px; font-weight: 700; letter-spacing: -.2px; }
+.sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -4px -4px -6px 0; }
+.sidebar .brand { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -.2px; }
+.gear { min-width: 32px; min-height: 32px; border-radius: 50%; color: var(--muted); }
+.gear:hover, .gear:focus-visible { color: var(--text); background: var(--field); }
+/* the gear's popover: a small glass panel under it, right edge in line with the sidebar's */
+#appearance {
+  position: fixed; inset: auto; top: 54px; left: max(12px, calc(var(--side) - 256px)); width: 268px;
+  margin: 0; padding: 14px 16px 16px; box-sizing: border-box; border-radius: 20px; color: var(--text);
+  background: rgb(var(--glass-rgb) / calc(var(--ga) + .3));
+}
+#appearance h2 { margin-bottom: 10px; }
 #board-folder { padding: 8px 10px; border-radius: 10px; background: var(--field); color: var(--text); }
-.sidebar section.grow { display: flex; flex-direction: column; justify-content: flex-end; }
+/* Activity sits at the bottom; opened, its list grows downward and the sidebar
+   scrolls (anchoring the section's content to the bottom made it spill upward) */
+.sidebar section.grow { display: flex; flex-direction: column; }
+#activity-box { margin-top: auto; }
 #activity-box > summary { margin: 0; padding: 10px 14px; border-radius: 999px; background: var(--field); }
 #activity-box[open] > summary { margin-bottom: 8px; }
 #drawer h3 { font-size: 20px; font-weight: 700; letter-spacing: -.3px; line-height: 1.25; padding-right: 44px; }
