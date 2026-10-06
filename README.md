@@ -66,6 +66,9 @@ installed inside WSL, where the server runs.
   arrows, moves to the background agent that goes on with it.
 - **Remove from board:** in a card's details; its arrows go too (you are
   asked first). A session that is still running goes back under *Add agents*.
+- **End this chat** (a chat in a terminal): its Claude Code exits as if you
+  closed the window, which stays open. The conversation is kept;
+  `claude --resume <id>` continues it. Chats in an editor are closed there.
 - **Arrange:** drag cards and the background; drag a panel's inner edge to
   resize it (double-click resets). **Fit view** brings every card into sight.
   Esc cancels an arrow or closes the details.

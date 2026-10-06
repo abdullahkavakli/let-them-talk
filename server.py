@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -2095,6 +2096,40 @@ def delete_background(bid, body):
     return {"removed": job}
 
 
+END_WAIT = 5  # seconds an ended chat gets to exit
+
+
+def end_chat(bid, body):
+    """End a chat running in a terminal here: its Claude Code exits as when
+    its window is closed (the window stays open). Its conversation stays on
+    disk, and `claude --resume <id>` continues it."""
+    sid = str(body.get("sessionId") or "")
+    s = next((x for x in live_sessions() if x["sessionId"] == sid), None)
+    if s is None:
+        raise ValueError("That chat is no longer running.")
+    # live_sessions() just matched the PID with the process that registered
+    # the chat, so the signal reaches that Claude Code and nothing else.
+    if (s["platform"] != "wsl" or s["background"] or s["kind"] != "interactive"
+            or s["entrypoint"] != "cli" or s.get("movedTo") or not s["pid"]):
+        raise ValueError("Only a chat running in a terminal here can be ended from here.")
+    try:
+        os.kill(s["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass  # it ended by itself meanwhile
+    except OSError as e:
+        raise ValueError(f"Couldn't end it: {e.strerror}.")
+    deadline = time.time() + END_WAIT
+    while _proc_start(s["pid"]) is not None and time.time() < deadline:
+        time.sleep(0.2)
+    ended = _proc_start(s["pid"]) is None
+    with lock:
+        board = load_board(bid)
+        add_activity(board, f"Ended {label(s)}" if ended else f"Asked {label(s)} to end; it is still running",
+                     "info" if ended else "error")
+        save_board(board)
+    return {"ended": ended, "resume": f"claude --resume {sid}"}
+
+
 TERM_TOKEN = re.compile(r"\x1b\[([0-9;?<>=]*)[ -/]*([@-~])|\x1b(?:\][^\x07\x1b]*(?:\x07|\x1b\\)|[()][0-9A-B]|.)"
                         r"|([\x00-\x1a\x1c-\x1f\x7f])|([^\x00-\x1f\x7f]+)", re.S)
 
@@ -2385,6 +2420,7 @@ class Handler(BaseHTTPRequestHandler):
                     "agent-delete": lambda: delete_background(bid, body),
                     "agent-logs": lambda: background_logs(bid, body),
                     "agent-attach": lambda: attach_background(bid, body),
+                    "end": lambda: end_chat(bid, body),
                     "layout": lambda: update_layout(bid, body),
                     "add": lambda: add_node(bid, body),
                     "remove": lambda: remove_node(bid, body),

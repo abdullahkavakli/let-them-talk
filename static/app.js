@@ -657,8 +657,35 @@ function nodeDetails(n) {
         class: "btn", id: `connect-${o.sessionId}`, text: display(o),
         onclick: () => openConnectDialog(n.sessionId, o.sessionId),
       }))),
+    endControls(n),
     removeControls(n, conns),
   ];
+}
+
+// A chat in a terminal here can be ended: its Claude Code exits as when its
+// window is closed. (An editor chat is closed in the editor; a background
+// agent has Stop.)
+const endable = (n) => n.live && !n.background && !onWindows(n) && !n.movedTo &&
+  n.kind === "interactive" && n.entrypoint === "cli";
+
+function endControls(n) {
+  if (!endable(n)) return null;
+  return el("div", { class: "drawer-actions" }, el("button", {
+    class: "btn danger", text: "End this chat", title: "Its Claude Code exits; the terminal window stays open",
+    onclick: async () => {
+      const midway = n.status === "busy" ? " It stops in the middle of what it is doing." : "";
+      if (!confirm(`End ${display(n)}?${midway} Claude Code in its terminal exits; the window stays open. ` +
+        `The conversation is kept: claude --resume ${n.sessionId} continues it.`)) return;
+      try {
+        const { result } = await api(`/api/board/${state.boardId}/end`, { sessionId: n.sessionId });
+        if (result.ended) toast(`Ended ${display(n)}. To continue it: ${result.resume}`, "ok", 0);
+        else toast(`${display(n)} hasn't ended yet; close its terminal window instead.`, "error");
+      } catch (e) {
+        toast(e.message, "error", 0);
+      }
+      poll();
+    },
+  }));
 }
 
 // A card can always go; its arrows go with it. Agents still running at the
