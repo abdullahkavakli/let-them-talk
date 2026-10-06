@@ -21,6 +21,7 @@ import shutil
 import signal
 import struct
 import subprocess
+import tempfile
 import termios
 import threading
 import time
@@ -319,6 +320,26 @@ def session_model(sid):
             break
     model_cache[path] = (key, model)
     return model
+
+
+def session_permission_mode(sid):
+    """The permission mode of the chat's latest prompt (Claude Code notes it
+    on each prompt in the transcript), or None."""
+    session_title(sid)  # finds the transcript
+    path = title_cache.get(sid, {}).get("path")
+    if path is None:
+        return None
+    try:
+        with path.open("rb") as f:
+            f.seek(max(0, f.seek(0, 2) - MODEL_TAIL))
+            tail = f.read().splitlines()
+    except OSError:
+        return None
+    for raw in reversed(tail):
+        found = re.search(rb'"permissionMode":"(\w+)"', raw)
+        if found:
+            return found.group(1).decode()
+    return None
 
 
 def label(s):
@@ -1597,6 +1618,15 @@ def free_slot(board):
         i += 1
 
 
+def beside(board, node):
+    """A free spot next to a card: right of it, else below, left or above."""
+    for dx, dy in ((270, 0), (0, 150), (-270, 0), (0, -150)):
+        x, y = node["x"] + dx, node["y"] + dy
+        if not overlaps(board, x, y):
+            return [x, y]
+    return None
+
+
 def new_node(s, x, y):
     node = {"x": x, "y": y, "name": s["name"], "cwd": s["cwd"], "platform": s["platform"],
             "winCwd": s["winCwd"], "lastSeen": time.time()}
@@ -1640,7 +1670,8 @@ def sync_board(board, live):
         wanted = sid in adopt or (s.get("jobId") and s["jobId"] in adopt)
         if (node is None and sid not in board["hidden"] and not s.get("movedTo")
                 and (wanted or in_folder(s["cwd"], board["folder"]))):
-            x, y = free_slot(board)
+            spot = board.get("spots", {}).pop(s.get("jobId") or sid, None)  # see start_background
+            x, y = spot if spot and not overlaps(board, *spot) else free_slot(board)
             node = board["nodes"][sid] = {"x": x, "y": y}
             changed = True
         if wanted:  # a chat this board started: it's on the board now
@@ -2157,7 +2188,7 @@ JOB_RE = re.compile(r"[0-9a-f]{8}")
 BG_LINE = re.compile(r"^backgrounded · ([0-9a-f]{8})", re.M)
 COPY_LINE = re.compile(r"started a copy as ([0-9a-f]{8})")
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][0-9A-B]|[\x00-\x08\x0b-\x1f]")
-launches = {}   # launch id -> a New agent request that opens an editor chat
+launches = {}   # launch id -> a New agent request that opens an editor chat, or a handoff
 LAUNCH_WAIT = 90
 
 
@@ -2189,8 +2220,10 @@ def _agent_name(prompt, name):
     return "agent " + name if RELAY_RE.fullmatch(name) else name
 
 
-def start_background(bid, body):
-    """New agent, in the background: the prompt is its first real prompt."""
+def start_background(bid, body, add_dirs=(), near=None):
+    """New agent, in the background: the prompt is its first real prompt.
+    add_dirs are folders it may use besides its own; its card goes beside
+    the card of the session near, if there is room."""
     prompt = str(body.get("prompt") or "").strip()
     if not prompt:
         raise ValueError("A background agent needs a prompt to start with.")
@@ -2205,6 +2238,8 @@ def start_background(bid, body):
         if not re.fullmatch(r"[\w.\[\]-]{1,60}", model):
             raise ValueError("That model name has characters Claude Code won't accept.")
         args += ["--model", model]
+    for d in add_dirs:
+        args += ["--add-dir", str(d)]
     proc = run_claude(args + ["--", prompt], cwd=folder, timeout=90)
     found = BG_LINE.search(_plain(proc.stdout))
     if not found:
@@ -2213,6 +2248,9 @@ def start_background(bid, body):
     with lock:
         board = load_board(bid)
         board.setdefault("adopt", []).append(job)
+        spot = near in board["nodes"] and beside(board, board["nodes"][near])
+        if spot:
+            board.setdefault("spots", {})[job] = spot
         add_activity(board, f"Started background agent \"{name}\" in {folder}")
         save_board(board)
     background_rows(fresh=True)
@@ -2276,6 +2314,105 @@ def _watch_launch(lid):
         return
     job.update(state="failed", detail="No new chat appeared. Is the editor open? "
                                       "The prompt was not sent.")
+
+
+# Hand off: a new agent takes over a chat's work. A copy of the chat (a fork,
+# run headless, so the chat itself is left alone, even mid-turn) runs
+# /handoff, and a new background agent in the chat's folder starts by reading
+# the document it writes.
+HANDOFF_DIR = Path(tempfile.gettempdir()) / "let-them-talk-handoffs"
+HANDOFF_TIMEOUT = 480  # seconds the copy gets to write it
+HANDOFF_FOR = "A new agent takes over this chat and continues its work."
+
+
+def start_handoff(bid, body):
+    sid = str(body.get("sessionId") or "")
+    with lock:
+        node = load_board(bid)["nodes"].get(sid)
+    if node is None:
+        raise ValueError("That chat isn't on this board.")
+    s = next((x for x in live_sessions() if x["sessionId"] == sid), None) or {**node, "sessionId": sid}
+    if s.get("platform") == "windows":
+        raise ValueError("A chat running on Windows can't be handed off from here.")
+    if s.get("movedTo"):
+        raise ValueError("This chat goes on as a background agent; hand off that one.")
+    if not has_transcript(sid):
+        raise ValueError("This chat has no saved conversation yet, so there is nothing to hand off.")
+    with lock:
+        if any(l.get("from") == sid and l["state"] in ("writing", "starting") for l in launches.values()):
+            raise ValueError("This chat is already being handed off.")
+        lid = uuid.uuid4().hex[:10]
+        launches[lid] = {"id": lid, "board": bid, "at": time.time(), "kind": "handoff", "from": sid,
+                         "state": "writing", "detail": f"{label(s)} is writing a handoff (/handoff)…"}
+    threading.Thread(target=_run_handoff, args=(lid, s), daemon=True).start()
+    return {"launchId": lid}
+
+
+def _handoff_name(name):
+    """A name for the agent taking over from the chat called name, unlike any
+    running chat's (notes find chats by name)."""
+    base = re.sub(r" handoff(?: \d+)?$", "", name)[:48]
+    taken = {s["name"] for s in live_sessions()}
+    pick, n = f"{base} handoff", 1
+    while pick in taken:
+        n += 1
+        pick = f"{base} handoff {n}"
+    return pick
+
+
+def _run_handoff(lid, s):
+    job = launches[lid]
+    sid, cwd = s["sessionId"], s.get("cwd") or ""
+
+    def step(state, detail, level=None):
+        job.update(state=state, detail=detail, at=time.time())  # `at` keeps it in the board view
+        if level:
+            with lock:
+                board = load_board(job["board"])
+                if board is not None:
+                    add_activity(board, detail, level)
+                    save_board(board)
+
+    HANDOFF_DIR.mkdir(exist_ok=True)
+    stem = re.sub(r"[^\w-]+", "-", s.get("name") or "").strip("-")[:40] or sid[:8]
+    doc = HANDOFF_DIR / f"{stem}-{time.strftime('%Y%m%d-%H%M%S')}.md"
+    model = session_model(sid)
+    # Writing outside its folder is allowed for the handoff folder only; other
+    # tools that would ask are refused, as nobody can answer a headless run.
+    args = ["-p", "--resume", sid, "--fork-session", "--no-session-persistence",
+            "--name", f"{RELAY_NAME}-handoff", "--permission-mode", "acceptEdits",
+            "--add-dir", str(HANDOFF_DIR), "--output-format", "json"]
+    if model:
+        args += ["--model", model]
+    try:
+        proc = run_claude(args + ["--", f"/handoff {HANDOFF_FOR} Save the document as exactly {doc}"],
+                          cwd=cwd or None, timeout=HANDOFF_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return step("failed", f"{label(s)} took over {HANDOFF_TIMEOUT // 60} minutes to write a handoff; "
+                              "no new agent was started.", "error")
+    except OSError as e:
+        return step("failed", f"Couldn't run claude for the handoff: {e}", "error")
+    if not doc.is_file() or not doc.stat().st_size:
+        try:
+            said = str(json.loads(proc.stdout).get("result") or "").strip()
+        except ValueError:
+            said = ""
+        return step("failed", f"{label(s)} wrote no handoff, so no new agent was started. "
+                              f"{said[:300] or _cli_error(proc, cwd)}", "error")
+    step("starting", f"{label(s)} wrote its handoff ({doc}). Starting the new agent…")
+    mode = session_permission_mode(sid)
+    mode = "manual" if mode == "default" else mode
+    try:
+        new = start_background(job["board"], {
+            "prompt": f"Read the handoff document {doc} first, then continue the work it describes. "
+                      f"The chat @{s.get('name')} wrote it so that you can take over from it.",
+            "folder": cwd, "name": _handoff_name(s.get("name") or "chat"), "model": model,
+            "permissionMode": mode if mode in PERMISSION_MODES else "auto", "openTerminal": True,
+        }, add_dirs=[HANDOFF_DIR], near=sid)
+    except (ValueError, OSError, subprocess.SubprocessError) as e:
+        return step("failed", f"The handoff is in {doc}, but the new agent didn't start: {e}", "error")
+    job.update(doc=str(doc), jobId=new["jobId"])
+    step("done", f"{label(s)} handed off to \"{new['name']}\", which starts by reading {doc}.", "ok")
 
 
 def message_note(text):
@@ -2829,6 +2966,7 @@ class Handler(BaseHTTPRequestHandler):
                     "start": lambda: start_conversation(bid, body.get("id")),
                     "launch-background": lambda: start_background(bid, body),
                     "launch-editor": lambda: start_editor_chat(bid, body),
+                    "handoff": lambda: start_handoff(bid, body),
                     "send": lambda: send_to_session(bid, body),
                     "agent-stop": lambda: stop_background(bid, body),
                     "agent-delete": lambda: delete_background(bid, body),

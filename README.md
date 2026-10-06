@@ -126,6 +126,11 @@ installed inside WSL, where the server runs.
 - **End this chat** (a chat in a terminal): its Claude Code exits as if you
   closed the window, which stays open. The conversation is kept;
   `claude --resume <id>` continues it. Chats in an editor are closed there.
+- **Hand off to a new agent** (in a card's details): a copy of the chat
+  writes a handoff with your `/handoff` skill, then a new background agent in
+  the chat's folder, with its model and permissions, starts by reading it;
+  its card appears beside the chat's and its terminal opens. The chat itself
+  is left as it is: end it, or let it go on. Works for ended chats too.
 - **Arrange:** drag cards and the background; the mouse wheel zooms (down to
   zoom out, up to zoom in) around the pointer; drag a panel's inner edge to
   resize it (double-click resets). **Fit view** brings every card into sight.
@@ -185,6 +190,11 @@ installed inside WSL, where the server runs.
 - A TL;DR is written by `claude -p --model haiku` with no tools (about 7 s),
   once per finished reply of 280+ characters, only when you open that chat,
   and kept in memory until the server restarts.
+- A handoff is written by `claude -p --resume <id> --fork-session` on the
+  chat's own model, running `/handoff` over the whole conversation (a few
+  seconds to minutes; it costs about one reply of that chat). The fork is not
+  saved, and may write only in the handoff folder, `let-them-talk-handoffs`
+  in the system's temp folder (`/tmp` on Linux and WSL).
 - The server listens only on 127.0.0.1 and answers only requests addressed
   to `localhost` or `127.0.0.1` on its port. It takes commands only with its
   own request header, which other web pages can't send, and tells browsers

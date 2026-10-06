@@ -786,9 +786,41 @@ function nodeDetails(n) {
         class: "btn", id: `connect-${o.sessionId}`, text: display(o),
         onclick: () => openConnectDialog(n.sessionId, o.sessionId),
       }))),
+    handoffable(n) && el("div", { class: "drawer-actions" }, handoffButton(n)),
+    handoffNote(n),
     endControls(n),
     removeControls(n, conns),
   ];
+}
+
+// Hand off: a copy of the chat writes a handoff (/handoff), and a new
+// background agent in its folder starts by reading it. The chat itself is
+// left as it is, so it can still be ended (or go on) afterwards.
+const handoffable = (n) => !onWindows(n) && !n.movedTo;
+const lastHandoff = (n) => (state.view.launches || [])
+  .filter((l) => l.kind === "handoff" && l.from === n.sessionId).at(-1);
+
+function handoffButton(n) {
+  const busy = ["writing", "starting"].includes(lastHandoff(n)?.state);
+  return el("button", {
+    class: "btn", text: busy ? "Handing off…" : "Hand off to a new agent", disabled: busy,
+    title: "A copy of this chat writes a handoff with /handoff; a new background agent in its folder " +
+      "starts by reading it. This chat is left as it is.",
+    onclick: async (e) => {
+      e.currentTarget.disabled = true;
+      try {
+        await api(`/api/board/${state.boardId}/handoff`, { sessionId: n.sessionId });
+      } catch (err) {
+        toast(err.message, "error", 0);
+      }
+      poll();
+    },
+  });
+}
+
+function handoffNote(n) {
+  const last = handoffable(n) && lastHandoff(n);
+  return last && el("p", { class: last.state === "failed" ? "error small" : "muted small", text: last.detail });
 }
 
 // A chat in a terminal here can be ended: its Claude Code exits as when its
@@ -1574,6 +1606,7 @@ function toast(text, level = "info", ms = level === "error" ? 7000 : 5000) {
 }
 
 // Editor chats started from here: show how handing over the prompt went.
+// Handoffs report each step the same way.
 const launchShown = {};
 function renderLaunches() {
   for (const l of state.view?.launches || []) {
