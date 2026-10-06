@@ -121,6 +121,11 @@ STATIC_FILES = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/static/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/static/style.css": ("style.css", "text/css; charset=utf-8"),
+    # Selawik, Microsoft's open-licensed Segoe UI stand-in, for systems without
+    # Segoe (Linux): Microsoft's own unmodified files; license in static/fonts/.
+    "/static/fonts/selawk.woff2": ("fonts/selawk.woff2", "font/woff2"),
+    "/static/fonts/selawksb.woff2": ("fonts/selawksb.woff2", "font/woff2"),
+    "/static/fonts/selawkb.woff2": ("fonts/selawkb.woff2", "font/woff2"),
 }
 
 lock = threading.RLock()

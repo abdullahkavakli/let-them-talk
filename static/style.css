@@ -616,3 +616,26 @@ dialog h2 { font-size: 22px; font-weight: 700; letter-spacing: -.3px; }
    names (each is a span from app.js), inside one only if it is too long. */
 #board-folder, .folder-name, #drawer dd.path { font-family: inherit; word-break: normal; line-height: 1.4; }
 :is(#board-folder, .folder-name, #drawer dd.path) .seg { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
+
+/* ----------------------------------------------------------------- Fonts
+   Each system's own UI font: SF Pro on a Mac; Segoe UI Variable on Windows 11
+   (and on Windows 10 once installed from Microsoft's download: its variable
+   file is named "Segoe UI Variable", its static files "Segoe UI Variable
+   Static ..."); Segoe UI on Windows 10; elsewhere, e.g. Linux, Selawik,
+   Microsoft's open-licensed Segoe UI stand-in, served by the app. Its
+   unicode-range is Latin (Turkish included) and punctuation, so a browser
+   that has Segoe never downloads it just to look for symbols like ✓. */
+@font-face { font-family: "Selawik"; src: local("Selawik"), url("/static/fonts/selawk.woff2") format("woff2"); font-weight: 400; font-display: swap;
+  unicode-range: U+0000-024F, U+0259, U+02B0-02FF, U+2000-206F, U+20AC, U+2122; }
+@font-face { font-family: "Selawik"; src: local("Selawik Semibold"), url("/static/fonts/selawksb.woff2") format("woff2"); font-weight: 600; font-display: swap;
+  unicode-range: U+0000-024F, U+0259, U+02B0-02FF, U+2000-206F, U+20AC, U+2122; }
+@font-face { font-family: "Selawik"; src: local("Selawik Bold"), url("/static/fonts/selawkb.woff2") format("woff2"); font-weight: 700; font-display: swap;
+  unicode-range: U+0000-024F, U+0259, U+02B0-02FF, U+2000-206F, U+20AC, U+2122; }
+:root {
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI Variable Static Text",
+    "Segoe UI Variable", "Segoe UI", "Selawik", system-ui, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display",
+    "Segoe UI Variable Static Display", "Segoe UI Variable", "Segoe UI", "Selawik", system-ui, sans-serif;
+}
+body { font-family: var(--font-ui); }
+.sidebar .brand, #drawer h3, dialog h2 { font-family: var(--font-display); }
