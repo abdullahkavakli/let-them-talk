@@ -1425,7 +1425,10 @@ $("#delete-board").addEventListener("click", async () => {
   } catch (e) {
     return toast(`Could not delete the board: ${e.message}`, "error");
   }
-  try { localStorage.removeItem(`ltt.pan.${board.id}`); } catch { /* storage off */ }
+  try {
+    localStorage.removeItem(`ltt.pan.${board.id}`);
+    localStorage.removeItem(`ltt.zoom.${board.id}`);
+  } catch { /* storage off */ }
   toast(`Deleted the board "${board.title}".`, "ok");
   // Clear it off the page first: if it was the last board, start() only opens
   // New board, and the old cards (and polling) must not linger behind it.

@@ -25,6 +25,7 @@ import tempfile
 import termios
 import threading
 import time
+import traceback
 import unicodedata
 import uuid
 from datetime import datetime
@@ -1563,7 +1564,7 @@ def places():
     if WIN_HOME:
         out.append({"label": "Windows home", "path": str(WIN_HOME)})
         out.append({"label": "Windows Desktop", "path": str(WIN_HOME / "Desktop")})
-    out.append({"label": "WSL home", "path": str(Path.home())})
+    out.append({"label": "WSL home" if ON_WSL else "Home", "path": str(Path.home())})
     return [p for p in out if os.path.isdir(p["path"])]
 
 
@@ -3039,6 +3040,14 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(HTTPStatus.OK, {"ok": True, "result": result})
         except ValueError as e:
             return self._send(HTTPStatus.BAD_REQUEST, {"error": str(e)})
+        # Anything else still gets an answer: with none, the page would take
+        # it for a lost connection (a restarted server), not a failed action.
+        except subprocess.TimeoutExpired as e:
+            return self._send(HTTPStatus.GATEWAY_TIMEOUT,
+                              {"error": f"Claude Code didn't answer within {e.timeout:g} seconds."})
+        except Exception as e:
+            traceback.print_exc()
+            return self._send(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"Something went wrong on the server: {e}"})
         self._send(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
 
