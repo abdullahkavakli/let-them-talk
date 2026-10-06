@@ -34,6 +34,9 @@ installed inside WSL, where the server runs.
 - **Cards** show each chat's title and `@address` (notes use the address),
   where it runs (*Terminal*, *Cursor*, *VS Code* …, *Background*) and the
   model of its latest reply.
+- **Subagents** (top bar): shows the subagents and workflow agents each chat
+  is running now, as small cards linked to it; each goes away when it
+  finishes. Click one to open its chat. Your choice is remembered.
 - **Details:** click a card.
   - **Recent messages:** the last 3 messages, like a phone: your prompts as
     typed (including ones sent while it worked), and Claude's finished

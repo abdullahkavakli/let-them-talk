@@ -17,6 +17,8 @@ const state = {
   chat: {},              // sessionId -> /api/chat response for the open drawer
   runOpen: {},           // runId (or "direct:<sid>") -> expanded in the drawer
   chatOpen: {},          // message id -> shown in full in the drawer
+  showSubs: store("ltt.subagents") === true,  // running subagents drawn on the board
+  subSpot: {},           // sessionId -> where its subagents sat, relative to its card
 };
 
 // ------------------------------------------------------------------ helpers
@@ -160,7 +162,7 @@ async function poll() {
   clearTimeout(state.pollTimer);
   if (state.boardId) {
     try {
-      state.view = await api(`/api/state?board=${encodeURIComponent(state.boardId)}`);
+      state.view = await api(`/api/state?board=${encodeURIComponent(state.boardId)}${state.showSubs ? "&subagents=1" : ""}`);
       render();
       if (state.selected?.type === "node") loadDetails(state.selected.id);
     } catch (e) {
@@ -189,6 +191,7 @@ function render() {
     if (!anyCardInView()) fitView();
   }
   renderWires();
+  renderSubagents();
   renderAvailable();
   renderActivity();
   renderLaunches();
@@ -336,6 +339,107 @@ function renderWires() {
     labels.append(label);
     if (c.id === focused) label.focus({ preventScroll: true });
   }
+}
+
+// ------------------------------------------------------- running subagents
+//
+// With "Subagents" on, each chat's running subagents and workflow agents are
+// small cards in a column next to it, joined to it by a thin line. A card
+// goes away when its agent finishes.
+
+const SUB_W = 196, SUB_H = 40, SUB_GAP = 6, SUB_SPINE = 16, SUB_MAX = 6;
+
+const clear = (r, boxes) => !boxes.some((b) =>
+  r.x0 < b.x1 + 16 && r.x1 > b.x0 - 16 && r.y0 < b.y1 + 16 && r.y1 > b.y0 - 16);
+
+// Where a column h px tall goes next to card n: where it sat last time if
+// that is still free, else the nearest free spot (below first, then beside,
+// then above), else just below.
+function subColumn(n, h, taken) {
+  const b = cardBox(n), cardH = Math.round(b.y1 - b.y0);
+  const at = (dx, dy) => ({ x0: b.x0 + dx, y0: b.y0 + dy, x1: b.x0 + dx + SUB_W, y1: b.y0 + dy + h, dx, dy });
+  const last = state.subSpot[n.sessionId];
+  if (last && clear(at(last.dx, last.dy), taken)) return at(last.dx, last.dy);
+  const score = (r) => Math.hypot(Math.max(0, b.x0 - r.x1, r.x0 - b.x1), Math.max(0, b.y0 - r.y1, r.y0 - b.y1)) +
+    (r.y1 <= b.y0 ? 40 : 0) + (r.x1 <= b.x0 ? 20 : 0) + Math.abs(r.x0 - b.x0) * 0.02 + Math.abs(r.y0 - b.y0) * 0.01;
+  const spots = [];
+  for (let i = -30; i <= 30; i++) {
+    for (let j = -60; j <= 20; j++) {
+      const r = at(20 * i, cardH + 20 + 20 * j);
+      if (r.y1 > b.y0 - 340) spots.push(r);
+    }
+  }
+  spots.sort((p, q) => score(p) - score(q));
+  return spots.find((r) => clear(r, taken)) || at(0, cardH + 24);
+}
+
+function subChip(old, layer, item, n) {
+  let chip = old.get(item.key);
+  if (!chip) {
+    chip = el("div", { class: "sub", "data-key": item.key, tabindex: 0, role: "button" },
+      el("span", { class: "dot a-running" }),
+      el("div", { class: "sub-main" }, el("div", { class: "sub-name" }), el("div", { class: "sub-meta" })));
+    layer.append(chip);
+  }
+  const a = item.agent;
+  const age = a?.startedAt ? fmtDur(Date.now() - a.startedAt) : null;
+  const name = a ? a.label : `+${item.more} more running`;
+  const meta = a ? [age, a.workflow ? `${a.workflow} · ${a.kind}` : a.kind].filter(Boolean).join(" · ")
+    : "Click to see them all";
+  chip.dataset.parent = n.sessionId;
+  chip.classList.toggle("more", !a);
+  if (chip.querySelector(".sub-name").textContent !== name) chip.querySelector(".sub-name").textContent = name;
+  if (chip.querySelector(".sub-meta").textContent !== meta) chip.querySelector(".sub-meta").textContent = meta;
+  chip.title = [a && a.label, a?.workflow && `Workflow: ${a.workflow}`, a && `Type: ${a.kind}`,
+    a?.model && `Model: ${modelName(a.model)}`, age && `Running for ${age}`, a?.lastTool && `Now: ${a.lastTool}`,
+    `Started by ${display(n)}; click to open it`].filter(Boolean).join("\n");
+  chip.setAttribute("aria-label", `${name}, running, started by ${display(n)}`);
+  return chip;
+}
+
+function renderSubagents() {
+  const layer = $("#subagents"), lines = $("#sub-wire-layer");
+  const old = new Map([...layer.children].map((c) => [c.dataset.key, c]));
+  const seen = new Set();
+  let running = 0;
+  lines.replaceChildren();
+  const nodes = state.showSubs && state.view ? state.view.nodes : [];
+  const taken = nodes.map(cardBox);  // cards, then each column placed so far
+  for (const n of nodes) {
+    const subs = n.live && n.subagents || [];
+    if (!subs.length) continue;
+    running += subs.length;
+    const cut = subs.length > SUB_MAX ? SUB_MAX - 1 : subs.length;
+    const items = subs.slice(0, cut).map((a) => ({ key: `${n.sessionId}:${a.id}`, agent: a }));
+    if (subs.length > cut) items.push({ key: `${n.sessionId}:more`, more: subs.length - cut });
+    const col = subColumn(n, items.length * SUB_H + (items.length - 1) * SUB_GAP, taken);
+    taken.push(col);
+    state.subSpot[n.sessionId] = { dx: col.dx, dy: col.dy };
+    // The line runs from the card to a spine beside the column, which has a
+    // short branch to each subagent; the spine is on the side facing the card.
+    const b = cardBox(n), leftOfCard = (col.x0 + col.x1) / 2 < b.x0;
+    const spine = leftOfCard ? col.x1 - SUB_SPINE / 2 : col.x0 + SUB_SPINE / 2;
+    const edge = leftOfCard ? col.x1 - SUB_SPINE : col.x0 + SUB_SPINE;
+    const mids = items.map((item, i) => {
+      const y = col.y0 + i * (SUB_H + SUB_GAP);
+      const chip = subChip(old, layer, item, n);
+      chip.style.left = `${leftOfCard ? col.x0 : edge}px`;
+      chip.style.top = `${y}px`;
+      seen.add(item.key);
+      return y + SUB_H / 2;
+    });
+    // (it leaves the card near its bottom, clear of the connect handles)
+    const top = mids[0], bottom = mids[mids.length - 1];
+    const ty = Math.min(Math.max(b.y1 - 14, top), bottom);
+    const px = Math.min(Math.max(spine, b.x0), b.x1), py = Math.min(Math.max(ty, b.y0), b.y1);
+    let d = `M${px} ${py} L${spine} ${ty} M${spine} ${top} L${spine} ${bottom}`;
+    for (const m of mids) d += ` M${spine} ${m} L${edge} ${m}`;
+    lines.append(svg("path", { d, class: "sub-wire" }));
+  }
+  for (const [key, chip] of old) if (!seen.has(key)) chip.remove();
+  const btn = $("#show-subagents");
+  btn.textContent = running ? `Subagents · ${running}` : "Subagents";
+  btn.setAttribute("aria-pressed", state.showSubs);
 }
 
 function renderAvailable() {
@@ -745,7 +849,9 @@ canvas.addEventListener("pointerdown", (evt) => {
     const pos = nodePos(n);
     state.drag = { kind: "node", id: n.sessionId, x0: evt.clientX, y0: evt.clientY, ox: pos.x, oy: pos.y, moved: false };
   } else if (!target.closest(".wire-label")) {
-    state.drag = { kind: "pan", x0: evt.clientX, y0: evt.clientY, ox: state.pan.x, oy: state.pan.y, moved: false };
+    // a subagent card pans the board too; a click on it opens its chat
+    state.drag = { kind: "pan", x0: evt.clientX, y0: evt.clientY, ox: state.pan.x, oy: state.pan.y, moved: false,
+      open: target.closest(".sub")?.dataset.parent };
     canvas.classList.add("panning");
   }
   if (state.drag) canvas.setPointerCapture(evt.pointerId);
@@ -764,6 +870,7 @@ canvas.addEventListener("pointermove", (evt) => {
     node.style.left = `${state.localPos[d.id].x}px`;
     node.style.top = `${state.localPos[d.id].y}px`;
     renderWires();
+    renderSubagents();
   } else {
     state.pan = { x: d.ox + dx, y: d.oy + dy };
     $("#world").style.transform = `translate(${state.pan.x}px, ${state.pan.y}px)`;
@@ -783,6 +890,7 @@ canvas.addEventListener("pointerup", async (evt) => {
   if (!d) return;
   if (d.kind === "pan") {
     if (d.moved) store(`ltt.pan.${state.boardId}`, state.pan);
+    else if (d.open && nodeById(d.open)) select_({ type: "node", id: d.open });
     else if (state.selected) closeDrawer();
     return;
   }
@@ -804,14 +912,16 @@ document.addEventListener("keydown", (evt) => {
 });
 $("#drawer-close").addEventListener("click", closeDrawer);
 
-// Keyboard: Tab reaches cards and arrow labels; Enter or Space opens them.
-for (const layer of [$("#nodes"), $("#labels")]) {
+// Keyboard: Tab reaches cards, subagents and arrow labels; Enter or Space
+// opens them (a subagent opens its chat).
+for (const layer of [$("#nodes"), $("#subagents"), $("#labels")]) {
   layer.addEventListener("keydown", (evt) => {
     if (evt.key !== "Enter" && evt.key !== " ") return;
     const node = evt.target.closest(".node"), label = evt.target.closest(".wire-label");
-    if (!node && !label) return;
+    const sub = evt.target.closest(".sub");
+    if (!node && !label && !sub) return;
     evt.preventDefault();
-    select_(node ? { type: "node", id: node.dataset.id } : { type: "wire", id: label.dataset.id });
+    select_(label ? { type: "wire", id: label.dataset.id } : { type: "node", id: node ? node.dataset.id : sub.dataset.parent });
   });
   layer.addEventListener("focusin", (evt) => revealFocused(evt.target));
 }
@@ -986,6 +1096,14 @@ start().catch((e) => {
 });
 
 $("#fit-view").addEventListener("click", fitView);
+
+// Subagents on or off; the choice is remembered.
+$("#show-subagents").addEventListener("click", () => {
+  state.showSubs = !state.showSubs;
+  store("ltt.subagents", state.showSubs);
+  renderSubagents();
+  if (state.showSubs) poll();
+});
 
 // Delete the board on screen, then show another (or ask for a new one).
 $("#delete-board").addEventListener("click", async () => {

@@ -658,9 +658,18 @@ AGENT_STATES = {"progress": "running", "running": "running", "done": "done",
                 "failed": "failed", "skipped": "skipped"}
 
 
+SDIR_TTL = 30  # seconds a session-folder lookup is reused (the board asks often)
+sdir_cache = {}  # sid -> (path or None, when looked)
+
+
 def session_dir(sid):
+    hit = sdir_cache.get(sid)
+    if hit and time.time() - hit[1] < SDIR_TTL and (hit[0] is None or hit[0].is_dir()):
+        return hit[0]
     hits = [p for root in PROJECT_ROOTS for p in root.glob(f"*/{sid}") if p.is_dir()]
-    return max(hits, key=lambda p: p.stat().st_mtime) if hits else None
+    found = max(hits, key=lambda p: p.stat().st_mtime) if hits else None
+    sdir_cache[sid] = (found, time.time())
+    return found
 
 
 def _ms(ts):
@@ -734,6 +743,16 @@ def _read_subagent(path):
     return info
 
 
+def _direct_state(meta, info, live):
+    if info["finished"]:
+        return "done"
+    if meta.get("stoppedByUser"):
+        return "stopped"
+    if live and time.time() - info["mtime"] < AGENT_STALE:
+        return "running"
+    return "stopped"
+
+
 def direct_agents(sdir, live):
     agents = []
     now = int(time.time() * 1000)
@@ -747,12 +766,7 @@ def direct_agents(sdir, live):
             info = subagent_info(meta_path.with_name(f"agent-{aid}.jsonl"))
         except OSError:
             continue
-        if info["finished"]:
-            state = "done"
-        elif live and time.time() - info["mtime"] < AGENT_STALE:
-            state = "running"
-        else:
-            state = "stopped"
+        state = _direct_state(meta, info, live)
         end = now if state == "running" else info["lastAt"]
         agents.append({
             "id": aid,
@@ -908,6 +922,63 @@ def session_agents(sid):
         return {"sessionId": sid, "live": live, "direct": [], "workflows": []}
     return {"sessionId": sid, "live": live,
             "direct": direct_agents(sdir, live), "workflows": workflow_runs(sdir, live)}
+
+
+RUNNING_TTL = 2  # seconds the board's list of running agents is reused
+running_cache = {}  # sid -> (when, agents)
+
+
+def running_agents(sid):
+    """The subagents and workflow agents a live session is running now, for
+    the board. Only transcripts written to within AGENT_STALE can be running,
+    so older agents and workflow runs are skipped without reading them."""
+    hit = running_cache.get(sid)
+    if hit and time.time() - hit[0] < RUNNING_TTL:
+        return hit[1]
+    sdir = session_dir(sid)
+    out = []
+    if sdir is not None:
+        cutoff = time.time() - AGENT_STALE
+        now = int(time.time() * 1000)
+
+        def recent(path):
+            try:
+                return path.stat().st_mtime >= cutoff
+            except OSError:
+                return False
+
+        sub = sdir / "subagents"
+        for path in sub.glob("agent-*.jsonl"):
+            if not recent(path):
+                continue
+            meta = _read_json(path.with_suffix(".meta.json")) or {}
+            try:
+                info = subagent_info(path)
+            except OSError:
+                continue
+            if _direct_state(meta, info, True) != "running":
+                continue
+            out.append({"id": path.stem[len("agent-"):],
+                        "label": meta.get("description") or path.stem,
+                        "kind": meta.get("agentType") or "subagent", "workflow": None,
+                        "model": info["model"], "startedAt": info["startedAt"],
+                        "lastTool": info["lastTool"]})
+        for run_dir in (sub / "workflows").glob("wf_*"):
+            if not any(recent(p) for p in run_dir.glob("agent-*.jsonl")):
+                continue
+            run = workflow_run(sdir, run_dir.name, True, now)
+            for a in run["agents"]:
+                if a["state"] != "running":
+                    continue
+                meta = _read_json(run_dir / f"agent-{a['id']}.meta.json") or {}
+                if meta.get("stoppedByUser"):
+                    continue
+                out.append({"id": a["id"], "label": a["label"], "kind": a["phase"] or "workflow",
+                            "workflow": run["name"], "model": a["model"],
+                            "startedAt": a["startedAt"], "lastTool": a["lastTool"]})
+        out.sort(key=lambda a: a["startedAt"] or 0)
+    running_cache[sid] = (time.time(), out)
+    return out
 
 
 HAS_PROC = Path("/proc/self/stat").exists()
@@ -1381,7 +1452,7 @@ def sync_board(board, live):
     return changed
 
 
-def board_view(bid):
+def board_view(bid, subagents=False):
     live = live_sessions()
     with lock:
         board = load_board(bid)
@@ -1400,6 +1471,7 @@ def board_view(bid):
                      "model": node.get("model"), "editor": node.get("editor"),
                      "status": "ended"}),
             "x": node["x"], "y": node["y"], "live": s is not None,
+            **({"subagents": running_agents(sid)} if subagents and s else {}),
         })
     others = [s for s in live if s["sessionId"] not in board["nodes"] and not s.get("movedTo")]
     return {
@@ -2238,7 +2310,8 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/api/suggestion/wanted":
             return self._send(HTTPStatus.OK, suggestion_wanted(parse_qs(url.query).get("session", [""])[0]))
         if url.path == "/api/state":
-            bid = parse_qs(url.query).get("board", [""])[0]
+            query = parse_qs(url.query)
+            bid = query.get("board", [""])[0]
             if not bid:
                 live = live_sessions()
                 return self._send(HTTPStatus.OK, {
@@ -2247,7 +2320,7 @@ class Handler(BaseHTTPRequestHandler):
                     "places": places(),
                 })
             try:
-                view = board_view(bid)
+                view = board_view(bid, subagents=query.get("subagents") == ["1"])
             except ValueError as e:
                 return self._send(HTTPStatus.BAD_REQUEST, {"error": str(e)})
             if view is None:

@@ -15,6 +15,8 @@
   <div class="seg">
     <button id="new-board" class="btn">New board</button>
     <button id="fit-view" class="btn" title="Bring every card into view">Fit view</button>
+    <button id="show-subagents" class="btn" aria-pressed="false"
+      title="Show the subagents each chat is running, linked to it">Subagents</button>
   </div>
   <span class="spacer"></span>
   <span class="hint">Drag an agent's <span class="hint-port"></span> handle onto another agent to connect them.</span>
@@ -74,10 +76,12 @@
             <path d="M0 0 L10 5 L0 10 z" class="arrow-head draft"></path>
           </marker>
         </defs>
+        <g id="sub-wire-layer"></g>
         <g id="wire-layer"></g>
         <path id="draft-wire" d="" marker-end="url(#arrow-draft)"></path>
       </svg>
       <div id="nodes"></div>
+      <div id="subagents"></div>
       <div id="labels"></div>
     </div>
     <div id="empty" hidden>
