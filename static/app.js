@@ -461,7 +461,10 @@ function renderAvailable() {
     return;
   }
   box.replaceChildren(...folders.map((cwd) => el("div", { class: "folder-group" },
-    el("p", { class: "folder-name path", title: cwd }, pathNodes(cwd)),
+    el("div", { class: "folder-head" },
+      el("p", { class: "folder-name path", title: cwd }, pathNodes(cwd)),
+      el("button", { class: "btn new-here", text: "+ New agent", title: `Start a new agent in ${cwd}`,
+        "aria-label": `New agent in ${cwd}`, onclick: () => openNewAgent(cwd) })),
     ...groups[cwd].map((s) => el("div", { class: "avail-row" },
       el("span", { class: `dot ${s.status}`, title: s.status, role: "img", "aria-label": s.status }),
       el("span", { class: "name", text: display(s), title: [s.name && `@${s.name}`, onWindows(s) ? "Windows" : "WSL", opener(s), s.status].filter(Boolean).join(" · ") }),
@@ -1325,13 +1328,16 @@ function refreshAgentDialog() {
     : bg ? "Claude Code must already trust the folder (run claude there once and accept)." : "";
 }
 
-$("#new-chat").addEventListener("click", () => {
+// With a folder (a "+ New agent" in the sidebar), the dialog starts on a
+// background agent in that folder; an editor chat can't be sent to a folder.
+function openNewAgent(folder) {
   const pick = defaultEditor();
   nd.editor.replaceChildren(...Object.keys(EDITOR_SCHEMES).map((e) =>
     el("option", { value: e, text: e, selected: e === pick })));
   const folders = [state.view?.board.folder, ...(state.view?.folders || [])].filter(Boolean);
   $("#n-folders").replaceChildren(...[...new Set(folders)].map((f) => el("option", { value: f })));
-  nd.folder.value = state.view?.board.folder || "";
+  nd.folder.value = folder || state.view?.board.folder || "";
+  if (folder) document.querySelector('input[name="n-where"][value="background"]').checked = true;
   pickers.agent.box.hidden = true;
   api("/api/state").then((d) => $("#n-places").replaceChildren(...placeButtons(d.places || [], pickers.agent)))
     .catch(() => {});
@@ -1339,7 +1345,8 @@ $("#new-chat").addEventListener("click", () => {
   refreshAgentDialog();
   nd.dialog.showModal();
   nd.prompt.focus();
-});
+}
+$("#new-chat").addEventListener("click", () => openNewAgent());
 
 for (const e of [nd.editor, nd.mode, nd.model, ...document.querySelectorAll('input[name="n-where"]')]) {
   e.addEventListener("change", refreshAgentDialog);
