@@ -59,6 +59,12 @@ installed inside WSL, where the server runs.
   untick that). The editor chat gets your prompt as a message from Let Them
   Talk; a notice says whether it arrived (with **Copy prompt** if not). A new
   agent goes on the board you started it from.
+- **New workflow** (top bar): say what it should do, and optionally how many
+  agents and which model. It starts a background agent of its own, not tied
+  to any chat, in the folder you pick, whose first prompt is *Use a workflow
+  to do this: …*; the model you pick runs it and its agents, which show
+  under **Subagents**. Its card is named *workflow* and the task's first
+  words unless you name it.
 - **Cards** show each chat's title, `@address` (notes use the address) and
   folder, where it runs (*Terminal*, *Cursor*, *VS Code* …, *Background*),
   the model of its latest reply and its state: *busy*, *idle* or *waiting*
@@ -98,12 +104,6 @@ installed inside WSL, where the server runs.
     woken with it. If sending fails, the text goes back into
     the box. When the chat waits for you, the box shows a likely reply in
     grey; press Tab (or →) to use it. Enter sends, Shift+Enter adds a line.
-  - **Run a workflow:** type what it should do (how many agents and which
-    model are optional) and press **Run workflow**. The chat gets *Use a
-    workflow to do this: …* the same way as a message you send from here,
-    and its agents show under **Subagents**. An idle background agent takes
-    it as your prompt; any other chat gets it as a message and may ask you
-    to confirm before it starts.
   - **Agents in this chat:** the workflows and subagents it started, with
     their state, model, time and tokens, and a running one's current step.
     A workflow has **Ask it to stop this workflow** while it runs and **Ask

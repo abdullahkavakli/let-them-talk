@@ -766,7 +766,6 @@ function nodeDetails(n) {
     })),
     ...chatSection(n),
     ...sendSection(n),
-    ...workflowSection(n),
     ...(n.background ? backgroundSection(n) : []),
     ...agentsSection(n),
     el("h2", { text: "Connections" }),
@@ -1519,29 +1518,59 @@ function defaultEditor() {
 //
 // Chat in the editor: the server watches for the new chat and hands it the
 // prompt as a message. Background agent: `claude --bg` with the prompt as its
-// real first prompt, in a folder you pick.
+// real first prompt, in a folder you pick. New workflow is the same dialog
+// for a background agent of its own whose first prompt asks for a workflow;
+// it doesn't go through any chat.
 
 const nd = {
   dialog: $("#chat-dialog"), prompt: $("#n-prompt"), editor: $("#n-editor"),
   folder: $("#n-folder"), name: $("#n-name"), mode: $("#n-mode"), model: $("#n-model"),
-  terminal: $("#n-terminal"), note: $("#n-note"), error: $("#n-error"), submit: $("#n-submit"),
+  agents: $("#n-agents"), terminal: $("#n-terminal"), note: $("#n-note"), error: $("#n-error"),
+  submit: $("#n-submit"), workflow: false,
 };
-const whereTo = () => document.querySelector('input[name="n-where"]:checked').value;
+const whereTo = () => nd.workflow ? "background"
+  : document.querySelector('input[name="n-where"]:checked').value;
+
+// Its first prompt asks for a workflow in your words (the Workflow tool needs
+// that); only the task is needed. Its card's name when you don't give one:
+// "workflow" and the task's first words.
+const WF_AGENTS = ["", "2", "3", "4", "6", "8"];
+const WF_MODELS = { fable: "Fable", opus: "Opus", sonnet: "Sonnet", haiku: "Haiku" };
+const workflowPrompt = ({ task, agents, model }) => [`Use a workflow to do this: ${task.trim()}`,
+  agents && `Use ${agents} agents.`, model && `Run its agents on ${WF_MODELS[model] || model}.`].filter(Boolean).join("\n");
+const workflowName = (task) =>
+  ["workflow", ...task.replace(/[^\p{L}\p{N}\s_-]/gu, "").split(/\s+/).filter(Boolean).slice(0, 5)].join(" ").slice(0, 50);
 
 function refreshAgentDialog() {
-  const bg = whereTo() === "background";
+  const bg = whereTo() === "background", wf = nd.workflow;
+  $("#n-title").textContent = wf ? "New workflow" : "New agent";
+  $("#n-prompt-label").textContent = wf ? "What should the workflow do?" : "What should it do?";
+  nd.prompt.placeholder = wf ? "e.g. Review every file in src/ for bugs and fix them"
+    : "e.g. Run the test suite and fix whatever fails";
+  $("#n-where-box").hidden = wf;
+  nd.name.placeholder = wf ? "optional; \"workflow\" and the task's first words" : "optional; taken from the prompt";
+  $("#n-agents-label").hidden = nd.agents.hidden = !wf;
   $("#n-editor-box").hidden = bg;
   $("#n-bg-box").hidden = !bg;
   for (const e of document.querySelectorAll(".n-editor-name")) e.textContent = nd.editor.value;
-  nd.submit.textContent = bg ? "Start agent" : `Open in ${nd.editor.value}`;
-  nd.note.textContent = bg && /haiku/i.test(nd.model.value) && nd.mode.value === "auto"
-    ? "With Haiku, auto mode may not be available; the agent then asks before it acts."
-    : bg ? "Claude Code must already trust the folder (run claude there once and accept)." : "";
+  nd.submit.textContent = wf ? "Start workflow" : bg ? "Start agent" : `Open in ${nd.editor.value}`;
+  nd.note.textContent = [
+    wf && "A new background agent starts in this folder and runs your task as a Claude Code workflow; " +
+      "the model you pick runs it and its agents, which show under Subagents.",
+    bg && /haiku/i.test(nd.model.value) && nd.mode.value === "auto"
+      ? "With Haiku, auto mode may not be available; the agent then asks before it acts."
+      : bg && "Claude Code must already trust the folder (run claude there once and accept).",
+  ].filter(Boolean).join(" ");
 }
 
 // With a folder (a "+ New agent" in the sidebar), the dialog starts on a
 // background agent in that folder; an editor chat can't be sent to a folder.
-function openNewAgent(folder) {
+// With workflow, it starts a workflow (always a background agent).
+function openNewAgent(folder, workflow = false) {
+  nd.workflow = workflow;
+  if (!nd.agents.options.length) {
+    nd.agents.replaceChildren(...WF_AGENTS.map((v) => el("option", { value: v, text: v || "Its choice" })));
+  }
   const pick = defaultEditor();
   nd.editor.replaceChildren(...Object.keys(EDITOR_SCHEMES).map((e) =>
     el("option", { value: e, text: e, selected: e === pick })));
@@ -1558,6 +1587,7 @@ function openNewAgent(folder) {
   nd.prompt.focus();
 }
 $("#new-chat").addEventListener("click", () => openNewAgent());
+$("#new-workflow").addEventListener("click", () => openNewAgent(null, true));
 
 for (const e of [nd.editor, nd.mode, nd.model, ...document.querySelectorAll('input[name="n-where"]')]) {
   e.addEventListener("change", refreshAgentDialog);
@@ -1572,12 +1602,16 @@ $("#chat-form").addEventListener("submit", async (evt) => {
   nd.submit.disabled = true;
   try {
     if (whereTo() === "background") {
-      if (!prompt) return fail("A background agent needs a prompt to start with.");
+      const wf = nd.workflow;
+      if (!prompt) return fail(wf ? "Say what the workflow should do." : "A background agent needs a prompt to start with.");
+      const model = nd.model.value.trim();
       const res = await api(`/api/board/${state.boardId}/launch-background`, {
-        prompt, folder: nd.folder.value.trim(), name: nd.name.value.trim(),
-        permissionMode: nd.mode.value, model: nd.model.value.trim(), openTerminal: nd.terminal.checked,
+        prompt: wf ? workflowPrompt({ task: prompt, agents: nd.agents.value, model }) : prompt,
+        folder: nd.folder.value.trim(), name: nd.name.value.trim() || (wf ? workflowName(prompt) : ""),
+        permissionMode: nd.mode.value, model, openTerminal: nd.terminal.checked,
       });
-      toast(`Started background agent "${res.result.name}". It will appear on this board in a moment.`, "ok");
+      toast(`Started ${wf ? "workflow" : "background agent"} "${res.result.name}". ` +
+        "It will appear on this board in a moment.", "ok");
     } else {
       const editor = nd.editor.value;
       store("ltt.editor", editor);
@@ -1868,51 +1902,6 @@ async function sendAsBubble(n, text, failed) {
     renderDrawer();
     poll();
   }
-}
-
-// Run a workflow: the chat is asked, in your words, to use a Claude Code
-// workflow for a task; its agents then show under Subagents. Only the task
-// is needed.
-const WF_AGENTS = ["", "2", "3", "4", "6", "8"];
-const WF_MODELS = { "": "Its choice", fable: "Fable", opus: "Opus", sonnet: "Sonnet", haiku: "Haiku" };
-state.wf = {};  // sessionId -> {task, agents, model} typed into its Run a workflow box
-
-function workflowPrompt({ task, agents, model }) {
-  return [`Use a workflow to do this: ${task.trim()}`,
-    agents && `Use ${agents} agents.`, model && `Run its agents on ${WF_MODELS[model]}.`].filter(Boolean).join("\n");
-}
-
-function workflowSection(n) {
-  if (!canReach(n)) return [];
-  const sid = n.sessionId, wf = state.wf[sid] ||= { task: "", agents: "", model: "" };
-  const pick = (key, options) => el("select", { id: `wf-${key}`, onchange: (e) => { wf[key] = e.target.value; } },
-    ...Object.entries(options).map(([value, text]) => el("option", { value, text, selected: wf[key] === value })));
-  const task = el("textarea", {
-    id: "wf-task", rows: 2, class: "send-box", placeholder: "What should it do? e.g. review the open diff for bugs",
-    oninput: (e) => { wf.task = e.target.value; },
-  });
-  task.value = wf.task;
-  const sending = state.sending.has(sid);
-  return [
-    el("h2", { text: "Run a workflow" }),
-    task,
-    el("div", { class: "wf-options" },
-      el("label", {}, "Agents", pick("agents", Object.fromEntries(WF_AGENTS.map((v) => [v, v || "Its choice"])))),
-      el("label", {}, "Model", pick("model", WF_MODELS))),
-    el("p", { class: "muted small", text: (promptable(n)
-      ? "It gets this as your next prompt and starts a Claude Code workflow."
-      : "It arrives as a message from you through Let Them Talk; the chat may ask you to confirm before it starts.") +
-      " Its agents show under Subagents." }),
-    el("div", { class: "drawer-actions" }, el("button", {
-      class: "btn primary", disabled: sending, text: sending ? "Sending…" : "Run workflow",
-      onclick: () => {
-        if (!wf.task.trim()) return task.focus();
-        const text = workflowPrompt(wf), typed = wf.task;
-        wf.task = "";
-        sendAsBubble(n, text, () => { if (!wf.task.trim()) wf.task = typed; });
-      },
-    })),
-  ];
 }
 
 async function agentAction(n, action, done) {

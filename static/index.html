@@ -12,6 +12,7 @@
     <select id="board-select" aria-label="Board"></select>
   </label>
   <button id="new-chat" class="btn primary">New agent</button>
+  <button id="new-workflow" class="btn" title="Start a new agent that runs your task as a Claude Code workflow">New workflow</button>
   <div class="seg">
     <button id="new-board" class="btn">New board</button>
     <button id="fit-view" class="btn" title="Bring every card into view">Fit view</button>
@@ -125,10 +126,10 @@
 
 <dialog id="chat-dialog">
   <form method="dialog" id="chat-form">
-    <h2>New agent</h2>
-    <label for="n-prompt">What should it do?</label>
+    <h2 id="n-title">New agent</h2>
+    <label for="n-prompt" id="n-prompt-label">What should it do?</label>
     <textarea id="n-prompt" rows="5" placeholder="e.g. Run the test suite and fix whatever fails"></textarea>
-    <div class="where">
+    <div class="where" id="n-where-box">
       <label class="choice"><input type="radio" name="n-where" value="editor" checked>
         <span><strong>Chat in <span class="n-editor-name">Cursor</span></strong>
         <span class="muted small">A new chat tab opens in the editor window you used last, in that
@@ -163,6 +164,8 @@
           <option value="manual">manual: asks before every action</option>
           <option value="dontAsk">dontAsk: skips what would need asking</option>
         </select>
+        <label for="n-agents" id="n-agents-label" hidden>Agents</label>
+        <select id="n-agents" hidden></select>
         <label for="n-model">Model</label>
         <select id="n-model">
           <option value="" selected>Default (your Claude Code setting)</option>
