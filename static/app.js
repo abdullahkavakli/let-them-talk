@@ -1641,15 +1641,25 @@ function toast(text, level = "info", ms = level === "error" ? 7000 : 5000) {
 }
 
 // Editor chats started from here: show how handing over the prompt went.
-// Handoffs report each step the same way.
-const launchShown = {};
+// Handoffs report each step the same way. The server lists them for 10
+// minutes, so each step's notice is remembered across reloads too: a reload
+// doesn't show it again, except a failed one you haven't closed yet.
+const LAUNCH_LISTED = 600;  // seconds the server lists a launch
+const launchShown = {};     // launch id -> state shown on this page
+const launchSeen = store("ltt.launchSeen") || {};  // launch id -> [state, at], notice gone
 function renderLaunches() {
+  const now = Date.now() / 1000;
+  for (const [id, [, at]] of Object.entries(launchSeen)) {
+    if (now - at > LAUNCH_LISTED + 60) delete launchSeen[id];
+  }
   for (const l of state.view?.launches || []) {
-    const seenState = launchShown[l.id];
-    if (seenState === l.state) continue;
+    if (launchShown[l.id] === l.state || launchSeen[l.id]?.[0] === l.state) continue;
     launchShown[l.id] = l.state;
+    const seen = () => { launchSeen[l.id] = [l.state, l.at || now]; store("ltt.launchSeen", launchSeen); };
     const level = l.state === "done" ? "ok" : l.state === "failed" ? "error" : "info";
     const t = toast(l.detail, level, l.state === "failed" ? 0 : 7000);
+    if (l.state === "failed") t.querySelector(".icon-btn").addEventListener("click", seen);
+    else seen();
     if (l.state === "failed" && l.prompt) {
       t.insertBefore(el("button", { class: "btn", text: "Copy prompt",
         onclick: () => navigator.clipboard?.writeText(l.prompt) }), t.lastChild);
