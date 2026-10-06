@@ -1053,10 +1053,27 @@ function glass(target, { scale = 18, blur = 4 } = {}) {
 }
 glass($(".sidebar"));
 glass($("#drawer"));
-for (const item of document.querySelectorAll(".topbar .brand, .topbar .board-pick, .topbar .btn:not(.primary), .topbar .hint")) {
+for (const item of document.querySelectorAll(".topbar .board-pick, .topbar .seg, .topbar .hint")) {
   glass(item, { scale: 10, blur: 2 });
 }
 for (const dialog of document.querySelectorAll("dialog")) glass(dialog, { scale: 24, blur: 10 });
+
+// Appearance: the theme (system, light or dark) and how tinted the glass is,
+// from clear to tinted like iOS 27's Liquid Glass setting. Both are remembered.
+function applyAppearance() {
+  const theme = store("ltt.theme") || "system", tint = store("ltt.tint") ?? 50;
+  if (theme === "system") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  document.documentElement.style.setProperty("--ga", (0.12 + 0.68 * tint / 100).toFixed(3));
+  const pick = document.querySelector(`input[name="theme"][value="${theme}"]`);
+  if (pick) pick.checked = true;
+  $("#glass-tint").value = tint;
+}
+for (const pick of document.querySelectorAll('input[name="theme"]')) {
+  pick.addEventListener("change", () => { store("ltt.theme", pick.value); applyAppearance(); });
+}
+$("#glass-tint").addEventListener("input", (e) => { store("ltt.tint", Number(e.target.value)); applyAppearance(); });
+applyAppearance();
 
 // ------------------------------------------------ open chats in the editor
 //

@@ -8,19 +8,21 @@
 </head>
 <body>
 <header class="topbar">
-  <h1 class="brand">Let Them Talk</h1>
   <label class="board-pick">Board
     <select id="board-select" aria-label="Board"></select>
   </label>
   <button id="new-chat" class="btn primary">New agent</button>
-  <button id="new-board" class="btn">New board</button>
-  <button id="fit-view" class="btn" title="Bring every card into view">Fit view</button>
+  <div class="seg">
+    <button id="new-board" class="btn">New board</button>
+    <button id="fit-view" class="btn" title="Bring every card into view">Fit view</button>
+  </div>
   <span class="spacer"></span>
   <span class="hint">Drag an agent's <span class="hint-port"></span> handle onto another agent to connect them.</span>
 </header>
 
 <div class="layout">
   <aside class="sidebar">
+    <h1 class="brand">Let Them Talk</h1>
     <section>
       <h2>Board folder</h2>
       <p id="board-folder" class="mono muted">—</p>
@@ -29,6 +31,19 @@
       <h2>Add agents</h2>
       <p class="muted small">Running sessions not on this board, by folder.</p>
       <div id="available"></div>
+    </section>
+    <section class="appearance">
+      <h2>Appearance</h2>
+      <div class="theme-pick" role="radiogroup" aria-label="Theme">
+        <label><input type="radio" name="theme" value="system" checked> System</label>
+        <label><input type="radio" name="theme" value="light"> Light</label>
+        <label><input type="radio" name="theme" value="dark"> Dark</label>
+      </div>
+      <label class="tint-pick">Glass
+        <span class="muted small">Clear</span>
+        <input id="glass-tint" type="range" min="0" max="100" value="50">
+        <span class="muted small">Tinted</span>
+      </label>
     </section>
     <section class="grow">
       <details id="activity-box">

@@ -507,7 +507,7 @@ body { position: relative; }
 #empty { left: calc(var(--side) + 24px); }
 
 .sidebar, #drawer, dialog,
-.topbar .brand, .topbar .board-pick, .topbar .btn:not(.primary), .topbar .hint {
+.topbar .board-pick, .topbar .seg, .topbar .hint {
   background: rgb(var(--glass-rgb) / var(--ga));
   border: 1px solid var(--glass-edge);
   box-shadow: inset 0 1.5px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-lo),
@@ -528,7 +528,10 @@ body:has(#drawer:not([hidden])) .topbar { right: calc(var(--drawer) + 24px); }
   min-height: 40px; box-sizing: border-box; border-radius: 999px; padding: 0 16px;
   display: inline-flex; align-items: center;
 }
-.topbar .btn:not(.primary):hover { background: rgb(var(--glass-rgb) / calc(var(--ga) + .2)); }
+.topbar .seg { display: inline-flex; align-items: center; border-radius: 999px; padding: 3px; }
+.topbar .seg .btn { background: transparent; border: 0; min-height: 34px; }
+.topbar .seg .btn:hover { background: var(--field-hover); }
+.topbar .seg .btn + .btn { margin-left: 1px; box-shadow: -1px 0 0 var(--glass-edge); }
 .topbar .hint { gap: 5px; }  /* a flex row drops the spaces around the handle dot */
 .topbar .board-pick select { background: transparent; border: 0; font-weight: 600; padding: 4px 2px; }
 .topbar .btn.primary { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35), 0 6px 18px rgba(0, 102, 204, .28); }
@@ -568,7 +571,29 @@ dialog label.choice:has(input:checked) { border-color: var(--accent); background
 .node.selected { box-shadow: 0 0 0 3px var(--accent-soft), var(--card-shadow); }
 
 @media (prefers-reduced-transparency: reduce) {
-  .sidebar, #drawer, dialog, .topbar .brand, .topbar .board-pick, .topbar .btn:not(.primary), .topbar .hint {
+  .sidebar, #drawer, dialog, .topbar .board-pick, .topbar .seg, .topbar .hint {
     background: var(--panel) !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
   }
 }
+
+/* the rest of the mockup: name atop the sidebar, folder in a field, Activity
+   as a row at the bottom, a bigger details header and dialog titles, your
+   own messages in solid blue, and the Appearance controls */
+.sidebar .brand { margin: 0 0 -6px; font-size: 17px; font-weight: 700; letter-spacing: -.2px; }
+#board-folder { padding: 8px 10px; border-radius: 10px; background: var(--field); color: var(--text); }
+.sidebar section.grow { display: flex; flex-direction: column; justify-content: flex-end; }
+#activity-box > summary { margin: 0; padding: 10px 14px; border-radius: 999px; background: var(--field); }
+#activity-box[open] > summary { margin-bottom: 8px; }
+#drawer h3 { font-size: 20px; font-weight: 700; letter-spacing: -.3px; line-height: 1.25; padding-right: 44px; }
+#drawer .close { width: 36px; height: 36px; border-radius: 50%; background: var(--field); color: var(--text); font-size: 18px; }
+#drawer .close:hover { background: var(--field-hover); }
+.bubble { border-radius: 18px 18px 18px 6px; background: var(--panel); }
+.msg.user .bubble { border-radius: 18px 18px 6px 18px; background: var(--accent); color: var(--on-accent); }
+dialog h2 { font-size: 22px; font-weight: 700; letter-spacing: -.3px; }
+.theme-pick { display: flex; padding: 3px; border-radius: 999px; background: var(--field); }
+.theme-pick label { position: relative; flex: 1; padding: 5px 0; border-radius: 999px; text-align: center; font-size: 13px; cursor: pointer; }
+.theme-pick input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.theme-pick label:has(input:checked) { background: var(--panel); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
+.theme-pick label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tint-pick { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; }
+.tint-pick input { flex: 1; min-width: 0; accent-color: var(--accent); }
