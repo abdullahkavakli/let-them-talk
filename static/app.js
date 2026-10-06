@@ -1947,9 +1947,10 @@ function backgroundSection(n) {
         onclick: () => state.logs[n.sessionId]
           ? (delete state.logs[n.sessionId], renderDrawer())
           : agentAction(n, "agent-logs", (r) => { state.logs[n.sessionId] = r.text; renderDrawer(); }) }),
-      n.running && el("button", { class: "btn", text: "Stop",
-        onclick: () => confirm(`Stop ${display(n)}? It stops whatever it is doing now.`)
-          && agentAction(n, "agent-stop", () => toast(`Stopped ${display(n)}.`, "ok")) }),
+      n.running && (n.status !== "idle" || blocked) && el("button", { class: "btn", text: "Stop",
+        onclick: () => confirm(`Stop ${display(n)}? It stops whatever it is doing now, as Esc does ` +
+          "in its terminal. It keeps running, and its terminal stays open.")
+          && agentAction(n, "agent-stop", () => toast(`Stopped ${display(n)}. It's waiting for you.`, "ok")) }),
       el("button", { class: "btn danger", text: "Delete agent",
         onclick: () => confirm(`Delete the background agent ${display(n)}? Its conversation stays on disk.`)
           && agentAction(n, "agent-delete", () => { toast(`Deleted ${display(n)}.`, "ok"); closeDrawer(); }) })),

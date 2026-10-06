@@ -1439,8 +1439,11 @@ def live_sessions():
             match = _background_session(row)
             sessions.append(match)
         if match is not None:
-            match.update(background=True, jobId=row["id"], agentState=row.get("state"),
-                         agentStateText=AGENT_STATE_WORDS.get(row.get("state"), row.get("state")),
+            state = row.get("state")
+            if state == "working" and row.get("status") == "idle":
+                state = "idle"  # its task isn't done, but it is waiting for you (as after Stop)
+            match.update(background=True, jobId=row["id"], agentState=state,
+                         agentStateText=AGENT_STATE_WORDS.get(state, state),
                          waitingFor=row.get("waitingFor"))
     if WIN_REGISTRY_DIR is not None:
         win_regs = list(_read_registry(WIN_REGISTRY_DIR))
@@ -2541,11 +2544,57 @@ def _prompted_since(sid, since):
             rec = json.loads(raw)
         except ValueError:
             continue
-        if (_ms(rec.get("timestamp")) or 0) / 1000 < since - 1:
+        at = _ms(rec.get("timestamp"))
+        if at is None:  # a title, mode or the like, written as a turn ends
+            continue
+        if at / 1000 < since - 1:
             return False
         if rec.get("type") == "user" and isinstance((rec.get("message") or {}).get("content"), str):
             return True
     return False
+
+
+def _press_keys(job, keys):
+    """Attach to a running background agent in a terminal of the app's own,
+    press keys (pairs of text and seconds to wait after it) once its prompt
+    box is drawn, and leave as a closed window would; the agent runs on."""
+    master, slave = os.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+    env = {**claude_env(), "TERM": "xterm-256color"}
+    try:
+        proc = subprocess.Popen([CLAUDE_BIN, "attach", job], stdin=slave, stdout=slave,
+                                stderr=slave, env=env, start_new_session=True)
+    finally:
+        os.close(slave)
+    seen = bytearray()
+
+    def drain(seconds):  # read what it draws, or the terminal fills up and it stalls
+        end = time.time() + seconds
+        while time.time() < end:
+            if select.select([master], [], [], 0.02)[0]:
+                try:
+                    seen.extend(os.read(master, 65536))
+                except OSError:
+                    return
+
+    since = time.time()
+    try:
+        while "❯".encode() not in seen and time.time() - since < TYPE_READY and proc.poll() is None:
+            drain(0.2)
+        if "❯".encode() not in seen:
+            raise ValueError("Couldn't open its prompt box: "
+                             f"{_plain(seen.decode('utf-8', 'replace'))[-200:] or 'no answer'}")
+        drain(0.3)
+        for key, wait in keys:
+            os.write(master, key.encode())
+            drain(wait)
+    finally:
+        proc.send_signal(signal.SIGHUP)
+        try:
+            proc.wait(5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        os.close(master)
 
 
 def _type_prompt(s, text):
@@ -2561,46 +2610,9 @@ def _type_prompt(s, text):
         if box:
             raise ValueError("Its prompt box already has text typed in its terminal. "
                              "Send or clear it there first.")
-        master, slave = os.openpty()
-        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
-        env = {**claude_env(), "TERM": "xterm-256color"}
-        try:
-            proc = subprocess.Popen([CLAUDE_BIN, "attach", job], stdin=slave, stdout=slave,
-                                    stderr=slave, env=env, start_new_session=True)
-        finally:
-            os.close(slave)
-        seen = bytearray()
-
-        def drain(seconds):  # read what it draws, or the terminal fills up and it stalls
-            end = time.time() + seconds
-            while time.time() < end:
-                if select.select([master], [], [], 0.02)[0]:
-                    try:
-                        seen.extend(os.read(master, 65536))
-                    except OSError:
-                        return
-
         since = time.time()
-        try:
-            while "❯".encode() not in seen and time.time() - since < TYPE_READY and proc.poll() is None:
-                drain(0.2)
-            if "❯".encode() not in seen:
-                raise ValueError("Couldn't open its prompt box: "
-                                 f"{_plain(seen.decode('utf-8', 'replace'))[-200:] or 'no answer'}")
-            drain(0.3)
-            for key in _typed_keys(text):
-                os.write(master, key.encode())
-                drain(0.05 if key in ("\\", "\r") else 0.02)
-            drain(0.4)
-            os.write(master, b"\r")
-            drain(1.0)
-        finally:
-            proc.send_signal(signal.SIGHUP)  # leave as a closed window would; the agent runs on
-            try:
-                proc.wait(5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-            os.close(master)
+        keys = [(key, 0.05 if key in ("\\", "\r") else 0.02) for key in _typed_keys(text)]
+        _press_keys(job, keys + [("", 0.4), ("\r", 1.0)])
     deadline = since + TYPE_STARTED
     while not _prompted_since(s["sessionId"], since):
         if time.time() > deadline:
@@ -2615,13 +2627,31 @@ def _job_of(body):
     return job
 
 
+STOP_WAIT = 10  # seconds a stopped agent gets to end its turn
+
+
+def _stoppable(job):
+    """A background agent is working, or showing a permission prompt or a
+    question (not just waiting for your next prompt)."""
+    row = next((r for r in background_rows(fresh=True) if r["id"] == job), None)
+    return bool(row and row.get("pid") and row.get("status") in ("busy", "waiting"))
+
+
 def stop_background(bid, body):
+    """Stop what a background agent is doing, as Esc does in its terminal: it
+    runs on, waiting for you, and its terminals stay open (`claude stop`
+    would end it and close them)."""
     job = _job_of(body)
-    proc = run_claude(["stop", job], timeout=30)
-    if proc.returncode != 0:
-        raise ValueError(_cli_error(proc))
-    background_rows(fresh=True)
-    return {"stopped": job}
+    if not _stoppable(job):
+        raise ValueError("It isn't doing anything right now.")
+    with type_lock:
+        _press_keys(job, [("\x1b", 1.0)])
+    deadline = time.time() + STOP_WAIT
+    while _stoppable(job):
+        if time.time() > deadline:
+            raise ValueError("Esc was pressed in it, but it is still working. Look at its terminal.")
+        time.sleep(0.5)
+    return {"stopped": job}  # _stoppable just refreshed the list the board reads
 
 
 def delete_background(bid, body):

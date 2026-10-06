@@ -68,8 +68,8 @@ installed inside WSL, where the server runs.
 - **Cards** show each chat's title, `@address` (notes use the address) and
   folder, where it runs (*Terminal*, *Cursor*, *VS Code* …, *Background*),
   the model of its latest reply and its state: *busy*, *idle* or *waiting*
-  for a chat, a background agent's own (*working*, *needs you*, *done*,
-  *stopped* …), or *ended*. *name shared* means another running session has
+  for a chat, a background agent's own (*working*, *idle*, *needs you*,
+  *done*, *stopped* …), or *ended*. *name shared* means another running session has
   the same name. A card that has ended or can't receive notes has no handle.
 - **Subagents** (top bar): shows the subagents and workflow agents each chat
   is running now, as small cards linked to it; each goes away when it
@@ -115,11 +115,14 @@ installed inside WSL, where the server runs.
     Cursor** once it has ended).
 - **Background agents:** **Open in terminal** (`claude attach <id>` in a new
   window), **Show its screen** (click again to hide; it reads **What is it
-  asking?** while the agent waits for you), **Stop** (while its process
-  runs), **Delete agent** (`claude rm`: removes it from Claude Code's list,
-  with its worktree if it has one; its conversation file stays). An agent
-  stopped before its first reply finished has no saved conversation and
-  can't be woken: its card says *needs restart*, and
+  asking?** while the agent waits for you), **Stop** (while it works: Esc
+  in its prompt box through `claude attach`, so it stops what it is doing
+  and waits for you; it keeps running and its terminal stays open),
+  **Delete agent** (`claude rm`: removes it from Claude Code's list, with
+  its worktree if it has one; its conversation file stays). An agent whose
+  process ended before its first reply finished (`claude stop`, a crash)
+  has no saved conversation and can't be woken: its card says *needs
+  restart*, and
   **Restart in terminal** runs `claude respawn <id>` in a terminal, where
   Claude Code can ask you to trust its folder.
 - A chat you send to the background keeps its card: the card, with its
