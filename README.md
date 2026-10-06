@@ -36,7 +36,10 @@ installed inside WSL, where the server runs.
   model of its latest reply.
 - **Subagents** (top bar): shows the subagents and workflow agents each chat
   is running now, as small cards linked to it; each goes away when it
-  finishes. Click one to open its chat. Your choice is remembered.
+  finishes. Click one (or its row under *Agents in this chat*) to see what it
+  is doing: its state, model, time and tokens, its latest steps, its latest
+  message and the task it was given. Your choice is remembered; if nothing
+  is running when you turn it on, a note says so.
 - **Details:** click a card.
   - **Recent messages:** the last 3 messages, like a phone: your prompts as
     typed (including ones sent while it worked), and Claude's finished

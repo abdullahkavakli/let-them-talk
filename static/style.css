@@ -650,7 +650,7 @@ body { font-family: var(--font-ui); }
 /* running subagents (the Subagents button): small cards beside their chat */
 #show-subagents[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
 .sub {
-  position: absolute; width: 180px; height: 40px; box-sizing: border-box;
+  position: absolute; width: 220px; height: 40px; box-sizing: border-box;  /* NODE_W, SUB_H in app.js */
   display: flex; align-items: center; gap: 8px; padding: 0 10px;
   background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
   box-shadow: var(--card-shadow); cursor: pointer; user-select: none; touch-action: none;
@@ -668,3 +668,15 @@ body { font-family: var(--font-ui); }
 @keyframes sub-in { from { opacity: 0; transform: translateY(-4px); } }
 @keyframes sub-pulse { 50% { box-shadow: 0 0 0 5px var(--accent-soft); } }
 @media (prefers-reduced-motion: reduce) { .sub, .sub .dot { animation: none; } }
+.sub.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft), var(--card-shadow); }
+/* a subagent's details */
+.sub-state { display: flex; align-items: center; gap: 8px; margin: 2px 0 12px; font-size: 13px; color: var(--muted); }
+.sub-steps { display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; }
+.sub-step { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 4px 10px; font-size: 12px; }
+.sub-step .mono { min-width: 0; overflow-wrap: anywhere; }
+.sub-step .small { flex: none; }
+.sub-step.now { background: var(--field); border-radius: 10px; padding: 8px 10px; font-size: 12.5px; }
+.sub-step:not(.now) .mono { color: var(--muted); }
+.agent-row[role="button"] { cursor: pointer; border-radius: 8px; }
+.agent-row[role="button"]:hover { background: var(--field-hover); }
+.agent-row[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

@@ -19,6 +19,7 @@ const state = {
   chatOpen: {},          // message id -> shown in full in the drawer
   showSubs: store("ltt.subagents") === true,  // running subagents drawn on the board
   subSpot: {},           // sessionId -> where its subagents sat, relative to its card
+  subInfo: {},           // "sessionId:agentId" -> /api/subagent response for the open drawer
 };
 
 // ------------------------------------------------------------------ helpers
@@ -174,6 +175,7 @@ async function poll() {
       state.view = await api(`/api/state?board=${encodeURIComponent(state.boardId)}${state.showSubs ? "&subagents=1" : ""}`);
       render();
       if (state.selected?.type === "node") loadDetails(state.selected.id);
+      else if (state.selected?.type === "sub") loadSub(state.selected);
     } catch (e) {
       console.warn("poll failed", e);
     }
@@ -234,13 +236,13 @@ function anyCardInView() {
   });
 }
 
-// Pan so all cards are centered in the uncovered part of the board (or start
-// at its top left if they don't fit).
+// Pan so all cards (and subagents on show) are centered in the uncovered part
+// of the board (or start at its top left if they don't fit).
 function fitView() {
   const nodes = state.view?.nodes || [];
   if (!nodes.length) return;
   const v = viewBox();
-  const boxes = nodes.map(cardBox);
+  const boxes = [...nodes.map(cardBox), ...subBoxes()];
   const x0 = Math.min(...boxes.map((b) => b.x0)), x1 = Math.max(...boxes.map((b) => b.x1));
   const y0 = Math.min(...boxes.map((b) => b.y0)), y1 = Math.max(...boxes.map((b) => b.y1));
   const place = (lo, hi, a, b) => (hi - lo > b - a - 80 ? a + 40 - lo : a + (b - a - (hi - lo)) / 2 - lo);
@@ -356,7 +358,17 @@ function renderWires() {
 // small cards in a column next to it, joined to it by a thin line. A card
 // goes away when its agent finishes.
 
-const SUB_W = 196, SUB_H = 40, SUB_GAP = 6, SUB_SPINE = 16, SUB_MAX = 6;
+// A subagent card is as wide as a chat card (.sub in style.css); its column
+// is that plus the spine of the line beside it.
+const SUB_SPINE = 16, SUB_W = NODE_W + SUB_SPINE, SUB_H = 40, SUB_GAP = 6, SUB_MAX = 6;
+
+// The subagent cards on the board, for Fit view.
+function subBoxes() {
+  return [...$("#subagents").children].map((c) => {
+    const x = parseFloat(c.style.left), y = parseFloat(c.style.top);
+    return { x0: x, y0: y, x1: x + NODE_W, y1: y + SUB_H };
+  });
+}
 
 const clear = (r, boxes) => !boxes.some((b) =>
   r.x0 < b.x1 + 16 && r.x1 > b.x0 - 16 && r.y0 < b.y1 + 16 && r.y1 > b.y0 - 16);
@@ -396,12 +408,15 @@ function subChip(old, layer, item, n) {
   const meta = a ? [age, a.workflow ? `${a.workflow} · ${a.kind}` : a.kind].filter(Boolean).join(" · ")
     : "Click to see them all";
   chip.dataset.parent = n.sessionId;
+  chip.dataset.agent = a ? a.id : "";
   chip.classList.toggle("more", !a);
+  chip.classList.toggle("selected", !!a && state.selected?.type === "sub" &&
+    state.selected.id === a.id && state.selected.parent === n.sessionId);
   if (chip.querySelector(".sub-name").textContent !== name) chip.querySelector(".sub-name").textContent = name;
   if (chip.querySelector(".sub-meta").textContent !== meta) chip.querySelector(".sub-meta").textContent = meta;
   chip.title = [a && a.label, a?.workflow && `Workflow: ${a.workflow}`, a && `Type: ${a.kind}`,
     a?.model && `Model: ${modelName(a.model)}`, age && `Running for ${age}`, a?.lastTool && `Now: ${a.lastTool}`,
-    `Started by ${display(n)}; click to open it`].filter(Boolean).join("\n");
+    `Started by ${display(n)}`, a ? "Click to see what it is doing" : "Click to see them all"].filter(Boolean).join("\n");
   chip.setAttribute("aria-label", `${name}, running, started by ${display(n)}`);
   return chip;
 }
@@ -451,6 +466,64 @@ function renderSubagents() {
   btn.setAttribute("aria-pressed", state.showSubs);
 }
 
+// A subagent's own details: what it is doing, its state, its task. The
+// "+N more" card opens its chat instead.
+function openSubCard(chip) {
+  if (!nodeById(chip.dataset.parent)) return;
+  if (chip.dataset.agent) openSub(chip.dataset.parent, chip.dataset.agent, chip.querySelector(".sub-name").textContent);
+  else select_({ type: "node", id: chip.dataset.parent });
+}
+
+function openSub(parent, id, label) {
+  select_({ type: "sub", parent, id, label });
+}
+
+async function loadSub(sel) {
+  const data = await api(`/api/subagent?session=${encodeURIComponent(sel.parent)}&agent=${encodeURIComponent(sel.id)}`)
+    .catch((e) => ({ error: e.message }));
+  state.subInfo[`${sel.parent}:${sel.id}`] = data;
+  if (state.selected?.type === "sub" && state.selected.id === sel.id) renderDrawer();
+}
+
+const ago = (ms) => ms ? `${fmtDur(Math.max(0, Date.now() - ms))} ago` : null;
+
+function foldBubble(key, text) {
+  const open = !!state.chatOpen[key];
+  const long = text.length > FOLD_CHARS || text.split("\n").length > FOLD_LINES;
+  return [el("div", { class: "bubble" + (long && !open ? " folded" : ""), text }),
+    long && el("button", { class: "fold", text: open ? "Show less" : "Show all",
+      onclick: () => { state.chatOpen[key] = !open; renderDrawer(); } })];
+}
+
+function subDetails(sel) {
+  const key = `${sel.parent}:${sel.id}`, d = state.subInfo[key], n = nodeById(sel.parent);
+  const head = el("h3", { text: d?.label || sel.label || "Subagent" });
+  if (!d) return [head, el("p", { class: "muted small", text: "Loading…" })];
+  if (d.error) return [head, el("p", { class: "error small", text: d.error })];
+  const running = d.state === "running", steps = [...d.steps].reverse();
+  return [
+    head,
+    el("p", { class: "sub-state" }, el("span", { class: stateClass(d.state), title: d.state }),
+      el("span", { text: [AGENT_STATE_TEXT[d.state] || d.state, modelName(d.model), fmtDur(d.durationMs),
+        fmtTok(d.tokens)].filter(Boolean).join(" · ") })),
+    el("dl", {},
+      el("dt", { text: "Started by" }), el("dd", {}, n ? el("a", {
+        href: "#", text: display(n), onclick: (e) => { e.preventDefault(); select_({ type: "node", id: n.sessionId }); },
+      }) : "a chat that isn't on this board"),
+      d.workflow && [el("dt", { text: "Workflow" }), el("dd", { text: [d.workflow, d.phase].filter(Boolean).join(" · ") })],
+      !d.workflow && d.kind && [el("dt", { text: "Type" }), el("dd", { text: d.kind })]),
+    el("h2", { text: running ? "Doing now" : "Last step" }),
+    steps.length ? el("div", { class: "sub-steps" }, ...steps.map((s, i) => el("div", { class: `sub-step${i ? "" : " now"}` },
+      el("span", { class: "mono", text: s.text }), el("span", { class: "muted small", text: ago(s.at) }))))
+      : el("p", { class: "muted small", text: running ? "Getting started…" : "It took no steps." }),
+    el("h2", { text: running ? "Latest message" : "Final message" }),
+    ...(d.said ? [el("div", { class: "msg-meta", text: ago(d.said.at) }), ...foldBubble(`${key}:said`, d.said.text)]
+      : [el("p", { class: "muted small", text: running ? "It hasn't written anything yet; it reports when it finishes." : "None." })]),
+    el("h2", { text: "Its task" }),
+    ...(d.task ? foldBubble(`${key}:task`, d.task) : [el("p", { class: "muted small", text: "Not recorded." })]),
+  ];
+}
+
 function renderAvailable() {
   const box = $("#available");
   const groups = {};
@@ -490,6 +563,7 @@ function select_(sel) {
   render();
   renderDrawer();
   if (sel.type === "node") loadDetails(sel.id);
+  else if (sel.type === "sub") loadSub(sel);
 }
 
 async function loadDetails(sid) {
@@ -545,6 +619,8 @@ function drawDrawer(body, sel) {
     const c = connById(sel.id);
     if (!c) return closeDrawer();
     body.replaceChildren(...wireDetails(c).filter(Boolean));
+  } else if (sel.type === "sub") {
+    body.replaceChildren(...subDetails(sel).filter(Boolean));
   } else {
     const n = nodeById(sel.id);
     if (!n) return closeDrawer();
@@ -735,8 +811,13 @@ const AGENT_STATE_TEXT = { running: "running", done: "done", stopped: "stopped",
   queued: "queued", "not run": "not run", skipped: "skipped", completed: "completed", killed: "killed" };
 const stateClass = (s) => `dot a-${String(s).replace(/\s+/g, "-")}`;
 
-function agentRow(a, labelText) {
-  return el("div", { class: "agent-row" },
+// open: shows the agent's own details when the row is clicked
+function agentRow(a, labelText, open) {
+  const press = open && ((e) => {
+    if (e.type === "click" || e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+  });
+  return el("div", { class: "agent-row", role: open && "button", tabindex: open && 0,
+    title: open && "Show what it is doing", onclick: press, onkeydown: press },
     el("span", { class: stateClass(a.state), title: a.state }),
     el("div", { class: "agent-main" },
       el("div", { class: "agent-label", text: labelText, title: labelText }),
@@ -765,7 +846,7 @@ function runGroup(r, n) {
     for (const a of inPhase) counts[a.state] = (counts[a.state] || 0) + 1;
     body.push(el("div", { class: "phase-title", text:
       `${phase || "Other"} · ${Object.entries(counts).map(([s, k]) => `${k} ${s}`).join(", ")}` }));
-    body.push(...inPhase.map((a) => agentRow(a, a.label)));
+    body.push(...inPhase.map((a) => agentRow(a, a.label, n && (() => openSub(n.sessionId, a.id, a.label)))));
   }
   if (!r.agents.length) body.push(el("p", { class: "muted small", text: "No agents recorded yet." }));
   if (n && canReach(n)) {
@@ -807,7 +888,8 @@ function agentsSection(n) {
       el("div", { class: "run-head" },
         el("div", { class: "run-name", text: "Subagents" }),
         el("div", { class: "agent-meta", text: `${direct.length} started${live ? ` · ${live} running` : ""}` })),
-    ], direct.map((a) => agentRow(a, a.agentType ? `${a.description} (${a.agentType})` : a.description))));
+    ], direct.map((a) => agentRow(a, a.agentType ? `${a.description} (${a.agentType})` : a.description,
+      () => openSub(n.sessionId, a.id, a.description)))));
   }
   return out;
 }
@@ -889,9 +971,9 @@ canvas.addEventListener("pointerdown", (evt) => {
     const pos = nodePos(n);
     state.drag = { kind: "node", id: n.sessionId, x0: evt.clientX, y0: evt.clientY, ox: pos.x, oy: pos.y, moved: false };
   } else if (!target.closest(".wire-label")) {
-    // a subagent card pans the board too; a click on it opens its chat
+    // a subagent card pans the board too; a click on it shows its details
     state.drag = { kind: "pan", x0: evt.clientX, y0: evt.clientY, ox: state.pan.x, oy: state.pan.y, moved: false,
-      open: target.closest(".sub")?.dataset.parent };
+      sub: target.closest(".sub") };
     canvas.classList.add("panning");
   }
   if (state.drag) canvas.setPointerCapture(evt.pointerId);
@@ -930,7 +1012,7 @@ canvas.addEventListener("pointerup", async (evt) => {
   if (!d) return;
   if (d.kind === "pan") {
     if (d.moved) store(`ltt.pan.${state.boardId}`, state.pan);
-    else if (d.open && nodeById(d.open)) select_({ type: "node", id: d.open });
+    else if (d.sub) openSubCard(d.sub);
     else if (state.selected) closeDrawer();
     return;
   }
@@ -953,7 +1035,7 @@ document.addEventListener("keydown", (evt) => {
 $("#drawer-close").addEventListener("click", closeDrawer);
 
 // Keyboard: Tab reaches cards, subagents and arrow labels; Enter or Space
-// opens them (a subagent opens its chat).
+// opens them.
 for (const layer of [$("#nodes"), $("#subagents"), $("#labels")]) {
   layer.addEventListener("keydown", (evt) => {
     if (evt.key !== "Enter" && evt.key !== " ") return;
@@ -961,7 +1043,8 @@ for (const layer of [$("#nodes"), $("#subagents"), $("#labels")]) {
     const sub = evt.target.closest(".sub");
     if (!node && !label && !sub) return;
     evt.preventDefault();
-    select_(label ? { type: "wire", id: label.dataset.id } : { type: "node", id: node ? node.dataset.id : sub.dataset.parent });
+    if (sub) openSubCard(sub);
+    else select_(node ? { type: "node", id: node.dataset.id } : { type: "wire", id: label.dataset.id });
   });
   layer.addEventListener("focusin", (evt) => revealFocused(evt.target));
 }
@@ -1138,12 +1221,25 @@ start().catch((e) => {
 $("#fit-view").addEventListener("click", fitView);
 
 // Subagents on or off; the choice is remembered.
-$("#show-subagents").addEventListener("click", () => {
+// Turned on while nothing runs, the board would look unchanged: say so.
+$("#show-subagents").addEventListener("click", async () => {
   state.showSubs = !state.showSubs;
   store("ltt.subagents", state.showSubs);
   renderSubagents();
-  if (state.showSubs) poll();
+  if (!state.showSubs) return;
+  await poll();
+  if (state.showSubs && !$("#subagents .sub")) {
+    toast("No chat on this board is running a subagent right now. They show up here when one starts.");
+  }
 });
+
+// The connect hint stays on the top bar's first row: where it would wrap
+// onto a second one (a narrow window, the details panel open), it hides.
+const hint = $(".topbar .hint");
+new ResizeObserver(() => {
+  hint.style.display = "";
+  if (hint.offsetTop > $(".topbar .board-pick").offsetTop + 10) hint.style.display = "none";
+}).observe($(".topbar"));
 
 // Delete the board on screen, then show another (or ask for a new one).
 $("#delete-board").addEventListener("click", async () => {

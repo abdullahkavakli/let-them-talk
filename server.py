@@ -908,10 +908,7 @@ def workflow_run(sdir, run_id, live, now):
         status = d["status"]
     else:
         status = "stopped" if agents else "unknown"
-    name = d.get("workflowName")
-    if not name:
-        for script in (sdir / "workflows" / "scripts").glob(f"*-{run_id}.js"):
-            name = script.stem[: -len(run_id) - 1]
+    name = _workflow_name(sdir, run_id, d)
     starts_at = [a["startedAt"] for a in agents if a["startedAt"]]
     start = d.get("startTime") or (min(starts_at) if starts_at else None)
     if active or d.get("durationMs") is None:
@@ -928,6 +925,14 @@ def workflow_run(sdir, run_id, live, now):
         "phases": [p.get("title") for p in d.get("phases") or []],
         "agents": agents,
     }
+
+
+def _workflow_name(sdir, run_id, summary):
+    name = summary.get("workflowName")
+    if not name:
+        for script in (sdir / "workflows" / "scripts").glob(f"*-{run_id}.js"):
+            name = script.stem[: -len(run_id) - 1]
+    return name or run_id
 
 
 def workflow_runs(sdir, live):
@@ -1007,6 +1012,91 @@ def running_agents(sid):
         out.sort(key=lambda a: a["startedAt"] or 0)
     running_cache[sid] = (time.time(), out)
     return out
+
+
+AID_RE = re.compile(r"[0-9A-Za-z_-]{1,64}")
+SUB_HEAD = 64 << 10  # bytes read from the start of a subagent transcript, for its task
+SUB_STEPS = 8        # recent tool calls shown for a subagent
+
+
+def _subagent_task(path):
+    """The prompt a subagent was given: the last plain prompt before its first
+    reply (a workflow agent's first one is the harness's preamble)."""
+    task = None
+    with path.open("rb") as f:
+        head = f.read(SUB_HEAD).splitlines()
+    for raw in head:
+        try:
+            rec = json.loads(raw)
+        except ValueError:
+            break  # the head cuts this line off
+        if rec.get("type") == "assistant":
+            break
+        if rec.get("type") == "user" and not rec.get("isMeta"):  # isMeta: reminders Claude Code adds
+            task = _text_of((rec.get("message") or {}).get("content")).strip() or task
+    if task and task.startswith("[Workflow harness"):
+        # a header line, then the task with every line indented two spaces
+        body = task.partition("\n")[2]
+        task = "\n".join(l[2:] if l.startswith("  ") else l for l in body.splitlines()).strip() or task
+    return task
+
+
+def _subagent_steps(path):
+    """Its latest tool calls and the latest thing it wrote, from the tail."""
+    with path.open("rb") as f:
+        size = f.seek(0, 2)
+        f.seek(max(0, size - AGENT_TAIL))
+        tail = f.read().splitlines()
+    steps, said = [], None
+    for raw in tail:
+        try:
+            rec = json.loads(raw)
+        except ValueError:
+            continue
+        if rec.get("type") != "assistant":
+            continue
+        at = _ms(rec.get("timestamp"))
+        for c in (rec.get("message") or {}).get("content") or []:
+            if c.get("type") == "tool_use":
+                steps.append({"at": at, "text": _tool_summary(c)})
+            elif c.get("type") == "text" and (c.get("text") or "").strip():
+                said = {"at": at, "text": c["text"].strip()}
+    return steps[-SUB_STEPS:], said
+
+
+def subagent_detail(sid, aid):
+    """One subagent or workflow agent, for its details panel: state, task,
+    latest steps and latest words."""
+    if not SID_RE.fullmatch(sid or "") or not AID_RE.fullmatch(aid or ""):
+        raise ValueError("bad id")
+    sdir = session_dir(sid)
+    if sdir is None:
+        raise ValueError("no such chat")
+    path = sdir / "subagents" / f"agent-{aid}.jsonl"
+    if not path.exists():
+        path = next((sdir / "subagents" / "workflows").glob(f"wf_*/agent-{aid}.jsonl"), None)
+    if path is None:
+        raise ValueError("no such subagent")
+    meta = _read_json(path.with_suffix(".meta.json")) or {}
+    info = subagent_info(path)
+    live = any(s["sessionId"] == sid for s in live_sessions())
+    state, workflow = _direct_state(meta, info, live), None
+    if path.parent.name.startswith("wf_"):
+        run_id = path.parent.name
+        workflow = _workflow_name(sdir, run_id, _read_json(sdir / "workflows" / f"{run_id}.json") or {})
+        for ev in _read_journal(path.parent / "journal.jsonl"):
+            if ev.get("agentId") == aid and ev.get("type") not in ("started", "launched"):
+                state = "done" if ev.get("type") == "result" else "failed"
+    steps, said = _subagent_steps(path)
+    end = int(time.time() * 1000) if state == "running" else info["lastAt"]
+    return {
+        "id": aid, "sessionId": sid, "label": meta.get("description") or aid,
+        "kind": meta.get("agentType"), "workflow": workflow, "phase": meta.get("workflowPhase"),
+        "model": info["model"] or meta.get("model"), "tokens": info["tokens"], "state": state,
+        "startedAt": info["startedAt"], "lastAt": info["lastAt"],
+        "durationMs": end - info["startedAt"] if end and info["startedAt"] else None,
+        "task": _subagent_task(path), "steps": steps, "said": said,
+    }
 
 
 HAS_PROC = Path("/proc/self/stat").exists()
@@ -2337,6 +2427,13 @@ class Handler(BaseHTTPRequestHandler):
         if url.path in STATIC_FILES:
             name, ctype = STATIC_FILES[url.path]
             return self._send(HTTPStatus.OK, ctype=ctype, raw=(STATIC_DIR / name).read_bytes())
+        if url.path == "/api/subagent":
+            query = parse_qs(url.query)
+            try:
+                return self._send(HTTPStatus.OK, subagent_detail(
+                    query.get("session", [""])[0], query.get("agent", [""])[0]))
+            except ValueError as e:
+                return self._send(HTTPStatus.BAD_REQUEST, {"error": str(e)})
         if url.path == "/api/agents":
             try:
                 sid = parse_qs(url.query).get("session", [""])[0]
