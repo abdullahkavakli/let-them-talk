@@ -24,6 +24,7 @@
   --glass-hi: rgba(255, 255, 255, .95);
   --glass-lo: rgba(255, 255, 255, .35);
   --glass-side: rgba(255, 255, 255, .25);
+  --glass-glow: rgba(255, 255, 255, .45);
   --glass-shadow: 0 10px 40px rgba(0, 0, 0, .12);
   --field: rgba(118, 118, 128, .12);
   --field-hover: rgba(118, 118, 128, .2);
@@ -54,6 +55,7 @@
     --glass-hi: rgba(255, 255, 255, .22);
     --glass-lo: rgba(255, 255, 255, .06);
     --glass-side: rgba(255, 255, 255, .05);
+    --glass-glow: rgba(255, 255, 255, .07);
     --glass-shadow: 0 10px 40px rgba(0, 0, 0, .55);
     --field: rgba(118, 118, 128, .24);
     --field-hover: rgba(118, 118, 128, .34);
@@ -69,6 +71,7 @@
   --error: #ff6961; --warn: #ff9f0a; color-scheme: dark;
   --glass-rgb: 30 30 32; --ga: .5; --glass-edge: rgba(0, 0, 0, .65); --glass-hi: rgba(255, 255, 255, .22);
   --glass-lo: rgba(255, 255, 255, .06); --glass-side: rgba(255, 255, 255, .05);
+  --glass-glow: rgba(255, 255, 255, .07);
   --glass-shadow: 0 10px 40px rgba(0, 0, 0, .55); --field: rgba(118, 118, 128, .24);
   --field-hover: rgba(118, 118, 128, .34); --card-shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 6px 20px rgba(0, 0, 0, .35);
   --scrim: rgba(0, 0, 0, .45);
@@ -515,10 +518,20 @@ body { position: relative; }
 .topbar .board-pick, .topbar .seg, .topbar .hint, #appearance {
   background: rgb(var(--glass-rgb) / var(--ga));
   border: 1px solid var(--glass-edge);
-  box-shadow: inset 0 1.5px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-lo),
-    inset 1px 0 0 var(--glass-side), inset -1px 0 0 var(--glass-side), var(--glass-shadow);
+  /* light from the top left: a bright rim there, a fainter one bottom right,
+     and a glow inside the edge, as in thick glass */
+  box-shadow: inset 1.5px 1.5px 0 -0.5px var(--glass-hi), inset -1px -1px 0 -0.5px var(--glass-lo),
+    inset 0 0 16px var(--glass-glow), var(--glass-shadow);
   -webkit-backdrop-filter: blur(6px) saturate(180%);
   backdrop-filter: blur(6px) saturate(180%);
+}
+/* The top bar's controls are clearer glass, as Apple's toolbars: less tint
+   and blur than the panels, so the board shows through, bent toward the
+   edge (app.js), while the labels stay readable. */
+.topbar .board-pick, .topbar .seg, .topbar .hint {
+  background: rgb(var(--glass-rgb) / calc(var(--ga) * .65));
+  -webkit-backdrop-filter: blur(2px) saturate(180%);
+  backdrop-filter: blur(2px) saturate(180%);
 }
 
 .topbar {
@@ -536,7 +549,12 @@ body:has(#drawer:not([hidden])) .topbar { right: calc(var(--drawer) + 24px); }
 .topbar .seg { display: inline-flex; align-items: center; border-radius: 999px; padding: 3px; }
 .topbar .seg .btn { background: transparent; border: 0; min-height: 34px; }
 .topbar .seg .btn:hover { background: var(--field-hover); }
-.topbar .seg .btn + .btn { margin-left: 1px; box-shadow: -1px 0 0 var(--glass-edge); }
+/* a straight divider between the buttons (a side shadow on a round button bends) */
+.topbar .seg .btn + .btn { position: relative; margin-left: 1px; }
+.topbar .seg .btn + .btn::before {
+  content: ""; position: absolute; left: -1px; top: 9px; bottom: 9px; width: 1px;
+  background: var(--glass-edge); pointer-events: none;
+}
 .topbar .hint { gap: 5px; }  /* a flex row drops the spaces around the handle dot */
 .topbar .board-pick select { background: transparent; border: 0; font-weight: 600; padding: 4px 2px; }
 .topbar .btn.primary { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35), 0 6px 18px rgba(0, 102, 204, .28); }

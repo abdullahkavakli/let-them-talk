@@ -1396,15 +1396,29 @@ function lensMap(w, h, radius, bezel) {
 }
 
 // Give a glass element its lens; the map is redrawn when the element resizes.
-function glass(target, { scale = 18, blur = 4 } = {}) {
+// bezel: how far in from the edge the glass bends (all the way in makes a
+// small control one lens). spread: red bent a little more and blue a little
+// less, the faint rainbow at a glass edge (three passes, so small things only).
+function glass(target, { scale = 18, blur = 4, bezel = (w, h) => Math.min(24, w / 4, h / 3), spread = 0 } = {}) {
   if (!LENS) return;
   const id = `lens-${lensDefs.children.length}`;
   const map = svg("feImage", { x: 0, y: 0, preserveAspectRatio: "none", result: "map" });
   const filter = svg("filter", { id, x: 0, y: 0, width: "100%", height: "100%", "color-interpolation-filters": "sRGB" });
-  filter.append(map,
-    svg("feGaussianBlur", { in: "SourceGraphic", stdDeviation: blur, result: "soft" }),
-    svg("feDisplacementMap", { in: "soft", in2: "map", scale, xChannelSelector: "R", yChannelSelector: "G", result: "bent" }),
-    svg("feColorMatrix", { in: "bent", type: "saturate", values: 1.8 }));
+  const bend = (s, result) => svg("feDisplacementMap", { in: "soft", in2: "map", scale: s,
+    xChannelSelector: "R", yChannelSelector: "G", result });
+  filter.append(map, svg("feGaussianBlur", { in: "SourceGraphic", stdDeviation: blur, result: "soft" }));
+  if (spread) {
+    const only = ["1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0", "0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0",
+      "0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0"];
+    [1 + spread, 1, 1 - spread].forEach((k, i) => filter.append(bend(scale * k, `d${i}`),
+      svg("feColorMatrix", { in: `d${i}`, type: "matrix", values: only[i], result: `c${i}` })));
+    filter.append(
+      svg("feComposite", { in: "c0", in2: "c1", operator: "arithmetic", k2: 1, k3: 1, result: "c01" }),
+      svg("feComposite", { in: "c01", in2: "c2", operator: "arithmetic", k2: 1, k3: 1, result: "bent" }));
+  } else {
+    filter.append(bend(scale, "bent"));
+  }
+  filter.append(svg("feColorMatrix", { in: "bent", type: "saturate", values: 1.8 }));
   lensDefs.append(filter);
   let size = "";
   new ResizeObserver(() => {
@@ -1412,16 +1426,17 @@ function glass(target, { scale = 18, blur = 4 } = {}) {
     if (!w || !h || `${w}x${h}` === size) return;
     size = `${w}x${h}`;
     const radius = Math.min(parseFloat(getComputedStyle(target).borderTopLeftRadius) || 0, w / 2, h / 2);
-    map.setAttribute("href", lensMap(w, h, radius, Math.floor(Math.min(24, w / 4, h / 3))));
+    map.setAttribute("href", lensMap(w, h, radius, Math.max(1, Math.floor(bezel(w, h)))));
     map.setAttribute("width", w);
     map.setAttribute("height", h);
     target.style.backdropFilter = `url(#${id})`;
   }).observe(target);
 }
-glass($(".sidebar"));
-glass($("#drawer"));
+glass($(".sidebar"), { scale: 26 });
+glass($("#drawer"), { scale: 26 });
+// The top bar's pills are clear glass: each one lens, bending what is under it.
 for (const item of document.querySelectorAll(".topbar .board-pick, .topbar .seg, .topbar .hint")) {
-  glass(item, { scale: 10, blur: 2 });
+  glass(item, { scale: 16, blur: 1.5, bezel: (w, h) => h / 2, spread: 0.06 });
 }
 for (const dialog of document.querySelectorAll("dialog")) glass(dialog, { scale: 24, blur: 10 });
 glass($("#appearance"), { scale: 14, blur: 6 });
