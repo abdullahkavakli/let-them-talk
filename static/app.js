@@ -194,25 +194,38 @@ function cardBox(n) {
   return { x0: pos.x, y0: pos.y, x1: pos.x + NODE_W, y1: pos.y + h };
 }
 
+// The board runs under the floating glass panels: the part of the canvas they
+// leave uncovered, in canvas pixels.
+function viewBox() {
+  const c = $("#canvas").getBoundingClientRect(), drawer = $("#drawer");
+  const right = drawer.hidden ? c.right : Math.min(c.right, drawer.getBoundingClientRect().left);
+  return {
+    left: Math.max(0, $(".sidebar").getBoundingClientRect().right - c.left),
+    top: Math.max(0, $(".topbar").getBoundingClientRect().bottom - c.top),
+    right: right - c.left, bottom: c.height,
+  };
+}
+
 function anyCardInView() {
-  const r = $("#canvas").getBoundingClientRect();
+  const v = viewBox();
   return state.view.nodes.some((n) => {
     const b = cardBox(n);
-    return b.x1 + state.pan.x > 0 && b.x0 + state.pan.x < r.width &&
-      b.y1 + state.pan.y > 0 && b.y0 + state.pan.y < r.height;
+    return b.x1 + state.pan.x > v.left && b.x0 + state.pan.x < v.right &&
+      b.y1 + state.pan.y > v.top && b.y0 + state.pan.y < v.bottom;
   });
 }
 
-// Pan so all cards are centered (or start at the top left if they don't fit).
+// Pan so all cards are centered in the uncovered part of the board (or start
+// at its top left if they don't fit).
 function fitView() {
   const nodes = state.view?.nodes || [];
   if (!nodes.length) return;
-  const r = $("#canvas").getBoundingClientRect();
+  const v = viewBox();
   const boxes = nodes.map(cardBox);
   const x0 = Math.min(...boxes.map((b) => b.x0)), x1 = Math.max(...boxes.map((b) => b.x1));
   const y0 = Math.min(...boxes.map((b) => b.y0)), y1 = Math.max(...boxes.map((b) => b.y1));
-  const place = (lo, hi, size) => (hi - lo > size - 80 ? 40 - lo : (size - (hi - lo)) / 2 - lo);
-  state.pan = { x: Math.round(place(x0, x1, r.width)), y: Math.round(place(y0, y1, r.height)) };
+  const place = (lo, hi, a, b) => (hi - lo > b - a - 80 ? a + 40 - lo : a + (b - a - (hi - lo)) / 2 - lo);
+  state.pan = { x: Math.round(place(x0, x1, v.left, v.right)), y: Math.round(place(y0, y1, v.top, v.bottom)) };
   store(`ltt.pan.${state.boardId}`, state.pan);
   $("#world").style.transform = `translate(${state.pan.x}px, ${state.pan.y}px)`;
   renderWires();
@@ -779,11 +792,13 @@ for (const layer of [$("#nodes"), $("#labels")]) {
   layer.addEventListener("focusin", (evt) => revealFocused(evt.target));
 }
 
-// Pan a card or label reached with the keyboard fully into view. (The canvas
-// clips instead of scrolling, so the browser can't scroll it there itself.)
+// Pan a card or label reached with the keyboard fully into view, clear of the
+// glass panels. (The canvas clips instead of scrolling, so the browser can't
+// scroll it there itself.)
 function revealFocused(target) {
   if (!target.matches(":focus-visible")) return;
-  const r = canvas.getBoundingClientRect(), b = target.getBoundingClientRect();
+  const c = canvas.getBoundingClientRect(), v = viewBox(), b = target.getBoundingClientRect();
+  const r = { left: c.left + v.left, right: c.left + v.right, top: c.top + v.top, bottom: c.top + v.bottom };
   const dx = b.left < r.left ? r.left - b.left + 40 : b.right > r.right ? r.right - b.right - 40 : 0;
   const dy = b.top < r.top ? r.top - b.top + 40 : b.bottom > r.bottom ? r.bottom - b.bottom - 40 : 0;
   if (!dx && !dy) return;
@@ -950,9 +965,10 @@ $("#fit-view").addEventListener("click", fitView);
 
 // Side panels: drag the inner edge to resize, double-click it to reset; the
 // width is remembered. dir is +1 when the edge is on the panel's right side.
-function resizable(panel, handle, key, def, dir) {
+// The width goes into a CSS variable, since the top bar sits beside the panels.
+function resizable(panel, handle, key, def, dir, cssVar) {
   const MIN = 180, MAX = 720;
-  const set = (w) => { panel.style.width = `${Math.min(MAX, Math.max(MIN, w))}px`; };
+  const set = (w) => document.documentElement.style.setProperty(cssVar, `${Math.min(MAX, Math.max(MIN, w))}px`);
   if (store(key)) set(store(key));
   handle.addEventListener("pointerdown", (evt) => {
     evt.preventDefault();
@@ -971,8 +987,76 @@ function resizable(panel, handle, key, def, dir) {
   });
   handle.addEventListener("dblclick", () => { set(def); store(key, def); });
 }
-resizable($(".sidebar"), $("#sidebar-resizer"), "ltt.sidebarW", 280, +1);
-resizable($("#drawer"), $("#drawer-resizer"), "ltt.drawerW", 360, -1);
+resizable($(".sidebar"), $("#sidebar-resizer"), "ltt.sidebarW", 280, +1, "--side-w");
+resizable($("#drawer"), $("#drawer-resizer"), "ltt.drawerW", 360, -1, "--drawer-w");
+
+// ------------------------------------------------------------ Liquid Glass
+// The glass panels bend what is behind them at their rim, as Apple's Liquid
+// Glass does: each gets an SVG filter whose displacement map pulls the
+// backdrop toward the middle near the edge. Chromium only; other browsers,
+// and reduced transparency, keep the plain CSS blur.
+const LENS = Boolean(navigator.userAgentData?.brands?.some((b) => b.brand === "Chromium")) &&
+  !matchMedia("(prefers-reduced-transparency: reduce)").matches;
+const lensDefs = svg("svg", { width: 0, height: 0, "aria-hidden": "true", style: "position: absolute" });
+document.body.append(lensDefs);
+
+// R and G hold the x and y pull (128 = none): strongest at the rim and gone
+// `bezel` px in, so a rounded panel acts like a thick convex lens.
+function lensMap(w, h, radius, bezel) {
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext("2d"), img = ctx.createImageData(w, h), px = img.data;
+  for (let i = 0; i < px.length; i += 4) { px[i] = px[i + 1] = 128; px[i + 3] = 255; }
+  for (let y = 0; y < h; y++) {
+    const band = y < bezel || y >= h - bezel;
+    for (let x = 0; x < w; x++) {
+      if (!band && x === bezel) x = w - bezel;  // the middle of the row stays untouched
+      const qx = Math.abs(x + 0.5 - w / 2) - (w / 2 - radius), qy = Math.abs(y + 0.5 - h / 2) - (h / 2 - radius);
+      const ox = Math.max(qx, 0), oy = Math.max(qy, 0), out = Math.hypot(ox, oy);
+      const d = out + Math.min(Math.max(qx, qy), 0) - radius;  // distance to the edge, negative inside
+      if (d > 0 || -d > bezel) continue;
+      let nx = out > 0 ? ox / out : qx > qy ? 1 : 0, ny = out > 0 ? oy / out : qx > qy ? 0 : 1;
+      if (x + 0.5 < w / 2) nx = -nx;
+      if (y + 0.5 < h / 2) ny = -ny;
+      const m = (1 + d / bezel) ** 2, i = (y * w + x) * 4;
+      px[i] = 128 - nx * m * 127;
+      px[i + 1] = 128 - ny * m * 127;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return c.toDataURL();
+}
+
+// Give a glass element its lens; the map is redrawn when the element resizes.
+function glass(target, { scale = 18, blur = 4 } = {}) {
+  if (!LENS) return;
+  const id = `lens-${lensDefs.children.length}`;
+  const map = svg("feImage", { x: 0, y: 0, preserveAspectRatio: "none", result: "map" });
+  const filter = svg("filter", { id, x: 0, y: 0, width: "100%", height: "100%", "color-interpolation-filters": "sRGB" });
+  filter.append(map,
+    svg("feGaussianBlur", { in: "SourceGraphic", stdDeviation: blur, result: "soft" }),
+    svg("feDisplacementMap", { in: "soft", in2: "map", scale, xChannelSelector: "R", yChannelSelector: "G", result: "bent" }),
+    svg("feColorMatrix", { in: "bent", type: "saturate", values: 1.8 }));
+  lensDefs.append(filter);
+  let size = "";
+  new ResizeObserver(() => {
+    const w = target.offsetWidth, h = target.offsetHeight;
+    if (!w || !h || `${w}x${h}` === size) return;
+    size = `${w}x${h}`;
+    const radius = Math.min(parseFloat(getComputedStyle(target).borderTopLeftRadius) || 0, w / 2, h / 2);
+    map.setAttribute("href", lensMap(w, h, radius, Math.floor(Math.min(24, w / 4, h / 3))));
+    map.setAttribute("width", w);
+    map.setAttribute("height", h);
+    target.style.backdropFilter = `url(#${id})`;
+  }).observe(target);
+}
+glass($(".sidebar"));
+glass($("#drawer"));
+for (const item of document.querySelectorAll(".topbar .brand, .topbar .board-pick, .topbar .btn:not(.primary), .topbar .hint")) {
+  glass(item, { scale: 10, blur: 2 });
+}
+for (const dialog of document.querySelectorAll("dialog")) glass(dialog, { scale: 24, blur: 10 });
 
 // ------------------------------------------------ open chats in the editor
 //

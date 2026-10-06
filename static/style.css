@@ -17,6 +17,18 @@
   --warn: #b25000;
   --shadow: 0 0 0 transparent;
   --radius: 11px;
+  /* Liquid Glass: the panels' tint, rim light and shadow, and fills on top of glass */
+  --glass-rgb: 255 255 255;
+  --ga: .46;
+  --glass-edge: rgba(0, 0, 0, .12);
+  --glass-hi: rgba(255, 255, 255, .95);
+  --glass-lo: rgba(255, 255, 255, .35);
+  --glass-side: rgba(255, 255, 255, .25);
+  --glass-shadow: 0 10px 40px rgba(0, 0, 0, .12);
+  --field: rgba(118, 118, 128, .12);
+  --field-hover: rgba(118, 118, 128, .2);
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, .06), 0 6px 20px rgba(0, 0, 0, .06);
+  --scrim: rgba(0, 0, 0, .2);
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -36,6 +48,17 @@
     --ended: #636366;
     --error: #ff6961;
     --warn: #ff9f0a;
+    --glass-rgb: 30 30 32;
+    --ga: .5;
+    --glass-edge: rgba(0, 0, 0, .65);
+    --glass-hi: rgba(255, 255, 255, .22);
+    --glass-lo: rgba(255, 255, 255, .06);
+    --glass-side: rgba(255, 255, 255, .05);
+    --glass-shadow: 0 10px 40px rgba(0, 0, 0, .55);
+    --field: rgba(118, 118, 128, .24);
+    --field-hover: rgba(118, 118, 128, .34);
+    --card-shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 6px 20px rgba(0, 0, 0, .35);
+    --scrim: rgba(0, 0, 0, .45);
     color-scheme: dark;
   }
 }
@@ -44,6 +67,11 @@
   --border: #38383a; --text: #f5f5f7; --muted: #98989d; --accent: #2997ff;
   --accent-soft: #0a2e52; --on-accent: #000000; --ok: #30d158; --busy: #ff9f0a; --ended: #636366;
   --error: #ff6961; --warn: #ff9f0a; color-scheme: dark;
+  --glass-rgb: 30 30 32; --ga: .5; --glass-edge: rgba(0, 0, 0, .65); --glass-hi: rgba(255, 255, 255, .22);
+  --glass-lo: rgba(255, 255, 255, .06); --glass-side: rgba(255, 255, 255, .05);
+  --glass-shadow: 0 10px 40px rgba(0, 0, 0, .55); --field: rgba(118, 118, 128, .24);
+  --field-hover: rgba(118, 118, 128, .34); --card-shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 6px 20px rgba(0, 0, 0, .35);
+  --scrim: rgba(0, 0, 0, .45);
 }
 
 * { box-sizing: border-box; }
@@ -464,4 +492,83 @@ dialog select {
 @media (prefers-reduced-motion: reduce) {
   .wire.sending { animation: none; }
   #activity-box > summary::before, .btn, .icon-btn, .avail-row, .browse-item, .node { transition: none; }
+}
+
+/* ------------------------------------------------------------ Liquid Glass
+   The board fills the window. The sidebar, the top bar's items, the details
+   panel and the dialogs float over it as glass: tinted, lightly blurred, with
+   a lit rim. app.js adds the lensing (the bend at each panel's edge) in
+   Chromium. What sits on a glass panel uses plain fills, never glass on glass,
+   and the cards stay solid content. */
+:root { --side: min(var(--side-w, 280px), 42vw); --drawer: min(var(--drawer-w, 360px), 46vw); }
+body { position: relative; }
+.layout { position: relative; }
+#canvas { position: absolute; inset: 0; }
+#empty { left: calc(var(--side) + 24px); }
+
+.sidebar, #drawer, dialog,
+.topbar .brand, .topbar .board-pick, .topbar .btn:not(.primary), .topbar .hint {
+  background: rgb(var(--glass-rgb) / var(--ga));
+  border: 1px solid var(--glass-edge);
+  box-shadow: inset 0 1.5px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-lo),
+    inset 1px 0 0 var(--glass-side), inset -1px 0 0 var(--glass-side), var(--glass-shadow);
+  -webkit-backdrop-filter: blur(6px) saturate(180%);
+  backdrop-filter: blur(6px) saturate(180%);
+}
+
+.topbar {
+  position: absolute; z-index: 6; top: 12px; left: calc(var(--side) + 24px); right: 12px;
+  padding: 0; gap: 10px; row-gap: 8px; flex-wrap: wrap; background: none; border: 0;
+  pointer-events: none;  /* the board stays draggable between the items */
+}
+.topbar > * { pointer-events: auto; }
+.topbar .spacer { pointer-events: none; }
+body:has(#drawer:not([hidden])) .topbar { right: calc(var(--drawer) + 24px); }
+.topbar .brand, .topbar .board-pick, .topbar .btn, .topbar .hint {
+  min-height: 40px; box-sizing: border-box; border-radius: 999px; padding: 0 16px;
+  display: inline-flex; align-items: center;
+}
+.topbar .btn:not(.primary):hover { background: rgb(var(--glass-rgb) / calc(var(--ga) + .2)); }
+.topbar .hint { gap: 5px; }  /* a flex row drops the spaces around the handle dot */
+.topbar .board-pick select { background: transparent; border: 0; font-weight: 600; padding: 4px 2px; }
+.topbar .btn.primary { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35), 0 6px 18px rgba(0, 102, 204, .28); }
+@media (max-width: 900px) { .topbar .hint { display: none; } }
+
+.sidebar, #drawer { background: rgb(var(--glass-rgb) / calc(var(--ga) + .16)); }  /* text-heavy: more tint */
+.sidebar {
+  position: absolute; z-index: 5; top: 12px; left: 12px; bottom: 12px; width: var(--side);
+  box-sizing: border-box; border-radius: 24px; padding: 18px 16px;
+}
+#sidebar-resizer { position: absolute; z-index: 6; top: 12px; bottom: 12px; left: calc(4px + var(--side)); margin: 0; }
+
+#drawer {
+  position: absolute; z-index: 5; top: 12px; right: 12px; bottom: 12px; width: var(--drawer);
+  box-sizing: border-box; border-radius: 28px; padding: 18px 18px 18px 20px;
+}
+#drawer .close { right: 14px; top: 12px; }
+
+dialog {
+  border-radius: 28px; background: rgb(var(--glass-rgb) / calc(var(--ga) + .38));
+  -webkit-backdrop-filter: blur(16px) saturate(180%); backdrop-filter: blur(16px) saturate(180%);
+}
+dialog::backdrop { background: var(--scrim); }
+
+/* on a glass panel: plain fills */
+.sidebar .btn, #drawer .btn:not(.primary), dialog .btn:not(.primary) { background: var(--field); border-color: transparent; }
+.sidebar .btn:hover, #drawer .btn:not(.primary):hover, dialog .btn:not(.primary):hover,
+.avail-row:hover, #activity-box > summary:hover, dialog label.choice:hover { background: var(--field-hover); }
+dialog textarea, dialog input:not([type="checkbox"]):not([type="radio"]), dialog select, .send-box {
+  background: var(--field); border-color: transparent; border-radius: 12px;
+}
+dialog label.choice { background: var(--field); border-color: transparent; border-radius: 16px; }
+dialog label.choice:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+
+/* content stays solid: cards keep a soft shadow */
+.node { border-radius: 16px; box-shadow: var(--card-shadow); }
+.node.selected { box-shadow: 0 0 0 3px var(--accent-soft), var(--card-shadow); }
+
+@media (prefers-reduced-transparency: reduce) {
+  .sidebar, #drawer, dialog, .topbar .brand, .topbar .board-pick, .topbar .btn:not(.primary), .topbar .hint {
+    background: var(--panel) !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
+  }
 }
