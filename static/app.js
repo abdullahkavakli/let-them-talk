@@ -99,7 +99,18 @@ function nodePos(n) {
 
 function toWorld(evt) {
   const r = $("#canvas").getBoundingClientRect();
-  return { x: evt.clientX - r.left - state.pan.x, y: evt.clientY - r.top - state.pan.y };
+  return { x: (evt.clientX - r.left - state.pan.x) / state.zoom, y: (evt.clientY - r.top - state.pan.y) / state.zoom };
+}
+
+// The board's view: pan in screen pixels, then zoom (the mouse wheel; see the
+// wheel handler), both remembered per board.
+const ZOOM_MIN = 0.25, ZOOM_MAX = 1.5;
+function applyView() {
+  $("#world").style.transform = `translate(${state.pan.x}px, ${state.pan.y}px) scale(${state.zoom})`;
+}
+function saveView() {
+  store(`ltt.pan.${state.boardId}`, state.pan);
+  store(`ltt.zoom.${state.boardId}`, state.zoom);
 }
 
 // Same wording as who()/default_notes() in server.py, so the preview is what gets sent.
@@ -161,6 +172,7 @@ function selectBoard(id) {
   state.selected = null;
   state.localPos = {};
   state.pan = store(`ltt.pan.${id}`) || { x: 0, y: 0 };
+  state.zoom = store(`ltt.zoom.${id}`) || 1;
   state.fitPending = true;  // re-center once if the saved pan hides every card
   store("ltt.board", id);
   history.replaceState(null, "", `#board=${id}`);
@@ -194,7 +206,7 @@ function render() {
   const folderEl = $("#board-folder");
   if (folderEl.textContent !== v.board.folder) folderEl.replaceChildren(...pathNodes(v.board.folder));
   folderEl.title = v.board.folder;
-  $("#world").style.transform = `translate(${state.pan.x}px, ${state.pan.y}px)`;
+  applyView();
   $("#empty").hidden = v.nodes.length > 0;
   renderNodes();
   if (state.fitPending && v.nodes.length) {
@@ -231,13 +243,14 @@ function anyCardInView() {
   const v = viewBox();
   return state.view.nodes.some((n) => {
     const b = cardBox(n);
-    return b.x1 + state.pan.x > v.left && b.x0 + state.pan.x < v.right &&
-      b.y1 + state.pan.y > v.top && b.y0 + state.pan.y < v.bottom;
+    const z = state.zoom;
+    return b.x1 * z + state.pan.x > v.left && b.x0 * z + state.pan.x < v.right &&
+      b.y1 * z + state.pan.y > v.top && b.y0 * z + state.pan.y < v.bottom;
   });
 }
 
-// Pan so all cards (and subagents on show) are centered in the uncovered part
-// of the board (or start at its top left if they don't fit).
+// Zoom out (never past 100%) and pan so all cards (and subagents on show) are
+// centered in the uncovered part of the board.
 function fitView() {
   const nodes = state.view?.nodes || [];
   if (!nodes.length) return;
@@ -245,10 +258,12 @@ function fitView() {
   const boxes = [...nodes.map(cardBox), ...subBoxes()];
   const x0 = Math.min(...boxes.map((b) => b.x0)), x1 = Math.max(...boxes.map((b) => b.x1));
   const y0 = Math.min(...boxes.map((b) => b.y0)), y1 = Math.max(...boxes.map((b) => b.y1));
-  const place = (lo, hi, a, b) => (hi - lo > b - a - 80 ? a + 40 - lo : a + (b - a - (hi - lo)) / 2 - lo);
+  const z = state.zoom = Math.max(ZOOM_MIN, Math.min(1,
+    (v.right - v.left - 80) / (x1 - x0 || 1), (v.bottom - v.top - 80) / (y1 - y0 || 1)));
+  const place = (lo, hi, a, b) => ((hi - lo) * z > b - a - 80 ? a + 40 - lo * z : a + (b - a - (hi - lo) * z) / 2 - lo * z);
   state.pan = { x: Math.round(place(x0, x1, v.left, v.right)), y: Math.round(place(y0, y1, v.top, v.bottom)) };
-  store(`ltt.pan.${state.boardId}`, state.pan);
-  $("#world").style.transform = `translate(${state.pan.x}px, ${state.pan.y}px)`;
+  saveView();
+  applyView();
   renderWires();
 }
 
@@ -908,8 +923,8 @@ function addNode(sessionId) {
   const count = state.view.nodes.length;
   act("add", {
     sessionId,
-    x: r.width / 2 - state.pan.x - NODE_W / 2 + (count % 5) * 18,
-    y: r.height / 3 - state.pan.y + (count % 5) * 18,
+    x: Math.round((r.width / 2 - state.pan.x) / state.zoom - NODE_W / 2 + (count % 5) * 18),
+    y: Math.round((r.height / 3 - state.pan.y) / state.zoom + (count % 5) * 18),
   });
 }
 
@@ -979,6 +994,21 @@ canvas.addEventListener("pointerdown", (evt) => {
   if (state.drag) canvas.setPointerCapture(evt.pointerId);
 });
 
+// The mouse wheel zooms around the pointer, like a map: down zooms out.
+canvas.addEventListener("wheel", (evt) => {
+  evt.preventDefault();
+  const r = canvas.getBoundingClientRect(), cx = evt.clientX - r.left, cy = evt.clientY - r.top;
+  const step = evt.deltaMode === 1 ? evt.deltaY * 16 : evt.deltaMode === 2 ? evt.deltaY * r.height : evt.deltaY;
+  const z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, state.zoom * Math.exp(-step * 0.0015)));
+  if (z === state.zoom) return;
+  const wx = (cx - state.pan.x) / state.zoom, wy = (cy - state.pan.y) / state.zoom;
+  state.zoom = z;
+  state.pan = { x: cx - wx * z, y: cy - wy * z };
+  applyView();
+  clearTimeout(state.viewSave);
+  state.viewSave = setTimeout(saveView, 300);
+}, { passive: false });
+
 canvas.addEventListener("pointermove", (evt) => {
   if (state.connecting) return drawDraft(evt);
   const d = state.drag;
@@ -987,7 +1017,7 @@ canvas.addEventListener("pointermove", (evt) => {
   if (Math.abs(dx) + Math.abs(dy) > 3) d.moved = true;
   if (!d.moved) return;
   if (d.kind === "node") {
-    state.localPos[d.id] = { x: Math.round(d.ox + dx), y: Math.round(d.oy + dy) };
+    state.localPos[d.id] = { x: Math.round(d.ox + dx / state.zoom), y: Math.round(d.oy + dy / state.zoom) };
     const node = $(`#nodes [data-id="${d.id}"]`);
     node.style.left = `${state.localPos[d.id].x}px`;
     node.style.top = `${state.localPos[d.id].y}px`;
@@ -995,7 +1025,7 @@ canvas.addEventListener("pointermove", (evt) => {
     renderSubagents();
   } else {
     state.pan = { x: d.ox + dx, y: d.oy + dy };
-    $("#world").style.transform = `translate(${state.pan.x}px, ${state.pan.y}px)`;
+    applyView();
   }
 });
 
@@ -1011,7 +1041,7 @@ canvas.addEventListener("pointerup", async (evt) => {
   canvas.classList.remove("panning");
   if (!d) return;
   if (d.kind === "pan") {
-    if (d.moved) store(`ltt.pan.${state.boardId}`, state.pan);
+    if (d.moved) saveView();
     else if (d.sub) openSubCard(d.sub);
     else if (state.selected) closeDrawer();
     return;
@@ -1060,8 +1090,8 @@ function revealFocused(target) {
   const dy = b.top < r.top ? r.top - b.top + 40 : b.bottom > r.bottom ? r.bottom - b.bottom - 40 : 0;
   if (!dx && !dy) return;
   state.pan = { x: Math.round(state.pan.x + dx), y: Math.round(state.pan.y + dy) };
-  $("#world").style.transform = `translate(${state.pan.x}px, ${state.pan.y}px)`;
-  store(`ltt.pan.${state.boardId}`, state.pan);
+  applyView();
+  saveView();
 }
 
 // ---------------------------------------------------------- connect dialog

@@ -72,7 +72,8 @@ installed inside WSL, where the server runs.
 - **End this chat** (a chat in a terminal): its Claude Code exits as if you
   closed the window, which stays open. The conversation is kept;
   `claude --resume <id>` continues it. Chats in an editor are closed there.
-- **Arrange:** drag cards and the background; drag a panel's inner edge to
+- **Arrange:** drag cards and the background; the mouse wheel zooms (down to
+  zoom out, up to zoom in) around the pointer; drag a panel's inner edge to
   resize it (double-click resets). **Fit view** brings every card into sight.
   Esc cancels an arrow or closes the details.
 
