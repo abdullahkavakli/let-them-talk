@@ -65,6 +65,10 @@ function store(key, value) {
 
 const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const folderName = (cwd) => (cwd || "").replace(/\/+$/, "").split("/").pop() || cwd || "?";
+// A path as one span per folder name (with its slash), kept together by CSS,
+// so a long path wraps between folder names, never inside one.
+const pathNodes = (path) => String(path || "").split(/(?<=[/\\])/)
+  .map((part) => el("span", { class: "seg", text: part }));
 // The server reads the editor (Cursor, VS Code, ...) from the claude binary's path.
 // A background agent shown in a terminal (or editor) says so; see shownIn in server.py.
 const opener = (n) => n.background ? n.shownIn || "Background" : n.editor ||
@@ -172,7 +176,7 @@ function render() {
   const v = state.view;
   if (!v) return;
   fillBoardSelect(v.boards);
-  $("#board-folder").textContent = v.board.folder;
+  $("#board-folder").replaceChildren(...pathNodes(v.board.folder));
   $("#board-folder").title = v.board.folder;
   $("#world").style.transform = `translate(${state.pan.x}px, ${state.pan.y}px)`;
   $("#empty").hidden = v.nodes.length > 0;
@@ -341,7 +345,7 @@ function renderAvailable() {
     return;
   }
   box.replaceChildren(...folders.map((cwd) => el("div", { class: "folder-group" },
-    el("p", { class: "folder-name mono", text: cwd, title: cwd }),
+    el("p", { class: "folder-name path", title: cwd }, pathNodes(cwd)),
     ...groups[cwd].map((s) => el("div", { class: "avail-row" },
       el("span", { class: `dot ${s.status}`, title: s.status, role: "img", "aria-label": s.status }),
       el("span", { class: "name", text: display(s), title: [s.name && `@${s.name}`, onWindows(s) ? "Windows" : "WSL", opener(s), s.status].filter(Boolean).join(" · ") }),
@@ -487,7 +491,7 @@ function nodeDetails(n) {
       el("dt", { text: "Address" }), el("dd", { class: "mono small", text: `@${n.name}` }),
       el("dt", { text: "Status" }), el("dd", { text: n.live ? n.status : "session ended" }),
       el("dt", { text: "Runs on" }), el("dd", { text: onWindows(n) ? "Windows" : hostLabel() }),
-      el("dt", { text: "Folder" }), el("dd", { class: "mono small", text: where(n) }),
+      el("dt", { text: "Folder" }), el("dd", { class: "small path" }, pathNodes(where(n))),
       n.messageBlock && [el("dt", { text: "Notes" }), el("dd", { class: "small", text: `Can't receive notes. ${n.messageBlock}` })],
       n.live && [el("dt", { text: "Opened in" }), el("dd", { text: opener(n) || "?" })],
       n.model && [el("dt", { text: "Model" }), el("dd", { text: modelName(n.model) })],
