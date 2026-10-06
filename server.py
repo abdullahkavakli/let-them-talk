@@ -1141,6 +1141,14 @@ def list_boards():
     return boards
 
 
+def delete_board(bid):
+    """Remove a board: its cards, arrows and activity go. The sessions and the
+    folder are untouched, and no agent is told."""
+    with lock:
+        board_path(bid).unlink(missing_ok=True)
+    return {"deleted": bid}
+
+
 DIR_LIMIT = 1000
 
 
@@ -2197,6 +2205,7 @@ class Handler(BaseHTTPRequestHandler):
                     "layout": lambda: update_layout(bid, body),
                     "add": lambda: add_node(bid, body),
                     "remove": lambda: remove_node(bid, body),
+                    "delete": lambda: delete_board(bid),
                 }
                 if action in handlers:
                     result = handlers[action]()

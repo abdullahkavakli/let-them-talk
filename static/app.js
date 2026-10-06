@@ -963,6 +963,28 @@ start().catch((e) => {
 
 $("#fit-view").addEventListener("click", fitView);
 
+// Delete the board on screen, then show another (or ask for a new one).
+$("#delete-board").addEventListener("click", async () => {
+  const board = state.view?.board;
+  if (!board || !confirm(`Delete the board "${board.title}"? Its cards and arrows go; ` +
+    "the sessions keep running and no agent is told.")) return;
+  try {
+    await api(`/api/board/${board.id}/delete`, {});
+  } catch (e) {
+    return toast(`Could not delete the board: ${e.message}`, "error");
+  }
+  try { localStorage.removeItem(`ltt.pan.${board.id}`); } catch { /* storage off */ }
+  toast(`Deleted the board "${board.title}".`, "ok");
+  // Clear it off the page first: if it was the last board, start() only opens
+  // New board, and the old cards (and polling) must not linger behind it.
+  clearTimeout(state.pollTimer);
+  Object.assign(state, { boardId: null, view: null, selected: null });
+  $("#drawer").hidden = true;
+  for (const layer of ["#nodes", "#labels", "#wire-layer"]) $(layer).replaceChildren();
+  $("#board-folder").textContent = "—";
+  start();
+});
+
 // Side panels: drag the inner edge to resize, double-click it to reset; the
 // width is remembered. dir is +1 when the edge is on the panel's right side.
 // The width goes into a CSS variable, since the top bar sits beside the panels.
