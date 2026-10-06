@@ -408,6 +408,12 @@ function renderDrawer() {
   const body = $("#drawer-body");
   const sel = state.selected;
   if (!sel) return;
+  // A click needs the same button under the press and the release, so while
+  // a mouse button is held in the panel it is redrawn only after the release.
+  if (state.pressing) {
+    state.redrawAfterPress = true;
+    return;
+  }
   const active = document.activeElement;
   const keep = active?.id && body.contains(active)
     ? { id: active.id, start: active.selectionStart, end: active.selectionEnd } : null;
@@ -428,6 +434,17 @@ function drawDrawer(body, sel) {
     body.replaceChildren(...nodeDetails(n).filter(Boolean));
   }
   $("#drawer").hidden = false;
+}
+
+$("#drawer").addEventListener("pointerdown", () => { state.pressing = true; });
+for (const type of ["pointerup", "pointercancel"]) {
+  window.addEventListener(type, () => {
+    if (!state.pressing) return;
+    state.pressing = false;
+    if (!state.redrawAfterPress) return;
+    state.redrawAfterPress = false;
+    setTimeout(renderDrawer);  // after the click this release makes
+  }, true);
 }
 
 const STATE_TEXT = { sent: "✓ sent", altered: "⚠ sent, reworded", failed: "✗ failed", sending: "sending…", skipped: "not sent" };
@@ -542,7 +559,7 @@ function removeControls(n, conns) {
   return el("div", { class: "drawer-actions" },
     liveEnds > 0 && el("label", { class: "small check" }, notify, " Tell connected agents"),
     el("button", {
-      class: conns.length ? "btn danger" : "btn",
+      class: "btn danger",
       text: conns.length ? `Remove from board with ${arrows}` : "Remove from board",
       onclick: async () => {
         if (conns.length && !confirm(`Remove ${display(n)} and ${arrows} from the board?`)) return;

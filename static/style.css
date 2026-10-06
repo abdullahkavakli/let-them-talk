@@ -248,8 +248,10 @@ body.connecting .node:not(.ended) { cursor: copy; }
 #drawer {
   width: 360px; flex: none; position: relative;
   background: var(--panel); border-left: 1px solid var(--border);
-  padding: 16px; overflow-y: auto;
+  display: flex; flex-direction: column; overflow: hidden;
 }
+/* Only the contents scroll; the close button and the resize grip stay put. */
+#drawer-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; }
 #drawer .close { position: absolute; right: 10px; top: 8px; }
 #drawer h3 { margin: 0 0 10px; font-size: 15px; padding-right: 24px; }
 #drawer dl { display: grid; grid-template-columns: 90px 1fr; gap: 6px 10px; margin: 0 0 14px; font-size: 13px; }
@@ -546,8 +548,9 @@ body:has(#drawer:not([hidden])) .topbar { right: calc(var(--drawer) + 24px); }
 
 #drawer {
   position: absolute; z-index: 5; top: 12px; right: 12px; bottom: 12px; width: var(--drawer);
-  box-sizing: border-box; border-radius: 28px; padding: 18px 18px 18px 20px;
+  box-sizing: border-box; border-radius: 28px;
 }
+#drawer-body { padding: 18px 18px 18px 20px; }
 #drawer .close { right: 14px; top: 12px; }
 
 dialog {
