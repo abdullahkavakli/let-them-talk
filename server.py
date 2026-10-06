@@ -189,6 +189,94 @@ def session_title(sid):
         return c["custom"] or c["ai"]
 
 
+# ----------------------------------------- messages between sessions (arrows)
+
+peer_lock = threading.Lock()
+peer_cache = {}  # transcript path -> read offset and the messages found so far
+PEER_SCAN = (b'"kind":"peer"', b'"msg_id"', b'"SendMessage"')  # lines worth parsing
+AGENT_MESSAGE_RE = re.compile(r"^\s*<agent-message[^>]*>\s*(.*?)\s*</agent-message>\s*$", re.S)
+
+
+def _peer_record(c, line):
+    """Note a received message, a SendMessage call, or the result that gives
+    the call its msg_id. Sender and receiver records share that msg_id."""
+    try:
+        rec = json.loads(line)
+    except ValueError:
+        return
+    if not isinstance(rec, dict) or rec.get("isSidechain"):
+        return
+    kind = rec.get("type")
+    at = (_ms(rec.get("timestamp")) or 0) / 1000
+    origin, raw = None, ""
+    if kind == "user":
+        origin, raw = rec.get("origin"), _text_of((rec.get("message") or {}).get("content"))
+    elif kind == "attachment":
+        att = rec.get("attachment") or {}
+        if att.get("type") == "queued_command":  # read mid-turn
+            origin, raw = att.get("origin"), _text_of(att.get("prompt"))
+    if isinstance(origin, dict) and origin.get("kind") == "peer" and origin.get("msg_id"):
+        text = origin.get("body")
+        if not isinstance(text, str):
+            hit = PEER_RE.search(raw or "")
+            text = hit.group(2) if hit else (raw or "").strip()
+        unwrapped = AGENT_MESSAGE_RE.match(text)
+        c["recv"].setdefault(origin["msg_id"], {"at": at, "from": str(origin.get("name") or ""),
+                                                "text": unwrapped.group(1) if unwrapped else text})
+        return
+    content = (rec.get("message") or {}).get("content")
+    if kind == "assistant" and isinstance(content, list):
+        for b in content:
+            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "SendMessage":
+                inp = b.get("input") or {}
+                if isinstance(inp.get("message"), str) and inp["message"].strip():
+                    c["calls"][b.get("id")] = {"at": at, "to": str(inp.get("to") or inp.get("recipient") or ""),
+                                               "text": inp["message"]}
+    elif kind == "user" and isinstance(content, list):
+        res = rec.get("toolUseResult")
+        if isinstance(res, dict) and res.get("success") and res.get("msg_id"):
+            for b in content:
+                call = isinstance(b, dict) and b.get("type") == "tool_result" and c["calls"].pop(b.get("tool_use_id"), None)
+                if call:
+                    c["sent"].setdefault(res["msg_id"], call)
+
+
+def peer_log(sid):
+    """What a session received from other sessions and sent to them, from its
+    transcript: {"recv": {msg_id: {at, from, text}}, "sent": {msg_id: {at, to,
+    text}}}. Only bytes appended since the last call are read."""
+    session_title(sid)  # finds and caches the transcript's path
+    path = (title_cache.get(sid) or {}).get("path")
+    if path is None:
+        return {"recv": {}, "sent": {}}
+    with peer_lock:
+        c = peer_cache.setdefault(str(path), {"offset": 0, "recv": {}, "sent": {}, "calls": {}})
+        try:
+            size = path.stat().st_size
+            if size < c["offset"]:  # transcript replaced: read it again
+                c.update(offset=0, recv={}, sent={}, calls={})
+            with path.open("rb") as f:
+                f.seek(c["offset"])
+                while c["offset"] < size:
+                    block = f.read(min(TITLE_READ_BLOCK, size - c["offset"]))
+                    if not block:
+                        break
+                    end = block.rfind(b"\n") + 1
+                    if end == 0:
+                        if len(block) < TITLE_READ_BLOCK:
+                            break  # a line still being written; finish it next time
+                        c["offset"] += len(block)
+                        continue
+                    for line in block[:end].splitlines():
+                        if any(k in line for k in PEER_SCAN):
+                            _peer_record(c, line)
+                    c["offset"] += end
+                    f.seek(c["offset"])
+        except OSError:
+            pass
+        return {"recv": dict(c["recv"]), "sent": dict(c["sent"])}
+
+
 model_cache = {}  # transcript path -> ((mtime_ns, size), model)
 MODEL_TAIL = 512 << 10
 
@@ -1530,8 +1618,12 @@ def sync_board(board, live):
         board["nodes"].setdefault(new, board["nodes"].pop(old))
         seen, kept = set(), []
         for c in board["connections"]:
-            c["from"] = new if c["from"] == old else c["from"]
-            c["to"] = new if c["to"] == old else c["to"]
+            for end in ("from", "to"):
+                if c[end] == old:
+                    c[end] = new
+                    past = c.setdefault("past", {}).setdefault(new, [])  # earlier talk is in old's transcript
+                    if old not in past:
+                        past.append(old)
             if c["from"] != c["to"] and (c["from"], c["to"]) not in seen:
                 seen.add((c["from"], c["to"]))
                 kept.append(c)
@@ -1572,6 +1664,68 @@ def sync_board(board, live):
             del board["nodes"][sid]
             changed = True
     return changed
+
+
+TALK_LIMIT = 50
+
+
+def _bare_address(to):
+    """A SendMessage `to` as a plain name: no leading "@", no " [ref]"."""
+    return re.sub(r"\s*\[[0-9a-fA-F]+\]$", "", str(to or "").strip()).lstrip("@")
+
+
+def talk_history(bid, conn_id, limit=TALK_LIMIT):
+    """What an arrow's two chats sent each other, from both transcripts, oldest
+    first: messages matched by msg_id, sends the other side hasn't read yet,
+    and the arrow's own notes from this app. A->B and B->A arrows share it."""
+    board = load_board(bid)
+    if board is None:
+        raise ValueError("no such board")
+    conn = next((c for c in board["connections"] if c["id"] == conn_id), None)
+    if conn is None:
+        raise ValueError("no such arrow")
+    a, b = conn["from"], conn["to"]
+    past = conn.get("past") or {}
+    sides = {a: [a, *past.get(a, [])], b: [b, *past.get(b, [])]}
+    logs = {}
+    for end, sids in sides.items():
+        merged = {"recv": {}, "sent": {}}
+        for sid in sids:
+            got = peer_log(sid)
+            for k in merged:
+                for mid, m in got[k].items():
+                    merged[k].setdefault(mid, m)
+        logs[end] = merged
+    names = {end: {x for sid in sids for x in ((board["nodes"].get(sid) or {}).get("name"),
+                                                (board["nodes"].get(sid) or {}).get("title")) if x}
+             for end, sids in sides.items()}
+    pids = {s["sessionId"]: s.get("pid") for s in live_sessions()}
+    msgs = {}
+    for src, dst in ((a, b), (b, a)):
+        sent, recv = logs[src]["sent"], logs[dst]["recv"]
+        for mid, s in sent.items():
+            got = recv.get(mid)
+            to_dst = (_bare_address(s["to"]) in names[dst]
+                      or (pids.get(dst) and s["to"].endswith(f"/{pids[dst]}.sock")))
+            if got or to_dst:
+                msgs[mid] = {"id": mid, "from": src, "to": dst, "at": s["at"], "kind": "peer",
+                             "text": got["text"] if got else s["text"], "state": "read" if got else "unread"}
+        for mid, got in recv.items():  # the sender's own transcript may be gone
+            if mid not in msgs and got["from"] in names[src]:
+                msgs[mid] = {"id": mid, "from": src, "to": dst, "at": got["at"], "kind": "peer",
+                             "text": got["text"], "state": "read"}
+    for end, sid in (("from", a), ("to", b)):  # the notes this app delivered for the arrow
+        note = (conn.get("notes") or {}).get(end) or {}
+        if note.get("enabled") and (note.get("sentText") or note.get("text")):
+            msgs[f"note-{end}"] = {"id": f"note-{conn['id']}-{end}", "from": None, "to": sid, "kind": "app",
+                                   "at": note.get("sentAt") or conn.get("createdAt") or 0,
+                                   "text": note.get("sentText") or note.get("text"), "state": note.get("state")}
+    ordered = sorted(msgs.values(), key=lambda m: m["at"])
+    created = conn.get("createdAt") or 0
+    for m in ordered:
+        m["before"] = m["at"] < created
+    limit = max(1, min(int(limit), 500))
+    return {"messages": ordered[-limit:], "total": len(ordered), "createdAt": created}
 
 
 def board_view(bid, subagents=False):
@@ -2455,6 +2609,13 @@ class Handler(BaseHTTPRequestHandler):
                         watch_started[sid] = now
                     watched[sid] = now
                 return self._send(HTTPStatus.OK, session_chat(sid))
+            except ValueError as e:
+                return self._send(HTTPStatus.BAD_REQUEST, {"error": str(e)})
+        if url.path == "/api/talk":  # an arrow's conversation
+            try:
+                query = parse_qs(url.query)
+                return self._send(HTTPStatus.OK, talk_history(query.get("board", [""])[0], query.get("conn", [""])[0],
+                                                              query.get("limit", [TALK_LIMIT])[0]))
             except ValueError as e:
                 return self._send(HTTPStatus.BAD_REQUEST, {"error": str(e)})
         if url.path == "/api/suggestion/wanted":

@@ -17,6 +17,10 @@ const state = {
   chat: {},              // sessionId -> /api/chat response for the open drawer
   runOpen: {},           // runId (or "direct:<sid>") -> expanded in the drawer
   chatOpen: {},          // message id -> shown in full in the drawer
+  talk: {},              // arrow id -> /api/talk response (what its two chats sent each other)
+  talkBusy: {},          // arrow id -> a /api/talk request is in flight
+  talkLimit: {},         // arrow id -> how many messages to load ("Show earlier" raises it)
+  notifyOff: {},         // arrow id -> "Tell both agents" unticked (kept across redraws)
   showSubs: store("ltt.subagents") === true,  // running subagents drawn on the board
   subSpot: {},           // sessionId -> where its subagents sat, relative to its card
   subInfo: {},           // "sessionId:agentId" -> /api/subagent response for the open drawer
@@ -189,6 +193,7 @@ async function poll() {
       render();
       if (state.selected?.type === "node") loadDetails(state.selected.id);
       else if (state.selected?.type === "sub") loadSub(state.selected);
+      else if (state.selected?.type === "wire") loadTalk(state.selected.id);
     } catch (e) {
       console.warn("poll failed", e);
     }
@@ -587,6 +592,21 @@ function select_(sel) {
   renderDrawer();
   if (sel.type === "node") loadDetails(sel.id);
   else if (sel.type === "sub") loadSub(sel);
+  else if (sel.type === "wire") loadTalk(sel.id);
+}
+
+// An arrow's conversation: what its two chats sent each other.
+async function loadTalk(id) {
+  if (state.talkBusy[id]) return;
+  state.talkBusy[id] = true;
+  const limit = state.talkLimit[id] || 50;
+  try {
+    state.talk[id] = await api(`/api/talk?board=${encodeURIComponent(state.boardId)}` +
+      `&conn=${encodeURIComponent(id)}&limit=${limit}`).catch((e) => ({ error: e.message }));
+  } finally {
+    state.talkBusy[id] = false;
+  }
+  if (state.selected?.type === "wire" && state.selected.id === id) renderDrawer();
 }
 
 async function loadDetails(sid) {
@@ -679,7 +699,9 @@ function wireDetails(c) {
         el("p", { class: "small muted", text: "What the relay actually sent:" }),
         el("pre", { class: "mono", text: note.sentText })));
   });
-  const notify = el("input", { type: "checkbox", id: "d-notify", checked: true });
+  // its state lives in `state`: the drawer is redrawn on every poll
+  const notify = el("input", { type: "checkbox", id: "d-notify", checked: !state.notifyOff[c.id],
+    onchange: (e) => { state.notifyOff[c.id] = !e.target.checked; } });
   const failed = Object.values(c.notes).some((n) => n.enabled && n.state === "failed");
   return [
     el("h3", { text: `${a ? display(a) : "?"} → ${b ? display(b) : "?"}` }),
@@ -687,7 +709,8 @@ function wireDetails(c) {
       el("dt", { text: "Why" }), el("dd", { text: c.reason.trim() || "no reason given" }),
       el("dt", { text: "Connected" }), el("dd", { text: new Date(c.createdAt * 1000).toLocaleString() }),
       el("dt", { text: "Status" }), el("dd", { text: c.status })),
-    ...notes,
+    ...talkSection(c),
+    group(`notes:${c.id}`, failed, [el("span", { class: "run-name", text: "Notes sent when connected" })], notes),
     el("div", { class: "drawer-actions" },
       failed && el("button", { class: "btn", text: "Resend failed notes", onclick: () => act("resend", { id: c.id }) }),
       !c.notes.from.enabled && a?.live && el("button", {
@@ -1641,6 +1664,45 @@ function planBlock(n, plan) {
       class: "fold", text: open ? "Hide the plan" : "Show the whole plan",
       onclick: () => { state.chatOpen[key] = !open; renderDrawer(); },
     }));
+}
+
+// An arrow's conversation: its first chat on the left, the other on the right,
+// the app's own notes in between; messages from before the arrow are faded.
+function talkSection(c) {
+  const data = state.talk[c.id];
+  const head = el("h2", { text: "Conversation" });
+  if (!data) return [head, el("p", { class: "muted small", text: "Loading…" })];
+  if (data.error) return [head, el("p", { class: "error small", text: data.error })];
+  if (!data.messages.length) return [head, el("p", { class: "muted small", text: "They haven't messaged each other yet." })];
+  const items = [];
+  let marked = !data.messages[0].before;  // no divider when nothing came before the arrow
+  for (const m of data.messages) {
+    if (!marked && !m.before) {
+      items.push(el("p", { class: "talk-divider", text: `Arrow connected · ${clock(data.createdAt)}` }));
+      marked = true;
+    }
+    items.push(talkMessage(m, c));
+  }
+  const earlier = data.total - data.messages.length;
+  return [head,
+    earlier > 0 && el("button", { class: "fold", text: `Show ${Math.min(earlier, 50)} earlier`,
+      onclick: () => { state.talkLimit[c.id] = (state.talkLimit[c.id] || 50) + 50; loadTalk(c.id); } }),
+    el("div", { class: "chat talk" }, ...items)];
+}
+
+function talkMessage(m, c) {
+  const name = (id) => { const n = nodeById(id); return n ? display(n) : "an earlier chat"; };
+  const open = !!state.chatOpen[m.id];
+  const long = m.text.length > FOLD_CHARS || m.text.split("\n").length > FOLD_LINES;
+  const side = m.kind === "app" ? "sys" : m.from === c.from ? "left" : "right";
+  const meta = m.kind === "app"
+    ? `Let Them Talk → ${name(m.to)} · ${clock(m.at)}${m.state ? ` · ${STATE_TEXT[m.state] || m.state}` : ""}`
+    : `${name(m.from)} · ${clock(m.at)}${m.state === "unread" ? " · not read yet" : ""}`;
+  return el("div", { class: `msg ${side}${m.before ? " before" : ""}` },
+    el("div", { class: "msg-meta", text: meta }),
+    el("div", { class: "bubble" + (long && !open ? " folded" : ""), text: m.text }),
+    long && el("button", { class: "fold", text: open ? "Show less" : "Show all",
+      onclick: () => { state.chatOpen[m.id] = !open; renderDrawer(); } }));
 }
 
 function chatMessage(m, activity) {

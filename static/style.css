@@ -680,3 +680,13 @@ body { font-family: var(--font-ui); }
 .agent-row[role="button"] { cursor: pointer; border-radius: 8px; }
 .agent-row[role="button"]:hover { background: var(--field-hover); }
 .agent-row[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* An arrow's conversation: its first chat on the left, the other on the
+   right, the app's notes centred; messages from before the arrow faded. */
+.talk .msg.left { align-self: flex-start; align-items: flex-start; }
+.talk .msg.right { align-self: flex-end; align-items: flex-end; }
+.talk .msg.right .bubble { border-radius: 18px 18px 6px 18px; background: var(--accent-soft); border-color: transparent; }
+.talk .msg.sys { align-self: center; align-items: center; max-width: 94%; }
+.talk .msg.sys .bubble { background: transparent; border-style: dashed; color: var(--muted); font-size: 12px; }
+.talk .msg.before { opacity: .55; }
+.talk-divider { margin: 2px 0; text-align: center; font-size: 11.5px; color: var(--muted); }
