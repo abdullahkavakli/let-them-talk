@@ -766,6 +766,7 @@ function nodeDetails(n) {
     })),
     ...chatSection(n),
     ...sendSection(n),
+    ...workflowSection(n),
     ...(n.background ? backgroundSection(n) : []),
     ...agentsSection(n),
     el("h2", { text: "Connections" }),
@@ -1828,29 +1829,12 @@ function sendSection(n) {
   const button = el("button", {
     class: "btn primary", disabled: sending,
     text: sending ? "Sending…" : asPrompt ? "Send prompt" : "Send message",
-    onclick: async () => {
+    onclick: () => {
       const sid = n.sessionId, text = box.value.trim();
       if (!text) return box.focus();
-      // Shown in the chat at once, like a phone; it gives way to the real
-      // message once the chat has read it (see settleOutbox).
-      const out = { text, at: Date.now() / 1000, state: "sending" };
-      (state.outbox[sid] ||= []).push(out);
       state.drafts[sid] = "";
-      state.sending.add(sid);
-      renderDrawer();
-      try {
-        if (await sendTo(n, text)) {
-          out.state = "sent";
-        } else {
-          state.outbox[sid] = state.outbox[sid].filter((o) => o !== out);
-          // Back into the box to fix and resend, unless something new was typed meanwhile.
-          if (!(state.drafts[sid] || "").trim()) state.drafts[sid] = text;
-        }
-      } finally {
-        state.sending.delete(sid);
-        renderDrawer();
-        poll();
-      }
+      // Back into the box to fix and resend, unless something new was typed meanwhile.
+      sendAsBubble(n, text, () => { if (!(state.drafts[sid] || "").trim()) state.drafts[sid] = text; });
     },
   });
   return [
@@ -1861,6 +1845,73 @@ function sendSection(n) {
       : "It arrives as a message from Let Them Talk and is read between its steps.") +
       " Enter sends; Shift+Enter adds a line." }),
     el("div", { class: "drawer-actions" }, button),
+  ];
+}
+
+// Sends text to a chat, shown in it at once as your bubble, like a phone; the
+// bubble gives way to the real message once the chat has read it (see
+// settleOutbox). If sending fails, the bubble goes and failed() runs.
+async function sendAsBubble(n, text, failed) {
+  const sid = n.sessionId, out = { text, at: Date.now() / 1000, state: "sending" };
+  (state.outbox[sid] ||= []).push(out);
+  state.sending.add(sid);
+  renderDrawer();
+  try {
+    if (await sendTo(n, text)) {
+      out.state = "sent";
+    } else {
+      state.outbox[sid] = state.outbox[sid].filter((o) => o !== out);
+      failed();
+    }
+  } finally {
+    state.sending.delete(sid);
+    renderDrawer();
+    poll();
+  }
+}
+
+// Run a workflow: the chat is asked, in your words, to use a Claude Code
+// workflow for a task; its agents then show under Subagents. Only the task
+// is needed.
+const WF_AGENTS = ["", "2", "3", "4", "6", "8"];
+const WF_MODELS = { "": "Its choice", fable: "Fable", opus: "Opus", sonnet: "Sonnet", haiku: "Haiku" };
+state.wf = {};  // sessionId -> {task, agents, model} typed into its Run a workflow box
+
+function workflowPrompt({ task, agents, model }) {
+  return [`Use a workflow to do this: ${task.trim()}`,
+    agents && `Use ${agents} agents.`, model && `Run its agents on ${WF_MODELS[model]}.`].filter(Boolean).join("\n");
+}
+
+function workflowSection(n) {
+  if (!canReach(n)) return [];
+  const sid = n.sessionId, wf = state.wf[sid] ||= { task: "", agents: "", model: "" };
+  const pick = (key, options) => el("select", { id: `wf-${key}`, onchange: (e) => { wf[key] = e.target.value; } },
+    ...Object.entries(options).map(([value, text]) => el("option", { value, text, selected: wf[key] === value })));
+  const task = el("textarea", {
+    id: "wf-task", rows: 2, class: "send-box", placeholder: "What should it do? e.g. review the open diff for bugs",
+    oninput: (e) => { wf.task = e.target.value; },
+  });
+  task.value = wf.task;
+  const sending = state.sending.has(sid);
+  return [
+    el("h2", { text: "Run a workflow" }),
+    task,
+    el("div", { class: "wf-options" },
+      el("label", {}, "Agents", pick("agents", Object.fromEntries(WF_AGENTS.map((v) => [v, v || "Its choice"])))),
+      el("label", {}, "Model", pick("model", WF_MODELS))),
+    el("p", { class: "muted small", text: (promptable(n)
+      ? "It gets this as your next prompt and starts a Claude Code workflow."
+      : "It arrives as a message from you through Let Them Talk; the chat may ask you to confirm before it starts.") +
+      " Its agents show under Subagents." }),
+    el("div", { class: "drawer-actions" }, el("button", {
+      class: "btn primary", disabled: sending, text: sending ? "Sending…" : "Run workflow",
+      onclick: () => {
+        if (!wf.task.trim()) return task.focus();
+        const text = workflowPrompt(wf), typed = wf.task;
+        wf.task = "";
+        sendAsBubble(n, text, () => { if (!wf.task.trim()) wf.task = typed; });
+      },
+    })),
   ];
 }
 

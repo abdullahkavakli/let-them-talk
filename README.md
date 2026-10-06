@@ -98,6 +98,12 @@ installed inside WSL, where the server runs.
     woken with it. If sending fails, the text goes back into
     the box. When the chat waits for you, the box shows a likely reply in
     grey; press Tab (or →) to use it. Enter sends, Shift+Enter adds a line.
+  - **Run a workflow:** type what it should do (how many agents and which
+    model are optional) and press **Run workflow**. The chat gets *Use a
+    workflow to do this: …* the same way as a message you send from here,
+    and its agents show under **Subagents**. An idle background agent takes
+    it as your prompt; any other chat gets it as a message and may ask you
+    to confirm before it starts.
   - **Agents in this chat:** the workflows and subagents it started, with
     their state, model, time and tokens, and a running one's current step.
     A workflow has **Ask it to stop this workflow** while it runs and **Ask
