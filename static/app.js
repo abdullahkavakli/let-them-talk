@@ -67,7 +67,7 @@ const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit"
 const folderName = (cwd) => (cwd || "").replace(/\/+$/, "").split("/").pop() || cwd || "?";
 // A path as one span per folder name (with its slash), kept together by CSS,
 // so a long path wraps between folder names, never inside one.
-const pathNodes = (path) => String(path || "").split(/(?<=[/\\])/)
+const pathNodes = (path) => (String(path || "").match(/[^/\\]*[/\\]|[^/\\]+$/g) || [])
   .map((part) => el("span", { class: "seg", text: part }));
 // The server reads the editor (Cursor, VS Code, ...) from the claude binary's path.
 // A background agent shown in a terminal (or editor) says so; see shownIn in server.py.
@@ -176,8 +176,11 @@ function render() {
   const v = state.view;
   if (!v) return;
   fillBoardSelect(v.boards);
-  $("#board-folder").replaceChildren(...pathNodes(v.board.folder));
-  $("#board-folder").title = v.board.folder;
+  // Rebuilt only when it changes: a rebuild on every poll would drop a
+  // selection of the path before it could be copied.
+  const folderEl = $("#board-folder");
+  if (folderEl.textContent !== v.board.folder) folderEl.replaceChildren(...pathNodes(v.board.folder));
+  folderEl.title = v.board.folder;
   $("#world").style.transform = `translate(${state.pan.x}px, ${state.pan.y}px)`;
   $("#empty").hidden = v.nodes.length > 0;
   renderNodes();
