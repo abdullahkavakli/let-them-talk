@@ -342,9 +342,12 @@ def session_permission_mode(sid):
     return None
 
 
-def label(s):
-    """How the board names a session in text: its title, else its address."""
-    return f"\"{s['title']}\"" if s.get("title") else f"@{s['name']}"
+def label(s, board=None):
+    """How the board names a session in text: the name you gave its card,
+    else its title, else its address."""
+    alias = s.get("alias") or ((board or {}).get("nodes", {}).get(s.get("sessionId")) or {}).get("alias")
+    title = alias or s.get("title")
+    return f"\"{title}\"" if title else f"@{s['name']}"
 
 
 # ------------------------------------------------------ recent chat messages
@@ -1797,7 +1800,7 @@ def board_view(bid, subagents=False):
                      "platform": node.get("platform", "wsl"), "winCwd": node.get("winCwd"),
                      "model": node.get("model"), "editor": node.get("editor"),
                      "status": "ended"}),
-            "x": node["x"], "y": node["y"], "live": s is not None,
+            "x": node["x"], "y": node["y"], "live": s is not None, "alias": node.get("alias"),
             **({"subagents": running_agents(sid)} if subagents and s else {}),
         })
     others = [s for s in live if s["sessionId"] not in board["nodes"] and not s.get("movedTo")]
@@ -2050,7 +2053,7 @@ def connect(bid, body):
             "status": "sending" if sides else "sent", "notes": notes,
         }
         board["connections"].append(conn)
-        add_activity(board, f"Connected {label(src)} → {label(dst)}")
+        add_activity(board, f"Connected {label(src, board)} → {label(dst, board)}")
         save_board(board)
     if sides:
         threading.Thread(target=deliver_connection, args=(bid, conn["id"], sides),
@@ -2163,6 +2166,27 @@ def add_node(bid, body):
                 x, y = free_slot(board)
             board["nodes"][sid] = new_node(live[sid], x, y)
         save_board(board)
+
+
+ALIAS_MAX = 60
+
+
+def rename_node(bid, body):
+    """Name a card on this board, or with no name go back to the chat's own
+    title. Only the board uses it: the chat keeps its title and address."""
+    sid = str(body.get("sessionId") or "")
+    name = " ".join(str(body.get("name") or "").split())[:ALIAS_MAX]
+    with lock:
+        board = load_board(bid)
+        node = board["nodes"].get(sid)
+        if node is None:
+            raise ValueError("That chat isn't on this board.")
+        if name:
+            node["alias"] = name
+        else:
+            node.pop("alias", None)
+        save_board(board)
+    return {"alias": name or None}
 
 
 def remove_node(bid, body):
@@ -2335,6 +2359,7 @@ def start_handoff(bid, body):
     if node is None:
         raise ValueError("That chat isn't on this board.")
     s = next((x for x in live_sessions() if x["sessionId"] == sid), None) or {**node, "sessionId": sid}
+    s = {**s, "alias": node.get("alias")}  # for label()
     if s.get("platform") == "windows":
         raise ValueError("A chat running on Windows can't be handed off from here.")
     if s.get("movedTo"):
@@ -2440,7 +2465,7 @@ def send_to_session(bid, body):
     ok = states[0]["state"] != "failed"
     with lock:
         board = load_board(bid)
-        add_activity(board, f"Message to {label(s)}: " + ("sent" if ok else "failed"), "ok" if ok else "error")
+        add_activity(board, f"Message to {label(s, board)}: " + ("sent" if ok else "failed"), "ok" if ok else "error")
         save_board(board)
     if not ok:
         raise ValueError(f"The message didn't arrive: {states[0]['detail']}")
@@ -2457,7 +2482,7 @@ def _prompt_background(bid, s, text):
         _type_prompt(s, text)
         with lock:
             board = load_board(bid)
-            add_activity(board, f"Prompt to {label(s)}: sent", "ok")
+            add_activity(board, f"Prompt to {label(s, board)}: sent", "ok")
             save_board(board)
         background_rows(fresh=True)
         return {"how": "prompt", "copy": None}
@@ -2471,9 +2496,9 @@ def _prompt_background(bid, s, text):
         board = load_board(bid)
         if copy:
             board.setdefault("adopt", []).append(copy.group(1))
-            add_activity(board, f"Prompt to {label(s)} started a copy ({copy.group(1)})", "error")
+            add_activity(board, f"Prompt to {label(s, board)} started a copy ({copy.group(1)})", "error")
         else:
-            add_activity(board, f"Prompt to {label(s)}: sent", "ok")
+            add_activity(board, f"Prompt to {label(s, board)}: sent", "ok")
         save_board(board)
     background_rows(fresh=True)
     return {"how": "prompt", "copy": copy.group(1) if copy else None}
@@ -2691,7 +2716,7 @@ def end_chat(bid, body):
     ended = _proc_start(s["pid"]) is None
     with lock:
         board = load_board(bid)
-        add_activity(board, f"Ended {label(s)}" if ended else f"Asked {label(s)} to end; it is still running",
+        add_activity(board, f"Ended {label(s, board)}" if ended else f"Asked {label(s, board)} to end; it is still running",
                      "info" if ended else "error")
         save_board(board)
     return {"ended": ended, "resume": f"claude --resume {sid}"}
@@ -3006,6 +3031,7 @@ class Handler(BaseHTTPRequestHandler):
                     "layout": lambda: update_layout(bid, body),
                     "add": lambda: add_node(bid, body),
                     "remove": lambda: remove_node(bid, body),
+                    "rename": lambda: rename_node(bid, body),
                     "delete": lambda: delete_board(bid),
                 }
                 if action in handlers:

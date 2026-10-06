@@ -65,7 +65,8 @@ installed inside WSL, where the server runs.
   to do this: …*; the model you pick runs it and its agents, which show
   under **Subagents**. Its card is named *workflow* and the task's first
   words unless you name it.
-- **Cards** show each chat's title, `@address` (notes use the address) and
+- **Cards** show each chat's title (or the name you gave its card),
+  `@address` (notes use the address) and
   folder, where it runs (*Terminal*, *Cursor*, *VS Code* …, *Background*),
   the model of its latest reply and its state: *busy*, *idle* or *waiting*
   for a chat, a background agent's own (*working*, *idle*, *needs you*,
@@ -81,7 +82,13 @@ installed inside WSL, where the server runs.
   the chat that started it. While it is on, the button shows how many are
   running; if nothing is running when you turn it on, a note says so.
 - **Details:** click a card. The line under its title folds out to its
-  address, folder, model and session id.
+  address, folder, model and session id (and the chat's own title once you
+  renamed the card).
+- **Rename a card:** double-click it, press F2 on it, or click ✎ beside the
+  name in its details; type a name and press Enter (Esc cancels). Only this
+  board shows the name, Activity included; the chat keeps its own title and
+  `@address`, so notes and messages still reach it. **Use its title** (or an
+  empty name) goes back to the chat's title.
   - **Recent messages:** the last 3 messages, like a phone: your prompts as
     typed (including ones sent while it worked; ones typed in its own window
     while it works show as *queued* until it reads them), and Claude's
@@ -145,7 +152,8 @@ installed inside WSL, where the server runs.
   resize it (double-click resets). **Fit view** brings every card into sight.
   Esc cancels an arrow; Esc or a click on the empty board closes the details.
 - **Keyboard:** Tab reaches cards, arrow labels and subagent cards (the board
-  moves to show the one in focus); Enter or Space opens it.
+  moves to show the one in focus); Enter or Space opens it, F2 renames a
+  card.
 - **Activity** (bottom of the sidebar, folded until you open it): the latest
   30 things that happened on this board, newest first, with the time: arrows
   connected and removed, notes and messages sent or failed, prompts sent,
@@ -208,7 +216,7 @@ installed inside WSL, where the server runs.
   to `localhost` or `127.0.0.1` on its port. It takes commands only with its
   own request header, which other web pages can't send, and tells browsers
   never to show it in a frame.
-- Boards are stored in `boards/`, every note and message sent through the
+- Boards are stored in `boards/` (a card's name too), every note and message sent through the
   headless run in `logs/relay.jsonl`, and the mod's latest suggestions in
   `logs/suggestions.json` (kept for a day).
 
@@ -223,7 +231,8 @@ installed inside WSL, where the server runs.
   **Subagents**) can't be reached from outside, so connect their parent
   session.
 - Sessions are addressed by name. If two sessions share a name (background
-  agents that aren't running count too), `/rename` one of them first.
+  agents that aren't running count too), `/rename` one of them first;
+  renaming its card on the board doesn't change its address.
 - **Windows sessions** (Claude Code on native Windows) are shown with a
   *Windows* badge, but the app can't connect them or send them messages yet
   (their details say why). A WSL session and a Windows session can never

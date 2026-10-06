@@ -283,11 +283,11 @@ body.connecting .node:not(.ended) { cursor: copy; }
   white-space: pre-wrap; overflow-wrap: anywhere;
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
 }
-.send-box {
+.send-box, .rename-box {
   display: block; width: 100%; font: inherit; color: var(--text); background: var(--panel-2);
   border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; resize: vertical;
 }
-.send-box:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+.send-box:focus, .rename-box:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
 .chat { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
 .msg { display: flex; flex-direction: column; align-items: flex-start; max-width: 88%; }
 .msg.user { align-self: flex-end; align-items: flex-end; }
@@ -584,7 +584,7 @@ dialog::backdrop { background: var(--scrim); }
 .sidebar .btn, #drawer .btn:not(.primary), dialog .btn:not(.primary) { background: var(--field); border-color: transparent; }
 .sidebar .btn:hover, #drawer .btn:not(.primary):hover, dialog .btn:not(.primary):hover,
 .avail-row:hover, #activity-box > summary:hover, dialog label.choice:hover { background: var(--field-hover); }
-dialog textarea, dialog input:not([type="checkbox"]):not([type="radio"]), dialog select, .send-box {
+dialog textarea, dialog input:not([type="checkbox"]):not([type="radio"]), dialog select, .send-box, .rename-box {
   background: var(--field); border-color: transparent; border-radius: 12px;
 }
 dialog label.choice { background: var(--field); border-color: transparent; border-radius: 16px; }
@@ -622,6 +622,11 @@ dialog label.choice:has(input:checked) { border-color: var(--accent); background
 #activity-box > summary { margin: 0; padding: 10px 14px; border-radius: 999px; background: var(--field); }
 #activity-box[open] > summary { margin-bottom: 8px; }
 #drawer h3 { font-size: 20px; font-weight: 700; letter-spacing: -.3px; line-height: 1.25; padding-right: 44px; }
+/* the name and its rename pencil; the pencil keeps clear of the close button */
+#drawer .name-head { display: flex; align-items: flex-start; gap: 2px; padding-right: 44px; margin-bottom: 10px; }
+#drawer .name-head h3 { padding-right: 0; margin: 0; min-width: 0; overflow-wrap: anywhere; }
+#drawer .rename { font-size: 15px; flex: none; margin-top: 1px; }
+#drawer .rename-box { font-size: 17px; font-weight: 600; margin-right: 44px; width: calc(100% - 44px); }
 /* the panel's contents scroll under it: the field tint over a solid fill */
 #drawer .close { z-index: 1; width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(var(--field), var(--field)), var(--panel); color: var(--text); font-size: 18px; }
 #drawer .close:hover { background: linear-gradient(var(--field-hover), var(--field-hover)), var(--panel); }

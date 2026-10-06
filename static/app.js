@@ -2,6 +2,7 @@
 
 const POLL_MS = 2500;
 const NODE_W = 220;
+const DOUBLE_CLICK_MS = 500;  // two clicks on a card this close together rename it
 const $ = (sel) => document.querySelector(sel);
 
 const state = {
@@ -26,6 +27,9 @@ const state = {
   subSpot: {},           // sessionId -> where its subagents sat, relative to its card
   subInfo: {},           // "sessionId:agentId" -> /api/subagent response for the open drawer
   subAll: {},            // sessionId -> all its subagents shown, not just the first five
+  renaming: null,        // sessionId whose name is being edited in the drawer
+  renameDraft: "",       // what is typed there (kept across redraws)
+  lastClick: null,       // {id, at}: the last click on a card, to tell a double-click
 };
 
 // ------------------------------------------------------------------ helpers
@@ -95,8 +99,9 @@ function cardStatus(n) {
     text: n.agentStateText || (n.running ? n.status : "asleep") };
   return { dot: n.status, text: n.status };
 }
-// Cards show the title Claude Code gave the session; @name is its address.
-const display = (n) => n.title || (n.name ? `@${n.name}` : `session ${n.sessionId.slice(0, 8)}`);
+// Cards show the name you gave them on this board, else the title Claude
+// Code gave the session; @name is its address.
+const display = (n) => n.alias || n.title || (n.name ? `@${n.name}` : `session ${n.sessionId.slice(0, 8)}`);
 const where = (n) => n.winCwd || n.cwd;  // Windows sessions keep their C:\ path
 const onWindows = (n) => n.platform === "windows";
 const nodeById = (id) => state.view?.nodes.find((n) => n.sessionId === id);
@@ -591,6 +596,7 @@ $("#activity-box").addEventListener("toggle", () => store("ltt.activityOpen", $(
 // ------------------------------------------------------------------- drawer
 
 function select_(sel) {
+  if (!(sel.type === "node" && sel.id === state.renaming)) state.renaming = null;
   state.selected = sel;
   render();
   renderDrawer();
@@ -638,6 +644,7 @@ function settleOutbox(sid) {
 
 function closeDrawer() {
   state.selected = null;
+  state.renaming = null;
   $("#drawer").hidden = true;
   if (state.view) render();
 }
@@ -742,7 +749,7 @@ function nodeDetails(n) {
     o.sessionId !== n.sessionId && o.live && !o.messageBlock &&
     !conns.some((c) => c.from === n.sessionId && c.to === o.sessionId)) : [];
   return [
-    el("h3", { text: display(n) }),
+    ...nameHeading(n),
     // The facts fold into one line; the choice is remembered.
     el("details", {
       class: "info", open: store("ltt.infoOpen") === true,
@@ -751,6 +758,7 @@ function nodeDetails(n) {
       text: [n.live ? n.status : "session ended", n.model && modelName(n.model), n.live && opener(n)]
         .filter(Boolean).join(" · ") }),
     el("dl", {},
+      n.alias && n.title && [el("dt", { text: "Title" }), el("dd", { text: n.title })],
       el("dt", { text: "Address" }), el("dd", { class: "mono small", text: `@${n.name}` }),
       el("dt", { text: "Status" }), el("dd", { text: n.live ? n.status : "session ended" }),
       el("dt", { text: "Runs on" }), el("dd", { text: onWindows(n) ? "Windows" : hostLabel() }),
@@ -791,6 +799,62 @@ function nodeDetails(n) {
     endControls(n),
     removeControls(n, conns),
   ];
+}
+
+// Rename: a name of your own for a card, kept with the board. The chat keeps
+// its title and its address, so notes and messages still find it.
+function nameHeading(n) {
+  if (state.renaming !== n.sessionId) {
+    return [el("div", { class: "name-head" },
+      el("h3", { text: display(n), title: "Double-click to rename", ondblclick: () => startRename(n) }),
+      el("button", { class: "icon-btn rename", text: "✎", "aria-label": "Rename", title: "Rename (F2)",
+        onclick: () => startRename(n) }))];
+  }
+  const box = el("input", {
+    id: "rename-box", class: "rename-box", maxlength: 60, "aria-label": "Name on this board",
+    placeholder: n.title || `@${n.name}`,
+    oninput: (e) => { state.renameDraft = e.target.value; },
+    onkeydown: (e) => {
+      if (e.isComposing) return;
+      if (e.key === "Enter") { e.preventDefault(); saveRename(n, box.value); }
+      else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); stopRename(); }
+    },
+  });
+  box.value = state.renameDraft;
+  return [
+    box,
+    el("div", { class: "drawer-actions" },
+      el("button", { class: "btn primary", text: "Save", onclick: () => saveRename(n, box.value) }),
+      el("button", { class: "btn", text: "Cancel", onclick: stopRename }),
+      n.alias && el("button", { class: "btn", text: n.title ? "Use its title" : "Use its address",
+        title: n.title || `@${n.name}`, onclick: () => saveRename(n, "") })),
+    el("p", { class: "muted small", text: `Only this board shows this name. Messages still reach it as @${n.name}.` }),
+  ];
+}
+
+function startRename(n) {
+  state.renaming = n.sessionId;
+  state.renameDraft = n.alias || n.title || "";
+  if (state.selected?.type === "node" && state.selected.id === n.sessionId) renderDrawer();
+  else select_({ type: "node", id: n.sessionId });
+  const box = $("#rename-box");
+  if (box) { box.focus(); box.select(); }
+}
+
+function stopRename() {
+  state.renaming = null;
+  renderDrawer();
+}
+
+async function saveRename(n, text) {
+  const name = text.trim().replace(/\s+/g, " ");
+  // The title it already shows needs no name of its own (and would stop following the title).
+  if (name === (n.alias || n.title || "")) return stopRename();
+  state.renaming = null;
+  n.alias = name || null;  // shown now; the next poll confirms it
+  render();
+  renderDrawer();
+  await act("rename", { sessionId: n.sessionId, name });
 }
 
 // Hand off: a copy of the chat writes a handoff (/handoff), and a new
@@ -1115,7 +1179,13 @@ canvas.addEventListener("pointerup", async (evt) => {
     else if (state.selected) closeDrawer();
     return;
   }
-  if (!d.moved) return select_({ type: "node", id: d.id });
+  if (!d.moved) {
+    // A second click on the card soon after renames it. (The press captured
+    // the pointer, so the browser's dblclick goes to the canvas, not the card.)
+    const again = state.lastClick?.id === d.id && evt.timeStamp - state.lastClick.at < DOUBLE_CLICK_MS;
+    state.lastClick = again ? null : { id: d.id, at: evt.timeStamp };
+    return again ? startRename(nodeById(d.id)) : select_({ type: "node", id: d.id });
+  }
   const pos = state.localPos[d.id];
   try {
     await api(`/api/board/${state.boardId}/layout`, { positions: { [d.id]: pos } });
@@ -1134,9 +1204,14 @@ document.addEventListener("keydown", (evt) => {
 $("#drawer-close").addEventListener("click", closeDrawer);
 
 // Keyboard: Tab reaches cards, subagents and arrow labels; Enter or Space
-// opens them.
+// opens them, and F2 renames a card.
 for (const layer of [$("#nodes"), $("#subagents"), $("#labels")]) {
   layer.addEventListener("keydown", (evt) => {
+    const card = evt.key === "F2" && evt.target.closest(".node");
+    if (card) {
+      evt.preventDefault();
+      return startRename(nodeById(card.dataset.id));
+    }
     if (evt.key !== "Enter" && evt.key !== " ") return;
     const node = evt.target.closest(".node"), label = evt.target.closest(".wire-label");
     const sub = evt.target.closest(".sub");
