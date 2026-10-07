@@ -21,6 +21,7 @@ const state = {
   talk: {},              // arrow id -> /api/talk response (what its two chats sent each other)
   talkBusy: {},          // arrow id -> a /api/talk request is in flight
   popWire: null,         // arrow id shown in the pop-up (opened from a chat's Connections)
+  popAgents: null,       // {sid, sub}: the open chat's agents in their pop-up (sub: one agent's details)
   talkLimit: {},         // arrow id -> how many messages to load ("Show earlier" raises it)
   notifyOff: {},         // arrow id -> "Tell both agents" unticked (kept across redraws)
   removeNotifyOff: {},   // sessionId -> "Tell connected agents" unticked (kept across redraws)
@@ -245,6 +246,7 @@ async function poll() {
       else if (state.selected?.type === "sub") loadSub(state.selected);
       else if (state.selected?.type === "wire") loadTalk(state.selected.id);
       if (state.popWire && state.popWire !== state.selected?.id) loadTalk(state.popWire);
+      if (state.popAgents?.sub) loadPopSub();
       reachable(true);
     } catch (e) {
       console.warn("poll failed", e);
@@ -600,20 +602,25 @@ function foldBubble(key, text) {
       onclick: () => { state.chatOpen[key] = !open; renderDrawer(); } })];
 }
 
-function subDetails(sel) {
+// back: {text, label, go} for the button at the top (in the panel: back to
+// the chat that started it); toChat: what clicking that chat's name does.
+function subDetails(sel, back, toChat) {
   const key = `${sel.parent}:${sel.id}`, d = state.subInfo[key], n = nodeById(sel.parent);
-  const head = el("h3", { text: d?.label || sel.label || "Subagent" });
-  if (!d) return [head, el("p", { class: "muted small", text: "Loading…" })];
-  if (d.error) return [head, el("p", { class: "error small", text: d.error })];
+  toChat ||= () => select_({ type: "node", id: n.sessionId });
+  back ||= n && { text: `← ${display(n)}`, label: `Back to ${display(n)}`, go: toChat };
+  const head = [back && el("button", { class: "btn back", text: back.text, title: back.label,
+    "aria-label": back.label, onclick: back.go }), el("h3", { text: d?.label || sel.label || "Subagent" })];
+  if (!d) return [...head, el("p", { class: "muted small", text: "Loading…" })];
+  if (d.error) return [...head, el("p", { class: "error small", text: d.error })];
   const running = d.state === "running", steps = [...d.steps].reverse();
   return [
-    head,
+    ...head,
     el("p", { class: "sub-state" }, el("span", { class: stateClass(d.state), title: d.state }),
       el("span", { text: [AGENT_STATE_TEXT[d.state] || d.state, modelName(d.model), fmtDur(d.durationMs),
         fmtTok(d.tokens)].filter(Boolean).join(" · ") })),
     el("dl", {},
       el("dt", { text: "Started by" }), el("dd", {}, n ? el("a", {
-        href: "#", text: display(n), onclick: (e) => { e.preventDefault(); select_({ type: "node", id: n.sessionId }); },
+        href: "#", text: display(n), onclick: (e) => { e.preventDefault(); toChat(); },
       }) : "a chat that isn't on this board"),
       d.workflow && [el("dt", { text: "Workflow" }), el("dd", { text: [d.workflow, d.phase].filter(Boolean).join(" · ") })],
       !d.workflow && d.kind && [el("dt", { text: "Type" }), el("dd", { text: d.kind })]),
@@ -737,6 +744,7 @@ function returnFocus({ el, sel }) {
 
 function renderDrawer() {
   renderWirePop();
+  renderAgentsPop();
   const body = $("#drawer-body");
   const sel = state.selected;
   if (!sel) return;
@@ -770,6 +778,7 @@ $("#wire-pop").addEventListener("pointerdown", () => { state.pressing = true; })
 // A connection clicked in a chat's Connections opens in a pop-up over the
 // board, so the chat's details stay underneath. Redrawn with the panel.
 function openWirePop(id) {
+  closeAgentsPop();  // one pop-up at a time
   state.popWire = id;
   loadTalk(id);
   renderWirePop();
@@ -795,6 +804,84 @@ function closeWirePop() {
 $("#wire-pop").addEventListener("close", () => { state.popWire = null; });
 $("#wire-pop-close").addEventListener("click", closeWirePop);
 $("#wire-pop").addEventListener("click", (e) => { if (e.target === e.currentTarget) closeWirePop(); });  // its backdrop
+
+// A chat's agents open in a pop-up over the board from the line in its
+// details, which stay underneath; it goes with them (closed when they close or
+// show something else). An agent clicked there shows its own details in the
+// pop-up, with a way back to the list. Redrawn with the panel.
+$("#agents-pop").addEventListener("pointerdown", () => { state.pressing = true; });
+
+function openAgentsPop(sid) {
+  closeWirePop();  // one pop-up at a time
+  state.popAgents = { sid, sub: null };
+  renderAgentsPop();
+  if (!$("#agents-pop").open) $("#agents-pop").showModal();
+}
+
+function renderAgentsPop() {
+  const p = state.popAgents;
+  if (!p) return;
+  if (state.pressing) {
+    state.redrawAfterPress = true;
+    return;
+  }
+  const n = state.selected?.type === "node" && state.selected.id === p.sid && nodeById(p.sid);
+  if (!n) return closeAgentsPop();
+  swapChildren($("#agents-pop-body"), (p.sub
+    ? subDetails({ parent: p.sid, ...p.sub }, { text: "← All agents", label: "Back to all agents", go: backToAgents }, closeAgentsPop)
+    : agentsPopList(n)).filter(Boolean));
+}
+
+function closeAgentsPop() {
+  state.popAgents = null;
+  if ($("#agents-pop").open) $("#agents-pop").close();
+}
+
+function agentsPopList(n) {
+  const data = state.agents[n.sessionId];
+  const { count, running } = data && !data.error ? agentCounts(data) : {};
+  return [
+    el("h3", { text: "Agents in this chat" }),
+    el("p", { class: "muted small pop-note", text: [display(n), count != null && `${count} agent${count === 1 ? "" : "s"}`,
+      running && `${running} running`].filter(Boolean).join(" · ") }),
+    ...agentsList(n, openPopSub),
+  ];
+}
+
+function openPopSub(id, label) {
+  const p = state.popAgents, box = $("#agents-pop-body");
+  p.listScroll = box.scrollTop;
+  p.sub = { id, label };
+  loadPopSub();
+  renderAgentsPop();
+  box.scrollTop = 0;
+  box.querySelector(".back")?.focus({ preventScroll: true });
+}
+
+function backToAgents() {
+  const p = state.popAgents, box = $("#agents-pop-body"), { id } = p.sub;
+  p.sub = null;
+  renderAgentsPop();
+  box.scrollTop = p.listScroll || 0;
+  [...box.querySelectorAll(".agent-row")].find((r) => r.dataset.agent === id)?.focus({ preventScroll: true });
+}
+
+async function loadPopSub() {
+  const p = state.popAgents;
+  await loadSub({ parent: p.sid, ...p.sub });
+  renderAgentsPop();
+}
+
+$("#agents-pop").addEventListener("close", () => {
+  state.popAgents = null;
+  // focus goes back to the line that opened it, even if a redraw replaced it
+  if (document.activeElement === document.body) $("#drawer .agents-line")?.focus({ preventScroll: true });
+});
+$("#agents-pop-close").addEventListener("click", closeAgentsPop);
+$("#agents-pop").addEventListener("click", (e) => { if (e.target === e.currentTarget) closeAgentsPop(); });  // its backdrop
+new MutationObserver(() => { if ($("#drawer").hidden) closeAgentsPop(); })
+  .observe($("#drawer"), { attributes: true, attributeFilter: ["hidden"] });
+
 for (const type of ["pointerup", "pointercancel"]) {
   window.addEventListener(type, () => {
     if (!state.pressing) return;
@@ -1072,7 +1159,7 @@ function agentRow(a, labelText, open) {
   const press = open && ((e) => {
     if (e.type === "click" || e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
   });
-  return el("div", { class: "agent-row", role: open && "button", tabindex: open && 0,
+  return el("div", { class: "agent-row", "data-agent": a.id, role: open && "button", tabindex: open && 0,
     title: open && "Show what it is doing", onclick: press, onkeydown: press },
     el("span", { class: stateClass(a.state), title: a.state }),
     el("div", { class: "agent-main" },
@@ -1091,7 +1178,8 @@ function group(key, openByDefault, summary, body) {
   return d;
 }
 
-function runGroup(r, n) {
+// open(id, label): shows an agent's own details
+function runGroup(r, n, open) {
   const phases = [...r.phases];
   for (const a of r.agents) if (a.phase && !phases.includes(a.phase)) phases.push(a.phase);
   const body = [];
@@ -1102,7 +1190,7 @@ function runGroup(r, n) {
     for (const a of inPhase) counts[a.state] = (counts[a.state] || 0) + 1;
     body.push(el("div", { class: "phase-title", text:
       `${phase || "Other"} · ${Object.entries(counts).map(([s, k]) => `${k} ${s}`).join(", ")}` }));
-    body.push(...inPhase.map((a) => agentRow(a, a.label, n && (() => openSub(n.sessionId, a.id, a.label)))));
+    body.push(...inPhase.map((a) => agentRow(a, a.label, open && (() => open(a.id, a.label)))));
   }
   if (!r.agents.length) body.push(el("p", { class: "muted small", text: "No agents recorded yet." }));
   if (n && canReach(n)) {
@@ -1124,19 +1212,37 @@ function runGroup(r, n) {
   ], body);
 }
 
+// How many agents a chat started (in its workflows and on its own), and how many run now.
+function agentCounts({ workflows, direct }) {
+  const all = [...direct, ...workflows.flatMap((r) => r.agents)];
+  return { count: all.length, running: all.filter((a) => a.state === "running").length };
+}
+
+// In a chat's details its agents take one line; it opens them in a pop-up.
 function agentsSection(n) {
   const data = state.agents[n.sessionId];
   const head = el("h2", { text: "Agents in this chat" });
   if (!data) return [head, el("p", { class: "muted small", text: "Loading…" })];
   if (data.error) return [head, el("p", { class: "error small", text: data.error })];
-  const { workflows: runs, direct } = data;
-  if (!runs.length && !direct.length) {
-    return [head, el("p", { class: "muted small", text: "This chat hasn't started any subagents or workflows." })];
+  if (!data.workflows.length && !data.direct.length) {
+    return [head, el("p", { class: "muted small", text: "No subagents or workflows yet." })];
   }
-  const running = direct.filter((a) => a.state === "running").length +
-    runs.reduce((k, r) => k + r.agents.filter((a) => a.state === "running").length, 0);
-  if (running) head.textContent = `Agents in this chat · ${running} running`;
-  const out = [head, ...runs.map((r) => runGroup(r, n))];
+  const { count, running } = agentCounts(data);
+  return [el("button", {
+    class: "agents-line", "aria-haspopup": "dialog", title: "Show its workflows and subagents",
+    onclick: () => openAgentsPop(n.sessionId),
+  }, `Agents in this chat (${count})`, running > 0 && el("span", { class: "muted", text: ` · ${running} running` }))];
+}
+
+// The workflows and subagents a chat started (the pop-up's list); open(id,
+// label) shows one agent's details.
+function agentsList(n, open) {
+  const data = state.agents[n.sessionId];
+  if (!data) return [el("p", { class: "muted small", text: "Loading…" })];
+  if (data.error) return [el("p", { class: "error small", text: data.error })];
+  const { workflows: runs, direct } = data;
+  if (!runs.length && !direct.length) return [el("p", { class: "muted small", text: "No subagents or workflows yet." })];
+  const out = runs.map((r) => runGroup(r, n, open));
   if (direct.length) {
     const live = direct.filter((a) => a.state === "running").length;
     out.push(group(`direct:${n.sessionId}`, true, [
@@ -1145,7 +1251,7 @@ function agentsSection(n) {
         el("div", { class: "run-name", text: "Subagents" }),
         el("div", { class: "agent-meta", text: `${direct.length} started${live ? ` · ${live} running` : ""}` })),
     ], direct.map((a) => agentRow(a, a.agentType ? `${a.description} (${a.agentType})` : a.description,
-      () => openSub(n.sessionId, a.id, a.description)))));
+      open && (() => open(a.id, a.description))))));
   }
   return out;
 }

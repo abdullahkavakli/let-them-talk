@@ -264,15 +264,15 @@ body.connecting .node:not(.ended) { cursor: copy; }
 }
 /* Only the contents scroll; the close button and the resize grip stay put. */
 #drawer-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; }
-:is(#drawer, #wire-pop) .close { position: absolute; right: 10px; top: 8px; }
-:is(#drawer, #wire-pop) h3 { margin: 0 0 10px; font-size: 15px; padding-right: 24px; }
-:is(#drawer, #wire-pop) dl { display: grid; grid-template-columns: 90px 1fr; gap: 6px 10px; margin: 0 0 14px; font-size: 13px; }
+:is(#drawer, #wire-pop, #agents-pop) .close { position: absolute; right: 10px; top: 8px; }
+:is(#drawer, #wire-pop, #agents-pop) h3 { margin: 0 0 10px; font-size: 15px; padding-right: 24px; }
+:is(#drawer, #wire-pop, #agents-pop) dl { display: grid; grid-template-columns: 90px 1fr; gap: 6px 10px; margin: 0 0 14px; font-size: 13px; }
 #drawer details.info { margin: -4px 0 14px; }
 #drawer details.info > summary { cursor: pointer; }
 #drawer details.info[open] > summary { margin-bottom: 8px; }
 #drawer details.info dl { margin: 0; }
-:is(#drawer, #wire-pop) dt { color: var(--muted); }
-:is(#drawer, #wire-pop) dd { margin: 0; word-break: break-word; }
+:is(#drawer, #wire-pop, #agents-pop) dt { color: var(--muted); }
+:is(#drawer, #wire-pop, #agents-pop) dd { margin: 0; word-break: break-word; }
 /* a chat's Connections fold; one opens in the pop-up below */
 #drawer details.conns { margin-top: 18px; }
 #drawer details.conns > summary { cursor: pointer; list-style: none; display: flex; align-items: center; }
@@ -281,9 +281,26 @@ body.connecting .node:not(.ended) { cursor: copy; }
 #drawer details.conns[open] > summary::before { content: "▾"; }
 #drawer details.conns > summary h2 { margin: 0; }
 #drawer details.conns[open] > summary { margin-bottom: 8px; }
-#wire-pop { width: min(620px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
-#wire-pop[open] { display: flex; flex-direction: column; }
-#wire-pop .pop-body { overflow-y: auto; padding: 18px 20px; }
+#wire-pop, #agents-pop { width: min(620px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
+:is(#wire-pop, #agents-pop)[open] { display: flex; flex-direction: column; }
+:is(#wire-pop, #agents-pop) .pop-body { overflow-y: auto; padding: 18px 20px; }
+/* a chat's agents: one line in its details; the list opens in its pop-up */
+#drawer .agents-line {
+  display: flex; align-items: center; width: 100%; margin: 18px 0 14px; padding: 10px 14px;
+  border: 0; border-radius: 14px; background: var(--field); color: var(--text);
+  font: inherit; font-size: 13px; font-weight: 600; text-align: left; cursor: pointer;
+}
+#drawer .agents-line .muted { font-weight: 400; white-space: pre; }
+#drawer .agents-line::after { content: "›"; margin-left: auto; padding-left: 8px; color: var(--muted); font-size: 18px; line-height: 1; }
+#drawer .agents-line:hover { background: var(--field-hover); }
+#drawer .agents-line:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#agents-pop h2 { font-family: inherit; font-size: 12px; font-weight: 600; letter-spacing: 0; color: var(--muted); }
+#agents-pop .pop-note { margin: -4px 0 14px; padding-right: 44px; }
+/* an agent's details: back to the chat (in the panel) or to the list (in the pop-up) */
+:is(#drawer, #agents-pop) .btn.back {
+  display: block; max-width: calc(100% - 48px); margin: 0 0 12px; padding: 5px 12px; font-size: 12.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .note-card { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; background: var(--panel-2); }
 .note-card header { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; }
 .note-card pre { white-space: pre-wrap; margin: 0; font-size: 11.5px; }
@@ -608,7 +625,7 @@ body:has(#drawer:not([hidden])) .topbar { right: calc(var(--drawer) + 24px); }
   box-sizing: border-box; border-radius: 28px;
 }
 #drawer-body { padding: 18px 18px 18px 20px; }
-:is(#drawer, #wire-pop) .close { right: 14px; top: 12px; }
+:is(#drawer, #wire-pop, #agents-pop) .close { right: 14px; top: 12px; }
 /* The details lie above the top bar, so top-bar items that don't fit beside
    them go under the panel, never over its title and close button. */
 #drawer { z-index: 7; }
@@ -674,15 +691,15 @@ dialog label.choice:has(input:checked) { border-color: var(--accent); background
 #activity-box { margin-top: auto; }
 #activity-box > summary { margin: 0; padding: 10px 14px; border-radius: 999px; background: var(--field); }
 #activity-box[open] > summary { margin-bottom: 8px; }
-:is(#drawer, #wire-pop) h3 { font-size: 20px; font-weight: 700; letter-spacing: -.3px; line-height: 1.25; padding-right: 44px; }
+:is(#drawer, #wire-pop, #agents-pop) h3 { font-size: 20px; font-weight: 700; letter-spacing: -.3px; line-height: 1.25; padding-right: 44px; }
 /* the name and its rename pencil; the pencil keeps clear of the close button */
 #drawer .name-head { display: flex; align-items: flex-start; gap: 2px; padding-right: 44px; margin-bottom: 10px; }
 #drawer .name-head h3 { padding-right: 0; margin: 0; min-width: 0; overflow-wrap: anywhere; }
 #drawer .rename { font-size: 15px; flex: none; margin-top: 1px; }
 #drawer .rename-box { font-size: 17px; font-weight: 600; margin-right: 44px; width: calc(100% - 44px); }
 /* the panel's contents scroll under it: the field tint over a solid fill */
-:is(#drawer, #wire-pop) .close { z-index: 1; width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(var(--field), var(--field)), var(--panel); color: var(--text); font-size: 18px; }
-:is(#drawer, #wire-pop) .close:hover { background: linear-gradient(var(--field-hover), var(--field-hover)), var(--panel); }
+:is(#drawer, #wire-pop, #agents-pop) .close { z-index: 1; width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(var(--field), var(--field)), var(--panel); color: var(--text); font-size: 18px; }
+:is(#drawer, #wire-pop, #agents-pop) .close:hover { background: linear-gradient(var(--field-hover), var(--field-hover)), var(--panel); }
 .bubble { border-radius: 18px 18px 18px 6px; background: var(--panel); }
 .msg.user .bubble { border-radius: 18px 18px 6px 18px; background: var(--accent); color: var(--on-accent); }
 /* not delivered or read yet: an outline, not faded text */
@@ -724,7 +741,7 @@ dialog h2 { font-size: 22px; font-weight: 700; letter-spacing: -.3px; }
     "Segoe UI Variable Static Display", "Segoe UI Variable", "Segoe UI", "Selawik", system-ui, sans-serif;
 }
 body { font-family: var(--font-ui); }
-.sidebar .brand, #drawer h3, #wire-pop h3, dialog h2 { font-family: var(--font-display); }
+.sidebar .brand, #drawer h3, #wire-pop h3, #agents-pop h3, dialog h2 { font-family: var(--font-display); }
 
 /* running subagents (the Subagents button): small cards beside their chat */
 #show-subagents[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }

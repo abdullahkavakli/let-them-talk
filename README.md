@@ -91,8 +91,10 @@ installed inside WSL, where the server runs.
   Click one (or its row under *Agents in this chat*) to see what it is
   doing: its state, model, time and tokens, its latest steps, its latest
   message, the task it was given, its workflow and phase (or its type) and
-  the chat that started it. While it is on, the button shows how many are
-  running; if nothing is running when you turn it on, a note says so.
+  the chat that started it; the **←** button at the top, with that chat's
+  name, goes back to its details. While it is on, the button shows how
+  many are running; if nothing is running when you turn it on, a note says
+  so.
 - **Details:** click a card. The line under its title folds out to its
   address, folder, model and session id (and the chat's own title once you
   renamed the card).
@@ -123,11 +125,14 @@ installed inside WSL, where the server runs.
     woken with it. If sending fails, the text goes back into
     the box. When the chat waits for you, the box shows a likely reply in
     grey; press Tab (or →) to use it. Enter sends, Shift+Enter adds a line.
-  - **Agents in this chat:** the workflows and subagents it started, with
-    their state, model, time and tokens, and a running one's current step.
-    A workflow has **Ask it to stop this workflow** while it runs and **Ask
-    it to resume this workflow** once it stopped or failed; each sends the
-    chat a message asking for that.
+  - **Agents in this chat (N)** is one line, with how many are running;
+    click it to open the workflows and subagents the chat started in a
+    pop-up over the board, with their state, model, time and tokens, and a
+    running one's current step. Click one to see what it is doing in the
+    pop-up (**← All agents** goes back). A workflow has **Ask it to stop
+    this workflow** while it runs and **Ask it to resume this workflow** once
+    it stopped or failed; each sends the chat a message asking for that. The
+    chat's details stay underneath; ×, Esc or a click outside closes it.
   - **Connections (N)** folds open to list its arrows (your choice is
     remembered); click one to open it in a pop-up over the board, with the
     same details as clicking the arrow. The chat's details stay underneath;
