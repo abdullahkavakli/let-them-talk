@@ -1839,7 +1839,8 @@ def board_view(bid, subagents=False):
         board = load_board(bid)
         if board is None:
             return None
-        if sync_board(board, live):
+        synced = sync_board(board, live)
+        if settle_orphans(board) or synced:
             save_board(board)
     by_id = {s["sessionId"]: s for s in live}
     nodes = []
@@ -2035,8 +2036,30 @@ def _summary(states):
     return ", ".join(marks[s["state"]] for s in states)
 
 
+delivering = set()  # connection ids with a delivery running in this process
+ORPHAN_WAIT = RELAY_TIMEOUT + 30  # by then a relay cut off from a restarted server has ended
+
+
+def _conn_status(conn):
+    states = [n["state"] for n in conn["notes"].values() if n.get("enabled")]
+    return ("sent" if all(s in ("sent", "altered") for s in states)
+            else "sending" if "sending" in states else "failed")
+
+
+def _deliver_later(bid, conn_id, sides):
+    delivering.add(conn_id)
+    threading.Thread(target=deliver_connection, args=(bid, conn_id, sides), daemon=True).start()
+
+
 def deliver_connection(bid, conn_id, sides):
     """Send the stored notes of one connection for the given sides (from/to)."""
+    try:
+        _deliver(bid, conn_id, sides)
+    finally:
+        delivering.discard(conn_id)
+
+
+def _deliver(bid, conn_id, sides):
     with lock:
         board = load_board(bid)
         conn = next((c for c in board["connections"] if c["id"] == conn_id), None)
@@ -2053,13 +2076,45 @@ def deliver_connection(bid, conn_id, sides):
             return
         for it, st in zip(items, states):
             conn["notes"][it["side"]].update(st, sentAt=time.time())
-        note_states = [n["state"] for n in conn["notes"].values() if n.get("enabled")]
-        conn["status"] = ("sent" if all(s in ("sent", "altered") for s in note_states)
-                          else "sending" if "sending" in note_states else "failed")
+        conn["status"] = _conn_status(conn)
         level = "ok" if conn["status"] == "sent" else "error"
         add_activity(board, f"{label(ends['from'])} → {label(ends['to'])}: notes {_summary(states)}"
                      f" ({meta['seconds']}s)", level)
         save_board(board)
+
+
+def settle_orphans(board):
+    """Notes left "sending" by a delivery this process isn't running: the
+    server restarted mid-way, and the relay, which outlives it, may still
+    have got them there. Each is sent once the chat's transcript shows it,
+    and failed once no relay can still be running. Returns whether any was."""
+    changed = False
+    for conn in board["connections"]:
+        if conn.get("status") != "sending" or conn["id"] in delivering:
+            continue
+        settled = []
+        for side, note in conn["notes"].items():
+            if note.get("state") != "sending":
+                continue
+            since, want = note.get("since") or conn.get("createdAt") or 0, _norm(note.get("text"))
+            got = next((m for m in peer_log(conn[side])["recv"].values()
+                        if m["at"] >= since - 5 and _norm(m["text"]) == want), None)
+            if got:
+                note.update(state="sent", detail="arrived; the server restarted before it could tell",
+                            sentAt=got["at"])
+            elif time.time() - since > ORPHAN_WAIT:
+                note.update(state="failed", detail="The server restarted while sending it, and it never "
+                                                   "showed up in the chat's conversation.", sentAt=time.time())
+            else:
+                continue
+            settled.append(note["state"])
+        if settled:
+            conn["status"] = _conn_status(conn)
+            ends = [board["nodes"].get(conn[side], {"name": "?"}) for side in ("from", "to")]
+            add_activity(board, f"{label(ends[0])} → {label(ends[1])}: notes {', '.join(settled)} "
+                                "(checked after a server restart)", "ok" if conn["status"] == "sent" else "error")
+            changed = True
+    return changed
 
 
 def connect(bid, body):
@@ -2087,7 +2142,7 @@ def connect(bid, body):
                "text": str(body.get("textTo") or d_dst)},
     }
     for n in notes.values():
-        n["state"] = "sending" if n["enabled"] else "skipped"
+        n.update(state="sending" if n["enabled"] else "skipped", since=time.time())
     sides = [side for side, n in notes.items() if n["enabled"]]
     with lock:
         board = load_board(bid)
@@ -2107,8 +2162,7 @@ def connect(bid, body):
         add_activity(board, f"Connected {label(src, board)} → {label(dst, board)}")
         save_board(board)
     if sides:
-        threading.Thread(target=deliver_connection, args=(bid, conn["id"], sides),
-                         daemon=True).start()
+        _deliver_later(bid, conn["id"], sides)
     return conn
 
 
@@ -2126,10 +2180,10 @@ def resend(bid, conn_id):
         if not sides:
             raise ValueError("nothing to resend")
         for side in sides:
-            conn["notes"][side]["state"] = "sending"
+            conn["notes"][side].update(state="sending", since=time.time())
         conn["status"] = "sending"
         save_board(board)
-    threading.Thread(target=deliver_connection, args=(bid, conn_id, sides), daemon=True).start()
+    _deliver_later(bid, conn_id, sides)
 
 
 def start_conversation(bid, conn_id):
@@ -2146,10 +2200,10 @@ def start_conversation(bid, conn_id):
         src = live[conn["from"]]
         dst = live.get(conn["to"]) or dict(board["nodes"].get(conn["to"], {"name": "?", "cwd": ""}))
         text, _ = default_notes(src, dst, conn.get("reason", ""))
-        conn["notes"]["from"] = {"enabled": True, "text": text, "state": "sending"}
+        conn["notes"]["from"] = {"enabled": True, "text": text, "state": "sending", "since": time.time()}
         conn["status"] = "sending"
         save_board(board)
-    threading.Thread(target=deliver_connection, args=(bid, conn_id, ["from"]), daemon=True).start()
+    _deliver_later(bid, conn_id, ["from"])
 
 
 def disconnect(bid, body):

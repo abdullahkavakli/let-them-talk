@@ -231,7 +231,10 @@ installed inside WSL, where the server runs.
   `claude.exe` runs.
 - Notes are delivered by a short headless run, `claude -p --model haiku
   --name let-them-talk`, whose only tool is `SendMessage` (about 8 s). Each
-  note is marked *sent*, *sent, reworded* or *failed*. A message you send to
+  note is marked *sent*, *sent, reworded* or *failed*; until then its arrow
+  is dotted. If the server restarts meanwhile, the run carries on without
+  it, and the arrow is settled from the chats' transcripts: *sent* once the
+  note shows up there, *failed* if it hasn't within 3½ minutes. A message you send to
   a chat goes the same way, as *[Let Them Talk] Message from your user:*, and
   a new editor chat's prompt as *[Let Them Talk] Your user started this chat
   from Let Them Talk with this prompt:*. An idle background agent gets yours
