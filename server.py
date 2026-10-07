@@ -2513,15 +2513,40 @@ TYPE_CHUNK = 100   # characters per write; one big burst would count as a paste,
                    # which Claude Code passes on as pasted text, not your words
 TYPE_READY = 10    # seconds `claude attach` gets to draw the prompt box
 TYPE_STARTED = 10  # seconds the agent gets to record the prompt
-DIM = re.compile(r"\x1b\[2m([^\x1b]*)\x1b\[22m")
 type_lock = threading.Lock()
+
+
+def _without_dim(raw):
+    """Terminal output with its dim (grey) text blanked out and everything
+    else kept in place. Claude Code draws a suggestion or a hint in the
+    prompt box dim, and may move the cursor before it turns dim off."""
+    out, dim = [], False
+    for m in TERM_TOKEN.finditer(raw):
+        params, final, _, text = m.groups()
+        if text and dim:
+            out.append(" " * sum(_cell_width(ch) for ch in text))
+            continue
+        out.append(m.group(0))
+        if final == "m":
+            p = (params or "0").split(";")
+            i = 0
+            while i < len(p):
+                if p[i] in ("38", "48", "58"):  # a colour: 5;n or 2;r;g;b follows
+                    i += 3 if p[i + 1:i + 2] == ["5"] else 5
+                    continue
+                if p[i] == "2":
+                    dim = True
+                elif p[i] in ("", "0", "22"):
+                    dim = False
+                i += 1
+    return "".join(out)
 
 
 def _prompt_box(raw, suggestion=""):
     """What a background agent's prompt box holds, from its screen as
-    `claude attach` draws it: "" when empty (or showing only its grey
-    suggestion), None when no prompt box is showing (a question, a
-    permission prompt or a menu takes its place). Not from `claude logs`:
+    `claude attach` draws it: "" when empty (or showing only grey text: a
+    suggestion or a hint), None when no prompt box is showing (a question,
+    a permission prompt or a menu takes its place). Not from `claude logs`:
     a long history replays out of place there and hides the box."""
     lines = [l.rstrip() for l in render_screen(raw).splitlines()]
     rules = [i for i, l in enumerate(lines) if l.strip().startswith("─────")]
@@ -2532,9 +2557,10 @@ def _prompt_box(raw, suggestion=""):
     if not box or not box[0].lstrip().startswith("❯") or OPTION.match(box[0]) \
             or any(OPTION.match(l) for l in lines[bottom + 1:]):
         return None
-    text = " ".join(" ".join(box).replace("\xa0", " ").lstrip()[1:].split())
-    grey = {" ".join(m.replace("\xa0", " ").split()) for m in DIM.findall(raw)}
-    if text in grey or (suggestion and suggestion.startswith(text.rstrip("…").rstrip())):
+    # what is typed: the same rows with grey text blanked (same layout)
+    typed = render_screen(_without_dim(raw)).splitlines()[top + 1:bottom]
+    text = " ".join(" ".join(typed).replace("\xa0", " ").strip().removeprefix("❯").split())
+    if suggestion and text and suggestion.startswith(text.rstrip("…").rstrip()):
         return ""
     return text
 
