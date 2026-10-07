@@ -861,12 +861,16 @@ dialog label.choice:has(input:checked) { border-color: var(--accent); background
 #n-team-note { margin: 6px 0 0; }
 details.n-agent { margin-top: 10px; border: 1px solid var(--border); border-radius: 16px; }
 details.n-agent > summary {
-  position: relative; padding: 10px 34px 10px 14px; border-radius: 15px; cursor: pointer; list-style: none;
+  position: relative; display: block; padding: 10px 14px 10px 36px; border-radius: 15px; cursor: pointer; list-style: none;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 details.n-agent > summary::-webkit-details-marker { display: none; }
-details.n-agent > summary::after { content: "▸"; position: absolute; right: 14px; color: var(--muted); }
-details.n-agent[open] > summary::after { content: "▾"; }
+/* the shared chevron, on the left as every fold's */
+details.n-agent > summary::before {
+  content: ""; position: absolute; left: 14px; top: 50%; width: 12px; height: 12px; margin-top: -6px;
+  background: var(--chev) center / 12px no-repeat; transform: rotate(-90deg); transition: transform .15s ease;
+}
+details.n-agent[open] > summary::before { transform: none; }
 details.n-agent > summary:hover { background: var(--field); }
 details.n-agent > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .n-agent-peek { margin-left: 8px; font-size: 12.5px; }

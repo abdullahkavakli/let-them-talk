@@ -737,14 +737,24 @@ def checks_wide(browser):
     name = "folds: no browser marker is left on any fold, and each chevron is the same drawn one"
     with step(page, name):
         open_agents(page)
+        # a marker is the browser's (a list item, or a list symbol) or a typed triangle in a pseudo-element
         marks = """() => [...document.querySelectorAll('summary')].map(s => { const c = getComputedStyle(s), b = getComputedStyle(s, '::before');
-            return [c.display === 'list-item' || c.listStyleType !== 'none', b.width, b.height, b.backgroundImage.startsWith('url(')]; })"""
+            return [c.display === 'list-item' || c.listStyleType !== 'none'
+                    || /[▸▾▴◂]/.test(getComputedStyle(s, '::after').content + b.content),
+                    b.width, b.height, b.backgroundImage.startsWith('url(')]; })"""
         found = page.evaluate(marks)  # the chat's status line and Connections, the sidebar's Activity, the pop-up's cards
         page.evaluate("openWirePop('c1')")  # an arrow's notes fold
         found += page.evaluate(marks)
+        page.evaluate("document.querySelector('#wire-pop').close()")
+        page.locator("#new-workflow").click()  # New workflow's agents fold
+        page.locator("#n-team-more").click()
+        page.locator("#n-team-more").click()
+        found += page.evaluate(marks)
+        count = page.locator("#chat-dialog details.n-agent").count()
+        page.locator("#n-team-count").fill("0")  # the team is kept between looks: leave none
         text = page.inner_text("body")
-        check(name, len(found) >= 8 and not any(m[0] for m in found) and {tuple(m[1:]) for m in found} == {("12px", "12px", True)}
-              and "▸" not in text and "▾" not in text, found)
+        check(name, len(found) >= 10 and not any(m[0] for m in found) and {tuple(m[1:]) for m in found} == {("12px", "12px", True)}
+              and "▸" not in text and "▾" not in text and count == 2, found)
 
     name = "motion: with reduced motion the running ring and the running dot stand still"
     with step(page, name):
