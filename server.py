@@ -2912,31 +2912,47 @@ def _hand_off(lid, s):
 # find them, with your prompt and the plan (each agent's name, role and the
 # prompt you wrote for it). Then an arrow each way links the master with each
 # agent. Their first prompts already introduce them, so the arrows send no
-# notes: a note would have an agent start talking before it has its task.
+# notes: a note would have an agent start talking before it has its task. An
+# agent that doesn't come up running in time is removed, and the master does
+# its part.
 TEAM_MAX = 8
 TEAM_MODEL = "opus"
-ROLE_MAX = 24   # a role is part of its agent's name, "<master> - <role>", which stays within 60
+MASTER_MAX = 30  # characters in the master's name (a number may follow): "<master> - <role>" stays within 60
+ROLE_MAX = 24
+NAME_RE = re.compile(r"[\w -]+")  # a role, or the master's name you type: names go in quotes and in SendMessage's `to`
 TEAM_WAIT = 90  # seconds the team's agents, then its master, get to show up running
+TEAM_STARTING = ("starting", "master")  # a team's states until it is done or failed
+PROMPT_MOST = 120_000  # bytes in the master's first prompt: Linux takes no single argument over 128 KiB
 
 
-def team_spots(board, n):
+def team_spots(board, n, held=()):
     """Spots for a master's card and its n agents': the agents in a column
     right of the master (wide apart, for the two labels of an arrow each way),
     which sits level with the column's middle; the first such place, from
-    free_slot's pick rightwards, where none overlaps a card."""
-    x, y = free_slot(board)
+    free_slot's pick rightwards, where none overlaps a card, a spot kept for
+    a card to come (board["spots"]) or one held for another team starting."""
+    kept = [*board.get("spots", {}).values(), *held]
+    room = {"nodes": {**board["nodes"], **{f"kept {i}": {"x": x, "y": y} for i, (x, y) in enumerate(kept)}}}
+    x, y = free_slot(room)
     while True:
         spots = [[x, y + (n - 1) * 75]] + [[x + 360, y + i * 150] for i in range(n)]
-        if not any(overlaps(board, *p) for p in spots):
+        if not any(overlaps(room, *p) for p in spots):
             return spots
         x += 270
 
 
+def _first_words(text, most):
+    """text's first words, as many whole ones as fit in most characters."""
+    words, pick = re.sub(r"[^\w\s-]", "", text).split(), []
+    for w in words:
+        if len(" ".join(pick + [w])) > most:
+            break
+        pick.append(w)
+    return " ".join(pick) or (words[0][:most] if words else "")
+
+
 def _team_plan(body):
-    """The team asked for, checked before anything starts. Names: the master's
-    (yours, else the prompt's first words) and "<master> - <role>" for each
-    agent, none taken by a running chat (messages find chats by name): the
-    master's gets a number if one is."""
+    """The team asked for, checked before anything starts; start_team names it."""
     prompt = str(body.get("prompt") or "").strip()
     if not prompt:
         raise ValueError("Say what the master should do.")
@@ -2951,6 +2967,8 @@ def _team_plan(body):
             raise ValueError(f"Agent {i} needs a role.")
         if len(role) > ROLE_MAX:
             raise ValueError(f"Agent {i}'s role is too long; keep it to {ROLE_MAX} characters.")
+        if not NAME_RE.fullmatch(role):
+            raise ValueError(f"Agent {i}'s role can have only letters, digits, spaces, - and _.")
         if not task:
             raise ValueError(f"Agent {i} ({role}) needs a prompt.")
         if role.lower() in roles:
@@ -2958,23 +2976,40 @@ def _team_plan(body):
                              "give each its own role, as it is part of its name.")
         roles[role.lower()] = i
         team.append({"role": role, "prompt": task})
+    name = " ".join(str(body.get("name") or "").split())
+    if len(name) > MASTER_MAX:
+        raise ValueError(f"Keep the master's name to {MASTER_MAX} characters.")
+    if name and not NAME_RE.fullmatch(name):
+        raise ValueError("The master's name can have only letters, digits, spaces, - and _.")
     folder = normalize_folder(str(body.get("folder") or ""))
     mode = body.get("permissionMode") or "auto"
     if mode not in PERMISSION_MODES:
         raise ValueError(f"Unknown permission mode: {mode}")
-    images = body.get("images") or []
-    _read_images(images)  # the master takes them; checked now, before any agent starts
-    words = " ".join(re.sub(r"[^\w\s-]", "", prompt).split()[:3])
-    base = _agent_name(prompt, body.get("name") or words)[:30].strip()
-    taken = {s["name"] for s in live_sessions() if s.get("platform") == "wsl"}
-    master, n = base, 1
-    while master in taken or any(f"{master} - {a['role']}" in taken for a in team):
-        n += 1
-        master = f"{base} {n}"
-    for a in team:
-        a["name"] = f"{master} - {a['role']}"
-    return {"prompt": prompt, "master": master, "agents": team, "folder": folder, "mode": mode,
+    images = _read_images(body.get("images") or [])  # the master's
+    base = _agent_name(prompt, name or _first_words(prompt, MASTER_MAX))[:MASTER_MAX].strip()
+    return {"prompt": prompt, "base": base, "agents": team, "folder": folder, "mode": mode,
             "images": images, "ultracode": body.get("ultracode") is True}
+
+
+def _name_team(team, taken):
+    """The master's name: the plan's, with a number if it or one of its
+    agents' names, "<master> - <role>", is taken (taken: lowercase names)."""
+    master, n = team["base"], 1
+    while master.lower() in taken or any(f"{master} - {a['role']}".lower() in taken for a in team["agents"]):
+        n += 1
+        master = f"{team['base']} {n}"
+    team["master"] = master
+    for a in team["agents"]:
+        a["name"] = f"{master} - {a['role']}"
+
+
+def _its_agents(n):
+    return "its agent" if n == 1 else f"its {n} agents"
+
+
+def _quoted(names):
+    q = [f"\"{n}\"" for n in names]
+    return q[0] if len(q) == 1 else ", ".join(q[:-1]) + " and " + q[-1]
 
 
 # Names have spaces, so the prompts quote them and say what SendMessage's `to` takes.
@@ -2986,16 +3021,20 @@ def _waiting_prompt(a, master):
             f"master the same way. For now, only reply that you are ready.")
 
 
-def _master_prompt(team, running, missing):
-    lines = [team["prompt"], "", f"[{APP_NAME}] You are \"{team['master']}\", the master of a team of background "
-             "agents your user started for this. Each one runs in this folder and waits for its task from you:"]
+def _master_prompt(team, running, missing, images=()):
+    """images: the paths of your images, named right after your prompt."""
+    lines = [with_images(team["prompt"], images), "",
+             f"[{APP_NAME}] You are \"{team['master']}\", the master of a team of background agents your user "
+             "started for this. Each one runs in this folder and waits for its task from you:"]
     lines += [f"- \"{a['name']}\", the {a['role']}: {a['prompt']}" for a in running]
     if missing:
         lines.append("These agents couldn't be started, so do their part yourself:")
         lines += [f"- the {a['role']}: {a['prompt']}" for a in missing]
-    lines.append("Send each agent its task with SendMessage (to: its name, as above), with what it needs to "
-                 "know. They report back to you with SendMessage. Coordinate their work, check their reports, "
-                 "and tell your user the result once it is all done.")
+    lines.append("Send each agent its prompt above, in full, as its task, with SendMessage (to: its name, as "
+                 "above), adding anything else it needs to know. They report back to you with SendMessage. "
+                 "Coordinate their work, check their reports, and tell your user the result once it is all done.")
+    if images:
+        lines.append("The images are yours; if an agent needs one, send it the image's path.")
     return "\n".join(lines)
 
 
@@ -3014,10 +3053,29 @@ def _running_jobs(jobs, until):
 
 def start_team(bid, body):
     team = _team_plan(body)
-    lid = uuid.uuid4().hex[:10]
-    launches[lid] = {"id": lid, "board": bid, "at": time.time(), "kind": "team", "state": "starting",
-                     "detail": f"Starting team \"{team['master']}\": its {len(team['agents'])} agents, then "
-                               "the master. They will appear on this board in a moment."}
+    since = time.time()
+    live = {s["name"].lower() for s in live_sessions() if s.get("platform") == "wsl"}
+    with lock:  # two teams starting together can't both take a name, or a place
+        # A team's master shows up running last, so the names of teams still
+        # starting are taken too, and those of any that got done meanwhile.
+        teams = [l for l in launches.values() if l.get("kind") == "team"]
+        _name_team(team, live | {n.lower() for l in teams if l["state"] in TEAM_STARTING or l["at"] >= since
+                                 for n in l["names"]})
+        # The master's first prompt is one argument to claude, and only the master would fail on it.
+        images = [CLAUDE_TMP / re.sub(r"[^A-Za-z0-9]", "-", team["folder"]) / IMAGE_DIR / f"{'0' * 16}.webp"
+                  ] * len(team["images"])  # as long as _save_images's names
+        if len(_master_prompt(team, team["agents"], [], images).encode()) > PROMPT_MOST:
+            raise ValueError("Your prompts are too long together. Shorten them, or put the details in a file "
+                             "in the folder and name the file in the prompt.")
+        board = load_board(bid)
+        held = [p for l in teams if l["board"] == bid and l["state"] in TEAM_STARTING for p in l["spots"] if p]
+        n = len(team["agents"])
+        spots = team_spots(board, n, held) if board else [None] * (n + 1)
+        lid = uuid.uuid4().hex[:10]
+        launches[lid] = {"id": lid, "board": bid, "at": time.time(), "kind": "team", "state": "starting",
+                         "names": [team["master"], *(a["name"] for a in team["agents"])], "spots": spots,
+                         "detail": f"Starting team \"{team['master']}\": {_its_agents(n)}, then the master. "
+                                   "They will appear on this board in a moment."}
     threading.Thread(target=_run_team, args=(lid, team), daemon=True).start()
     return {"launchId": lid, "name": team["master"], "agents": [a["name"] for a in team["agents"]]}
 
@@ -3030,9 +3088,48 @@ def _run_team(lid, team):
         launches[lid].update(state="failed", detail=f"Starting the team stopped on an error: {e}", at=time.time())
 
 
+def _remove_job(bid, job):
+    """Stop and remove a background agent a team started that didn't come up
+    running in time (`claude stop`, `claude rm`), and forget its card's place,
+    so it doesn't turn up later to wait for a master that was told it isn't
+    there. Returns why it couldn't be removed, or None."""
+    try:
+        _stop_job({"id": job})
+    except (ValueError, OSError, subprocess.SubprocessError):
+        pass  # not running: `claude rm` takes it all the same
+    with lock:
+        board = load_board(bid)
+        if board is not None:
+            board["adopt"] = [x for x in board.get("adopt", []) if x != job]
+            board.get("spots", {}).pop(job, None)
+            save_board(board)
+    try:
+        delete_background(bid, {"jobId": job})
+    except (ValueError, OSError, subprocess.SubprocessError) as e:
+        return str(e)
+    return None
+
+
+def _team_trouble(failed, late, kept):
+    """In sentences: the agents that didn't start (with Claude Code's words,
+    one sentence for each reason) and those that didn't come up running in
+    time, removed (late) or not (kept, with why)."""
+    said = lambda why: why.strip().rstrip(".") + "."
+    by_why = {}
+    for a, why in failed:
+        by_why.setdefault(said(why), []).append(a["name"])
+    out = [f"{_quoted(names)} didn't start: {why}" for why, names in by_why.items()]
+    if late:
+        out.append(f"{_quoted([a['name'] for a in late])} didn't come up within {TEAM_WAIT} seconds, so "
+                   f"{'it was' if len(late) == 1 else 'they were'} removed.")
+    out += [f"\"{a['name']}\" didn't come up within {TEAM_WAIT} seconds and couldn't be removed: {said(why)} "
+            "Delete its card if it shows up." for a, why in kept]
+    return " ".join(out)
+
+
 def _start_team(lid, team):
     job, master = launches[lid], team["master"]
-    bid = job["board"]
+    bid, spots = job["board"], job["spots"]
     said = lambda why: why.strip().rstrip(".") + "."  # Claude Code's words, as a sentence
 
     def step(state, detail, level=None):
@@ -3044,12 +3141,13 @@ def _start_team(lid, team):
                     add_activity(board, detail, level)
                     save_board(board)
 
-    with lock:
-        board = load_board(bid)
-        spots = team_spots(board, len(team["agents"])) if board else [None] * (len(team["agents"]) + 1)
+    try:  # the master's, saved before anything starts
+        images = _save_images({"cwd": team["folder"]}, team["images"]) if team["images"] else []
+    except (ValueError, OSError) as e:
+        return step("failed", f"Team \"{master}\" wasn't started: its images couldn't be saved. {said(str(e))}", "error")
     common = {"folder": team["folder"], "model": TEAM_MODEL, "permissionMode": team["mode"],
               "ultracode": team["ultracode"]}
-    failed = []  # (agent, why), in the master's plan as missing
+    failed, late, kept = [], [], []  # (agent, why) that didn't start; agents that didn't come up: removed, or (agent, why) not
     for a, spot in zip(team["agents"], spots[1:]):
         try:
             a["jobId"] = start_background(bid, {**common, "name": a["name"], "prompt": _waiting_prompt(a, master)},
@@ -3057,26 +3155,30 @@ def _start_team(lid, team):
         except (ValueError, OSError, subprocess.SubprocessError) as e:
             failed.append((a, str(e)))
     started = [a for a in team["agents"] if a.get("jobId")]
-    if started:
-        step("starting", f"Team \"{master}\": waiting for its agents to start…")
-        found = _running_jobs({a["jobId"] for a in started}, time.time() + TEAM_WAIT)
-        for a in started:
-            if a["jobId"] in found:
-                a["session"] = found[a["jobId"]]
-            else:
-                failed.append((a, f"it wasn't running after {TEAM_WAIT} seconds"))
+    found = _running_jobs({a["jobId"] for a in started}, time.time() + TEAM_WAIT) if started else {}
+    for a in started:
+        if a["jobId"] in found:
+            a["session"] = found[a["jobId"]]
+        elif (why := _remove_job(bid, a["jobId"])) is None:
+            late.append(a)
+        else:
+            kept.append((a, why))
     running = [a for a in team["agents"] if a.get("session")]
+    missing = [a for a in team["agents"] if not a.get("session")]
     if not running:
-        return step("failed", f"No agent of team \"{master}\" started, so the master wasn't started either. "
-                              f"\"{failed[0][0]['name']}\": {said(failed[0][1])}", "error")
-    step("starting", f"Team \"{master}\": {len(running)} agents wait; starting the master…")
+        return step("failed", f"No agent of team \"{master}\" is running, so the master wasn't started either. "
+                              + _team_trouble(failed, late, kept), "error")
+    one = len(running) == 1
+    step("master", f"Team \"{master}\": {_its_agents(len(running))} {'is' if one else 'are'} running; "
+                   "starting the master…")
     try:
-        new = start_background(bid, {**common, "name": master, "images": team["images"],
-                                     "prompt": _master_prompt(team, running, [a for a, _ in failed])},
+        new = start_background(bid, {**common, "name": master, "prompt": _master_prompt(team, running, missing, images)},
                                spot=spots[0])
     except (ValueError, OSError, subprocess.SubprocessError) as e:
-        return step("failed", f"The master of team \"{master}\" didn't start: {said(str(e))} Its {len(running)} agents "
-                              "are running and wait for it; delete them if you don't need them.", "error")
+        return step("failed", f"The master of team \"{master}\" didn't start: {said(str(e))} "
+                              f"{'Its agent is' if one else f'Its {len(running)} agents are'} running and "
+                              f"wait{'s' if one else ''} for it; delete {'it' if one else 'them'} if you don't "
+                              f"need {'it' if one else 'them'}.", "error")
     found = _running_jobs({new["jobId"]}, time.time() + TEAM_WAIT)
     if new["jobId"] not in found:
         return step("failed", f"The master \"{master}\" started, but didn't show up running within {TEAM_WAIT} "
@@ -3098,17 +3200,20 @@ def _start_team(lid, team):
             if made:
                 with lock:
                     board = load_board(bid)
-                    board["connections"] = [c for c in board["connections"] if c["id"] not in made]
-                    save_board(board)
+                    if board is not None:
+                        board["connections"] = [c for c in board["connections"] if c["id"] not in made]
+                        add_activity(board, f"Removed the arrow \"{master}\" → \"{a['name']}\" again, as the one "
+                                            "back couldn't be made.", "error")
+                        save_board(board)
             unlinked.append((a, str(e)))
     roles = ", ".join(a["role"] for a in running)
-    if not failed and not unlinked:
-        return step("done", f"Team \"{master}\" is running: the master and its {len(running)} agents ({roles}), "
+    if not missing and not unlinked:
+        return step("done", f"Team \"{master}\" is running: the master and {_its_agents(len(running))} ({roles}), "
                             "linked both ways. The master hands out the tasks.", "ok")
     parts = [f"Team \"{master}\" is running with {len(running)} of {len(team['agents'])} agents."]
-    parts += [f"\"{a['name']}\" didn't start: {said(why)}" for a, why in failed]
-    if failed:
-        parts.append(f"The master does {'its' if len(failed) == 1 else 'their'} part itself.")
+    if missing:
+        parts += [_team_trouble(failed, late, kept),
+                  f"The master does {'its' if len(missing) == 1 else 'their'} part itself."]
     parts += [f"\"{a['name']}\" isn't linked with the master: {said(why)}" for a, why in unlinked]
     step("failed", " ".join(parts), "error")
 

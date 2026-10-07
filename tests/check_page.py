@@ -643,6 +643,127 @@ def checks_wide(browser):
         check(name, not team_posts() and page.inner_text("#n-error") == "Agent 2 needs a role."
               and page.evaluate("document.activeElement.id") == "n-role-1", page.inner_text("#n-error"))
 
+    name = "new workflow: an agent with a role but no prompt, or a role another has, isn't sent; the cursor goes there"
+    with step(page, name):
+        page.locator("#new-workflow").click()
+        page.locator("#n-prompt").fill("Fix the login")
+        page.locator("#n-team-count").fill("2")
+        page.locator("#n-role-0").fill("tester")
+        page.locator("#n-task-0").fill("Test it")
+        page.locator("#n-role-1").fill("writer")
+        page.locator("details.n-agent summary").nth(1).click()  # folded
+        page.locator("#n-submit").click()
+        page.wait_for_timeout(200)
+        no_prompt = (page.inner_text("#n-error") == "Agent 2 needs a prompt."
+                     and page.evaluate("document.activeElement.id") == "n-task-1")
+        page.locator("#n-role-1").fill(" Tester ")
+        page.locator("#n-task-1").fill("Test it again")
+        page.locator("details.n-agent summary").nth(1).click()  # folded again
+        page.locator("#n-submit").click()
+        page.wait_for_timeout(200)
+        same = (page.inner_text("#n-error") == 'Agents 1 and 2 are both "Tester"; give each its own role.'
+                and page.evaluate("document.activeElement.id") == "n-role-1"
+                and page.evaluate("document.querySelectorAll('.n-agent')[1].open"))
+        check(name, not team_posts() and no_prompt and same, (no_prompt, page.inner_text("#n-error")))
+
+    name = "new workflow: a team without the master's prompt isn't sent; the cursor goes to the prompt"
+    with step(page, name):
+        page.locator("#new-workflow").click()
+        page.locator("#n-prompt").fill("")
+        page.locator("#n-team-count").fill("1")
+        page.locator("#n-role-0").fill("tester")
+        page.locator("#n-task-0").fill("Test it")
+        page.locator("#n-submit").click()
+        page.wait_for_timeout(200)
+        check(name, not team_posts() and page.inner_text("#n-error") == "Say what the master should do."
+              and page.evaluate("document.activeElement.id") == "n-prompt", page.inner_text("#n-error"))
+
+    name = "new workflow: images and Ultracode go with the team, and are cleared after"
+    with step(page, name):
+        page.evaluate("state.images = {}")
+        page.api.post_result = {"launchId": "t1", "name": "Fix the login", "agents": []}
+        page.locator("#new-workflow").click()
+        page.locator("#n-prompt").fill("Fix the login")
+        paste(page, "#n-prompt", "image/png")
+        page.wait_for_timeout(200)
+        page.locator("#n-ultra").check()
+        page.locator("#n-team-count").fill("1")
+        page.locator("#n-role-0").fill("tester")
+        page.locator("#n-task-0").fill("Test it")
+        page.locator("#n-submit").click()
+        page.wait_for_timeout(300)
+        page.locator("#new-workflow").click()
+        sent = team_posts()
+        check(name, sent and sent[-1]["images"] == [{"data": PNG_1PX}] and sent[-1]["ultracode"] is True
+              and page.locator("#n-images .thumb").count() == 0 and not page.is_checked("#n-ultra"), sent)
+
+    name = "new workflow: + stops at 8 agents, and a typed 12 reads 8"
+    with step(page, name):
+        page.locator("#new-workflow").click()
+        for _ in range(9):
+            if page.locator("#n-team-more").is_enabled():
+                page.locator("#n-team-more").click()
+        eight = sections().count() == 8 and page.locator("#n-team-more").is_disabled()
+        page.locator("#n-team-count").fill("0")
+        page.locator("#n-team-count").fill("12")
+        page.locator("#n-prompt").focus()
+        check(name, eight and sections().count() == 8 and page.input_value("#n-team-count") == "8", sections().count())
+
+    name = "new workflow: clicking + again where it was adds another agent: the stepper stays under the pointer"
+    with step(page, name):
+        page.locator("#new-workflow").click()
+        page.locator("#n-team-count").fill("0")
+        page.locator("#n-prompt").focus()
+        page.locator("#n-team-more").scroll_into_view_if_needed()
+        box = page.locator("#n-team-more").bounding_box()
+        for _ in range(3):
+            page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+            page.wait_for_timeout(50)
+        check(name, page.input_value("#n-team-count") == "3" and sections().count() == 3, page.input_value("#n-team-count"))
+
+    name = "new workflow: a digit typed in the number replaces it; Enter there (or in a Role) doesn't start the team"
+    with step(page, name):
+        page.locator("#new-workflow").click()
+        page.locator("#n-prompt").fill("Fix the login")
+        page.locator("#n-team-count").click()  # its middle: the cursor would land before the 0
+        page.keyboard.type("3")
+        three = sections().count() == 3 and page.input_value("#n-team-count") == "3"
+        page.keyboard.type("2")
+        page.keyboard.press("Enter")
+        two = sections().count() == 2 and page.evaluate("document.querySelector('#chat-dialog').open")
+        for i in range(2):
+            page.locator(f"#n-role-{i}").fill(f"r{i}")
+            page.locator(f"#n-task-{i}").fill("y")
+        page.locator("#n-role-0").press("Enter")
+        on = page.evaluate("document.activeElement.id")
+        page.locator("#n-team-count").press("Enter")
+        page.wait_for_timeout(200)
+        check(name, three and two and on == "n-task-0" and not team_posts()
+              and page.evaluate("document.querySelector('#chat-dialog').open"), (three, two, on, team_posts()))
+
+    name = "new workflow: the keyboard focus stays in the stepper at 8 agents and at none"
+    with step(page, name):
+        page.locator("#new-workflow").click()
+        page.locator("#n-team-more").focus()
+        for _ in range(8):
+            page.keyboard.press("Space")
+        at8 = page.evaluate("document.activeElement.id")
+        page.locator("#n-team-less").focus()
+        for _ in range(8):
+            page.keyboard.press("Space")
+        check(name, at8 == "n-team-count" and page.evaluate("document.activeElement.id") == "n-team-count"
+              and sections().count() == 0, (at8, page.evaluate("document.activeElement.id")))
+
+    name = "new workflow: a folded section's title shows the role and the start of its prompt"
+    with step(page, name):
+        page.locator("#new-workflow").click()
+        page.locator("#n-team-count").fill("1")
+        page.locator("#n-role-0").fill("tester")
+        page.locator("#n-task-0").fill("Test the login page\nthen the sign-up page")
+        page.locator("details.n-agent summary").first.click()
+        text = page.inner_text("details.n-agent summary >> nth=0")
+        check(name, "Agent 1 · tester" in text and "Test the login page" in text and "sign-up" not in text, text)
+
     name = "arrows: an arrow each way runs side by side between the two cards, each label clear of the other"
     with step(page, name):
         page.api.arrows = [{"id": "c2", "from": B, "to": A, "reason": "report", "status": "sent", "createdAt": 2,
@@ -657,6 +778,21 @@ def checks_wide(browser):
         body = page.inner_text("#drawer-body")
         check(name, len(spans) == 2 and all(560 - 5 <= x0 and x1 <= 640 + 5 for x0, x1 in spans) and apart
               and "No notes" in body and "start the conversation" not in body, (spans, boxes))
+
+    name = "arrows: an arrow each way between cards far apart on a row, or stacked, keeps its two labels apart"
+    with step(page, name):
+        pair = lambda i, a, b: [{"id": f"p{i}", "from": a, "to": b, "reason": "task", "status": "sent", "createdAt": 2,
+                                 "notes": {"from": NOTE, "to": NOTE}},
+                                {"id": f"q{i}", "from": b, "to": a, "reason": "report", "status": "sent", "createdAt": 2,
+                                 "notes": {"from": NOTE, "to": NOTE}}]
+        page.api.arrows = pair(1, C, E) + pair(2, A, C)  # gamma and epsilon 810 px apart on a row; alpha above gamma
+        poll(page)
+        clear = []
+        for i in (1, 2):
+            p, q = (page.locator(f'.wire-label[data-id="{c}{i}"]').bounding_box() for c in "pq")
+            clear.append(p["y"] + p["height"] <= q["y"] or q["y"] + q["height"] <= p["y"]
+                         or p["x"] + p["width"] <= q["x"] or q["x"] + q["width"] <= p["x"])
+        check(name, all(clear), clear)
 
     name = "offline: a banner while the server doesn't answer, gone when it does"
     with step(page, name):
@@ -705,6 +841,15 @@ def checks_narrow(browser):
             open_card(page, A)
             check(name, page.evaluate("""(() => { const r = document.querySelector('#drawer-body h3').getBoundingClientRect();
                 return !!document.elementFromPoint(r.x + 8, r.y + r.height / 2)?.closest('#drawer'); })()"""))
+        name = f"narrow {w} px: clicking + again where it was adds another agent"
+        with step(page, name):
+            page.locator("#new-workflow").click()
+            page.locator("#n-team-more").scroll_into_view_if_needed()
+            box = page.locator("#n-team-more").bounding_box()
+            for _ in range(3):
+                page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                page.wait_for_timeout(50)
+            check(name, page.input_value("#n-team-count") == "3", page.input_value("#n-team-count"))
         name = f"narrow {w} px: no sideways scrolling"
         with step(page, name):
             check(name, page.evaluate("document.documentElement.scrollWidth <= innerWidth"))

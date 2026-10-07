@@ -2185,34 +2185,58 @@ const workflowName = (task) =>
 // a master that runs your prompt, and agents that wait for the task it sends
 // each one. Each agent is a section that folds, with its role and prompt; one
 // a lower count takes off is kept, so a higher count brings back its text.
-const TEAM_MAX = 8, ROLE_MAX = 24;
+const TEAM_MAX = 8, ROLE_MAX = 24, MASTER_MAX = 30;
+const NAME_CHARS = /^[\p{L}\p{N}_ -]+$/u;  // in a role or the master's name (the server's NAME_RE)
 const teamSize = () => nd.workflow ? Math.max(0, Math.min(TEAM_MAX, parseInt(nd.count.value, 10) || 0)) : 0;
 
 function agentSection(i) {
   // its title says its role; folded, the start of its prompt too
   const head = el("span"), peek = el("span", { class: "n-agent-peek muted" });
+  const task = el("textarea", { id: `n-task-${i}`, class: "n-task", rows: 3,
+    placeholder: "Its part of the work; the master sends it this as its task",
+    oninput: () => { peek.textContent = task.value.trim().split("\n")[0]; } });
   const role = el("input", { id: `n-role-${i}`, class: "n-role", maxlength: ROLE_MAX, autocomplete: "off",
-    placeholder: "e.g. tester", oninput: () => { head.textContent = role.value.trim() && ` · ${role.value.trim()}`; } });
+    placeholder: "e.g. tester", oninput: () => { head.textContent = role.value.trim() && ` · ${role.value.trim()}`; },
+    // Enter goes on to its prompt, as it would start the team otherwise
+    onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); task.focus(); } } });
   return el("details", { class: "n-agent", open: true },
     el("summary", {}, el("strong", { text: `Agent ${i + 1}` }), head, peek),
     el("div", { class: "n-agent-body" },
       el("label", { for: role.id, text: "Role" }), role,
-      el("label", { for: `n-task-${i}`, text: "Prompt" }),
-      el("textarea", { id: `n-task-${i}`, class: "n-task", rows: 3,
-        placeholder: "Its part of the work; the master sends it this as its task",
-        oninput: (e) => { peek.textContent = e.target.value.trim().split("\n")[0]; } })));
+      el("label", { for: task.id, text: "Prompt" }), task));
 }
 
 function renderTeam() {
   const n = teamSize();
   while (nd.sections.length < n) nd.sections.push(agentSection(nd.sections.length));
   nd.sections.forEach((s, i) => { if (i >= n) s.remove(); else if (!s.isConnected) nd.teamList.append(s); });
-  $("#n-team-less").disabled = n === 0;
-  $("#n-team-more").disabled = n === TEAM_MAX;
+  for (const [btn, off] of [[$("#n-team-less"), n === 0], [$("#n-team-more"), n === TEAM_MAX]]) {
+    if (off && document.activeElement === btn) nd.count.focus();  // a button turned off drops the focus to the page
+    btn.disabled = off;
+  }
   $("#n-team-note").textContent = n
     ? "Each one starts in the background and waits; the master sends it the prompt you write here as its task, and it reports back."
-    : "With none, one agent runs your task as a workflow. Add agents to have a master hand each one its part.";
+    : "Add agents to have a master hand each one its part.";
 }
+
+// The stepper stays under the pointer when its number changes, though the
+// fields above it hide (or show) and a section comes (or goes) below: the
+// dialog scrolls by as much, and when it can't, the dialog itself moves (one
+// that fits sits in the middle of the window, so it moves as it grows).
+function keepStepperStill(change) {
+  const d = nd.dialog, at = () => $("#n-team-more").getBoundingClientRect().top, before = at();
+  change();
+  let off = at() - before;
+  if (Math.abs(off) < 1) return;
+  const scrolled = d.scrollTop;
+  d.scrollTop = scrolled + off;
+  off -= d.scrollTop - scrolled;
+  if (Math.abs(off) < 1) return;
+  const y = Math.max(8, d.getBoundingClientRect().top - off);
+  Object.assign(d.style, { marginTop: `${y}px`, marginBottom: "auto", maxHeight: `calc(100% - ${y}px - 1em)` });
+  d.scrollTop += at() - before;  // it may have had to get shorter
+}
+const changeCount = () => keepStepperStill(refreshAgentDialog);
 
 function refreshAgentDialog() {
   const bg = whereTo() === "background", wf = nd.workflow, team = teamSize() > 0;
@@ -2222,10 +2246,12 @@ function refreshAgentDialog() {
   nd.prompt.placeholder = team ? "e.g. Build the sign-up page: split the work among your agents and check what they send back"
     : wf ? "e.g. Review every file in src/ for bugs and fix them" : "e.g. Run the test suite and fix whatever fails";
   $("#n-where-box").hidden = wf;
-  nd.name.placeholder = team ? "optional; the master's, taken from the prompt"
+  nd.name.placeholder = team ? "optional; the master's name, else the prompt's first words"
     : wf ? "optional; \"workflow\" and the task's first words" : "optional; taken from the prompt";
   $("#n-agents-label").hidden = nd.agents.hidden = !wf || team;
   $("#n-model-label").hidden = nd.model.hidden = team;  // a team runs on Opus
+  if (team) nd.name.maxLength = MASTER_MAX;
+  else nd.name.removeAttribute("maxlength");
   nd.team.hidden = !wf;
   $("#n-editor-box").hidden = bg;
   // A Chat in IDE takes a name (its card's, on this board) and a model (the
@@ -2329,17 +2355,39 @@ nd.dialog.addEventListener("drop", (e) => {
   addImages(NEW_AGENT, [...e.dataTransfer.files], renderAgentImages);
 });
 
-for (const e of [nd.editor, nd.mode, nd.model, nd.count, ...document.querySelectorAll('input[name="n-where"]')]) {
+for (const e of [nd.editor, nd.mode, nd.model, ...document.querySelectorAll('input[name="n-where"]')]) {
   e.addEventListener("change", refreshAgentDialog);
   e.addEventListener("input", refreshAgentDialog);
 }
+nd.count.addEventListener("input", changeCount);
 nd.count.addEventListener("change", () => { nd.count.value = teamSize(); });  // 12 reads 8, "" reads 0
+// A digit typed replaces the number, wherever the cursor is (8 at most: one
+// digit is all it takes); it shows selected for that. Enter applies it, as
+// it would start the team otherwise.
+for (const type of ["focus", "click"]) nd.count.addEventListener(type, () => nd.count.select());
+nd.count.addEventListener("beforeinput", (e) => {
+  if (e.inputType !== "insertText") return;
+  e.preventDefault();
+  if (!/^\d+$/.test(e.data || "")) return;
+  nd.count.value = Math.min(TEAM_MAX, Number(e.data));
+  changeCount();
+  nd.count.select();
+});
+nd.count.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  nd.count.value = teamSize();
+  changeCount();
+});
 for (const [id, by] of [["#n-team-less", -1], ["#n-team-more", 1]]) {
   $(id).addEventListener("click", () => {
     nd.count.value = Math.max(0, Math.min(TEAM_MAX, teamSize() + by));
-    refreshAgentDialog();
+    changeCount();
   });
 }
+nd.dialog.addEventListener("close", () => {  // the next one opens in the middle again (see keepStepperStill)
+  Object.assign(nd.dialog.style, { marginTop: "", marginBottom: "", maxHeight: "" });
+});
 
 $("#chat-form").addEventListener("submit", async (evt) => {
   if (evt.submitter?.value !== "ok") return;
@@ -2352,12 +2400,20 @@ $("#chat-form").addEventListener("submit", async (evt) => {
     if (teamSize()) {
       const agents = nd.sections.slice(0, teamSize()).map((s) =>
         ({ role: s.querySelector(".n-role").value.trim(), prompt: s.querySelector(".n-task").value.trim() }));
-      if (!prompt) return fail("Say what the master should do.");
-      const i = agents.findIndex((a) => !a.role || !a.prompt);
-      if (i >= 0) {  // the server checks it all again; this shows where
-        nd.sections[i].open = true;
-        nd.sections[i].querySelector(agents[i].role ? ".n-task" : ".n-role").focus();
-        return fail(`Agent ${i + 1} needs ${agents[i].role ? "a prompt" : "a role"}.`);
+      // The server checks it all again; these show where.
+      const there = (box, msg) => { box.focus(); return fail(msg); };
+      if (!prompt) return there(nd.prompt, "Say what the master should do.");
+      const name = nd.name.value.trim();
+      if (name.length > MASTER_MAX) return there(nd.name, `Keep the master's name to ${MASTER_MAX} characters.`);
+      if (name && !NAME_CHARS.test(name)) return there(nd.name, "The master's name can have only letters, digits, spaces, - and _.");
+      const key = (role) => role.toLowerCase().split(/\s+/).join(" ");
+      for (const [i, a] of agents.entries()) {
+        const open = (sel, msg) => { nd.sections[i].open = true; return there(nd.sections[i].querySelector(sel), msg); };
+        const same = agents.findIndex((b) => key(b.role) === key(a.role));
+        if (!a.role) return open(".n-role", `Agent ${i + 1} needs a role.`);
+        if (!NAME_CHARS.test(a.role)) return open(".n-role", `Agent ${i + 1}'s role can have only letters, digits, spaces, - and _.`);
+        if (same < i) return open(".n-role", `Agents ${same + 1} and ${i + 1} are both "${a.role}"; give each its own role.`);
+        if (!a.prompt) return open(".n-task", `Agent ${i + 1} needs a prompt.`);
       }
       // it starts in the server's own time; its notices say how it goes (see renderLaunches)
       await api(`/api/board/${state.boardId}/launch-team`, {
@@ -2401,6 +2457,8 @@ $("#chat-form").addEventListener("submit", async (evt) => {
     fail(failText(e));
   } finally {
     nd.submit.disabled = false;
+    // turned off while it waited, it dropped the focus to the page: back on it, by the server's answer
+    if (nd.dialog.open && document.activeElement === document.body) nd.submit.focus();
   }
 });
 

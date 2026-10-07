@@ -6,6 +6,7 @@ nothing is sent. Needs only Python.
 
 Run:  python3 tests/check_server.py      Exit 0: all passed. 1: a check failed.
 """
+import http.client
 import json
 import os
 import sys
@@ -571,12 +572,18 @@ S.shutil.rmtree(S.CLAUDE_TMP.parent)
 
 # ------------------------- New workflow with agents: a master and its team (faked)
 
-team_runs = []
+S.CLAUDE_TMP = Path(tempfile.mkdtemp()) / "claude-test"  # the master's images go here, not in the real temp folder
+team_runs, team_cli = [], []
 
 
-def team_claude(fails=lambda name: False, hidden=lambda name: False):
-    """claude --bg: a new job, whose session shows up running unless hidden(name)."""
+def team_claude(fails=lambda name: False, hidden=lambda name: False, rm_fails=False):
+    """claude --bg: a new job, whose session shows up running unless
+    hidden(name); claude stop and rm: noted (rm fails if rm_fails)."""
     def run(args, **kw):
+        if args[0] in ("stop", "rm"):
+            team_cli.append(args)
+            no = rm_fails and args[0] == "rm"
+            return types.SimpleNamespace(stdout="", stderr="no such agent" if no else "", returncode=int(no))
         team_runs.append(args)
         name = args[args.index("--name") + 1]
         if fails(name):
@@ -591,41 +598,50 @@ def team_claude(fails=lambda name: False, hidden=lambda name: False):
 
 
 TEAM = [{"role": "tester", "prompt": "Test the login page"}, {"role": "writer", "prompt": "Write its help page"}]
+BODY = {"prompt": "Fix the login", "folder": folder, "permissionMode": "acceptEdits", "agents": TEAM}
 
 
-def start_team(body=None, **fake):
-    """A team started on a fresh board; returns (launch, the --bg runs, the board)."""
-    global board
-    board = {"folder": folder, "nodes": {}, "connections": [], "activity": [], "hidden": []}
-    team_runs.clear()
-    S.run_claude = team_claude(**fake)
-    r = S.start_team("b", body or {"prompt": "Fix the login, with tests and docs", "folder": folder,
-                                   "permissionMode": "acceptEdits", "agents": TEAM})
+def settled(lid):
     end = time.time() + 10
-    while time.time() < end and S.launches[r["launchId"]]["state"] == "starting":
+    while time.time() < end and S.launches[lid]["state"] in S.TEAM_STARTING:
         real_sleep(0.02)
-    return S.launches[r["launchId"]], list(team_runs), board
+    return S.launches[lid]
+
+
+def start_team(body=None, nodes=None, **fake):
+    """A team started on a fresh board (with nodes, if given); returns
+    (launch, the --bg runs, the board)."""
+    global board
+    board = {"folder": folder, "nodes": dict(nodes or {}), "connections": [], "activity": [], "hidden": []}
+    team_runs.clear()
+    team_cli.clear()
+    S.run_claude = team_claude(**fake)
+    r = S.start_team("b", body or BODY)
+    return settled(r["launchId"]), list(team_runs), board
 
 
 bg_name = lambda args: args[args.index("--name") + 1]
 arrows = lambda b: {(b["nodes"][c["from"]]["name"], b["nodes"][c["to"]]["name"]) for c in b["connections"]}
+apart = lambda spots: all(abs(p[0] - q[0]) >= S.CARD_W + 20 or abs(p[1] - q[1]) >= S.CARD_H + 15
+                          for i, p in enumerate(spots) for q in spots[i + 1:])
 sessions[:] = []
 job, runs, b = start_team()
 names = [bg_name(a) for a in runs]
 check("team: the agents start first, then the master, each in the background on Opus with the permissions picked",
       names == ["Fix the login - tester", "Fix the login - writer", "Fix the login"]
       and all(a[:1] == ["--bg"] and a[a.index("--model") + 1] == "opus"
-              and a[a.index("--permission-mode") + 1] == "acceptEdits" for a in runs), names)
+              and a[a.index("--permission-mode") + 1] == "acceptEdits" and "--settings" not in a for a in runs), names)
 waits = [a[-1] for a in runs[:2]]
 check("team: each agent's first prompt names it, its role and the master, and says to wait for its task",
       all(f'"Fix the login - {r}"' in w and f"the {r} in a team" in w and '(to: "Fix the login")' in w
           and "Don't start any work yet" in w and t["prompt"] not in w for w, r, t in zip(waits, ("tester", "writer"), TEAM)),
       waits)
 plan = runs[2][-1]
-check("team: the master's first prompt is your prompt, then the plan: each agent's name, role and prompt",
-      plan.startswith("Fix the login, with tests and docs\n\n")
+check("team: the master's first prompt is your prompt, then the plan: each agent's name, role and prompt, sent in full",
+      plan.startswith("Fix the login\n\n")
       and '- "Fix the login - tester", the tester: Test the login page' in plan
-      and '- "Fix the login - writer", the writer: Write its help page' in plan and "couldn't be started" not in plan, plan)
+      and '- "Fix the login - writer", the writer: Write its help page' in plan and "couldn't be started" not in plan
+      and "its prompt above, in full" in plan and "[Image:" not in plan, plan)
 check("team: an arrow each way between the master and each agent, none between agents, no notes sent",
       arrows(b) == {("Fix the login", "Fix the login - tester"), ("Fix the login - tester", "Fix the login"),
                     ("Fix the login", "Fix the login - writer"), ("Fix the login - writer", "Fix the login")}
@@ -635,9 +651,27 @@ spots = {n["name"]: (n["x"], n["y"]) for n in b["nodes"].values()}
 mx, my = spots["Fix the login"]
 check("team: the agents' cards in a column right of the master's, which sits level with its middle",
       spots["Fix the login - tester"] == (mx + 360, my - 75) and spots["Fix the login - writer"] == (mx + 360, my + 75), spots)
-check("team: done, and Activity says so", job["state"] == "done" and "linked both ways" in job["detail"]
-      and b["activity"][-1] == job["detail"], job["detail"])
+check("team: done, and Activity says so", job["state"] == "done" and "the master and its 2 agents" in job["detail"]
+      and "linked both ways" in job["detail"] and b["activity"][-1] == job["detail"], job["detail"])
+check("team: no stray claude stop or rm when all went well", not team_cli, team_cli)
 
+sessions[:] = []
+job, runs, b = start_team({**BODY, "agents": TEAM[:1]})
+check("team: one agent reads as one, not \"1 agents\"", job["state"] == "done"
+      and "the master and its agent (tester)" in job["detail"] and "1 agents" not in job["detail"], job["detail"])
+
+sessions[:] = []
+job, runs, b = start_team({**BODY, "images": [{"data": b64(PNG)}], "ultracode": True})
+plan = runs[-1][-1]
+named = S.re.search(r"\[Image: source: (\S+)\]", plan)
+check("team: images go to the master only, right after your prompt, saved where it reads them",
+      plan.startswith("Fix the login\n\n[Image: source: ") and named and Path(named.group(1)).read_bytes() == PNG
+      and "The images are yours" in plan and not any("[Image:" in a[-1] for a in runs[:-1]), plan)
+check("team: Ultracode goes to the master and to every agent",
+      len(runs) == 3 and all(a[a.index("--settings") + 1] == '{"ultracode": true}' for a in runs if "--settings" in a)
+      and all("--settings" in a for a in runs), runs)
+
+long_task = "x" * 17_500
 for body, why, says in (
         ({"agents": TEAM}, "no prompt for the master", "master"),
         ({"prompt": "x", "agents": []}, "no agents", "1 to 8"),
@@ -646,7 +680,14 @@ for body, why, says in (
         ({"prompt": "x", "agents": [{"role": "tester", "prompt": ""}]}, "an agent without a prompt", "Agent 1 (tester) needs a prompt"),
         ({"prompt": "x", "agents": [TEAM[0], {"role": "Tester", "prompt": "y"}]}, "two agents with one role", "both"),
         ({"prompt": "x", "agents": [{"role": "r" * 25, "prompt": "y"}]}, "a role too long for a name", "too long"),
-        ({"prompt": "x", "agents": TEAM, "permissionMode": "yolo"}, "an unknown permission mode", "Unknown")):
+        ({"prompt": "x", "agents": [{"role": 'QA "lead" [1a2b]', "prompt": "y"}]}, "a role with quotes or brackets",
+         "only letters, digits"),
+        ({"prompt": "x", "name": "x" * 31, "agents": TEAM}, "a master's name over 30 characters", "30 characters"),
+        ({"prompt": "x", "name": "Crew [a1]", "agents": TEAM}, "a master's name with brackets", "only letters, digits"),
+        ({"prompt": "x", "agents": TEAM, "permissionMode": "yolo"}, "an unknown permission mode", "Unknown"),
+        ({"prompt": "x", "agents": TEAM, "images": [{"data": b64(b"<svg/>")}]}, "something that isn't an image", "Only PNG"),
+        ({"prompt": "x", "agents": [{"role": f"r{i}", "prompt": long_task} for i in range(8)]},
+         "prompts too long together for one command line", "too long together")):
     team_runs.clear()
     try:
         S.start_team("b", {"folder": folder, **body})
@@ -654,43 +695,100 @@ for body, why, says in (
     except ValueError as e:
         check(f"team: refused before anything starts: {why}", says in str(e) and not team_runs, str(e))
 
-sessions[:] = [{"sessionId": "x", "name": "Fix the login", "platform": "wsl", "running": True, "cwd": elsewhere}]
+check("team: unnamed, the master takes the prompt's first words, whole ones that fit in 30 characters",
+      S._team_plan({**BODY, "prompt": "Say hello as a team"})["base"] == "Say hello as a team"
+      and S._team_plan({**BODY, "prompt": "Fix the login, with tests and docs for every page"})["base"]
+      == "Fix the login with tests and", S._team_plan({**BODY, "prompt": "Say hello as a team"})["base"])
+
+sessions[:] = [{"sessionId": "x", "name": "fix the LOGIN", "platform": "wsl", "running": True, "cwd": elsewhere}]
 job, runs, b = start_team()
-check("team: names no running chat has: the master's gets a number, its agents follow",
+check("team: names no running chat has (in any case): the master's gets a number, its agents follow",
       [bg_name(a) for a in runs] == ["Fix the login 2 - tester", "Fix the login 2 - writer", "Fix the login 2"], runs)
 sessions[:] = []
-job, runs, b = start_team({"prompt": "x", "name": "Login crew", "folder": folder, "agents": TEAM})
+job, runs, b = start_team({**BODY, "name": "Login crew"})
 check("team: the name you give is the master's", bg_name(runs[-1]) == "Login crew" and job["state"] == "done")
+job, runs, b = start_team({**BODY, "name": 5})
+check("team: a name that isn't text doesn't break it", bg_name(runs[-1]) == "5" and job["state"] == "done", job["detail"])
+
+sessions[:] = [{"sessionId": "x", "name": "x" * 30, "platform": "wsl", "running": True, "cwd": elsewhere}]
+job, runs, b = start_team({**BODY, "name": "x" * 30, "agents": [{"role": "r" * 24, "prompt": "y"}]})
+agent_name = bg_name(runs[0])
+check("team: the longest names fit in 60 and are the same in the prompts as in --name",
+      agent_name == "x" * 30 + " 2 - " + "r" * 24 and len(agent_name) <= 60 and f'"{agent_name}"' in runs[0][-1]
+      and f'"{agent_name}"' in runs[-1][-1] and f'"{bg_name(runs[-1])}"' in runs[-1][-1], runs)
+
+# Two teams started together: the second can't take the names (or the places)
+# of the first, whose master shows up only once its agents run.
+sessions[:] = []
+board = {"folder": folder, "nodes": {}, "connections": [], "activity": [], "hidden": []}
+team_runs.clear()
+S.TEAM_WAIT, team_wait = 0.5, S.TEAM_WAIT
+S.run_claude = team_claude(hidden=lambda name: True)
+first = S.start_team("b", {**BODY, "prompt": "Fix the login page"})
+second = S.start_team("b", {**BODY, "prompt": "fix the login page"})
+held = [S.launches[r["launchId"]]["spots"] for r in (first, second)]
+for r in (first, second):
+    settled(r["launchId"])
+check("team: two teams started together get names of their own, and places of their own",
+      first["name"] == "Fix the login page" and second["name"] == "fix the login page 2"
+      and second["agents"] == ["fix the login page 2 - tester", "fix the login page 2 - writer"]
+      and apart(held[0] + held[1]), (first, second, held))
 
 sessions[:] = []
 job, runs, b = start_team(fails=lambda name: name.endswith("writer"))
 plan = runs[-1][-1]
 check("team: an agent that doesn't start is named with why, and the master does its part",
       job["state"] == "failed" and '"Fix the login - writer" didn\'t start: boom: it broke.' in job["detail"]
-      and "running with 1 of 2 agents" in job["detail"]
+      and "running with 1 of 2 agents" in job["detail"] and "The master does its part itself." in job["detail"]
       and "couldn't be started, so do their part yourself:\n- the writer: Write its help page" in plan
       and '"Fix the login - writer"' not in plan, job["detail"])
 check("team: arrows only for the agents that run", arrows(b) == {("Fix the login", "Fix the login - tester"),
                                                                 ("Fix the login - tester", "Fix the login")}, arrows(b))
 
 sessions[:] = []
-S.TEAM_WAIT, team_wait = 0.3, S.TEAM_WAIT
 job, runs, b = start_team(hidden=lambda name: name.endswith("tester"))
-check("team: an agent that never shows up running is named too, and gets no arrows",
-      job["state"] == "failed" and '"Fix the login - tester" didn\'t start: it wasn\'t running after' in job["detail"]
+late = f"{1:08x}"  # the tester's job: the first run
+check("team: an agent that never shows up running is stopped and removed (only it), loses its place, and gets no arrows",
+      job["state"] == "failed" and '"Fix the login - tester" didn\'t come up within 0.5 seconds, so it was removed.'
+      in job["detail"] and team_cli == [["stop", late], ["rm", late]]
+      and late not in b.get("adopt", []) and late not in b.get("spots", {})
       and arrows(b) == {("Fix the login", "Fix the login - writer"), ("Fix the login - writer", "Fix the login")},
-      job["detail"])
+      (job["detail"], team_cli, b.get("adopt"), b.get("spots")))
+sessions[:] = []
+job, runs, b = start_team(hidden=lambda name: name.endswith("tester"), rm_fails=True)
+check("team: one that can't be removed is named as started, with what to do if it shows up",
+      "\"Fix the login - tester\" didn't come up within 0.5 seconds and couldn't be removed: no such agent."
+      in job["detail"] and "Delete its card if it shows up." in job["detail"], job["detail"])
 sessions[:] = []
 job, runs, b = start_team(fails=lambda name: " - " in name)
 check("team: with no agent running, the master isn't started", job["state"] == "failed"
       and [bg_name(a) for a in runs] == ["Fix the login - tester", "Fix the login - writer"]
-      and "the master wasn't started" in job["detail"] and not b["connections"], job["detail"])
+      and "the master wasn't started" in job["detail"]
+      and '"Fix the login - tester" and "Fix the login - writer" didn\'t start: boom: it broke.' in job["detail"]
+      and not b["connections"], job["detail"])
+sessions[:] = []
+job, runs, b = start_team(hidden=lambda name: " - " in name)
+check("team: with no agent up in time, all are removed and the master isn't started", job["state"] == "failed"
+      and len(runs) == 2 and [a[0] for a in team_cli] == ["stop", "rm", "stop", "rm"]
+      and "they were removed" in job["detail"] and not b["connections"], job["detail"])
 sessions[:] = []
 job, runs, b = start_team(fails=lambda name: name == "Fix the login")
 check("team: a master that doesn't start is reported; its agents wait, with no arrows",
-      job["state"] == "failed" and "didn't start: boom: it broke." in job["detail"] and "wait for it" in job["detail"]
-      and not b["connections"], job["detail"])
+      job["state"] == "failed" and "didn't start: boom: it broke." in job["detail"]
+      and "Its 2 agents are running and wait for it" in job["detail"] and not b["connections"], job["detail"])
+sessions[:] = []
+job, runs, b = start_team(hidden=lambda name: " - " not in name)
+check("team: a master that never shows up running is reported, with no arrows", job["state"] == "failed"
+      and "didn't show up running" in job["detail"] and not b["connections"] and not team_cli, job["detail"])
 S.TEAM_WAIT = team_wait
+
+sessions[:] = []
+other = {"name": "other", "platform": "wsl", "cwd": elsewhere, "lastSeen": time.time()}  # ended, but kept a while
+spot = S.free_slot({"nodes": {"o": {"x": 40, "y": 40}}})
+job, runs, b = start_team(nodes={"o": {"x": 40, "y": 40, **other}, "p": {"x": spot[0], "y": spot[1], **other}})
+check("team: on a board with cards where its first place would be, its cards go where none overlaps",
+      job["state"] == "done" and len(b["nodes"]) == 5 and apart([(n["x"], n["y"]) for n in b["nodes"].values()]),
+      {k: (n["x"], n["y"]) for k, n in b["nodes"].items()})
 
 sessions[:] = []
 real_connect = S.connect
@@ -705,11 +803,40 @@ def one_way_only(bid, body):  # the writer's arrow back to the master can't be m
 S.connect = one_way_only
 job, runs, b = start_team()
 S.connect = real_connect
-check("team: an agent whose arrow back can't be made keeps no half pair, and the notice says why",
+check("team: an agent whose arrow back can't be made keeps no half pair, and the notice and Activity say why",
       job["state"] == "failed" and arrows(b) == {("Fix the login", "Fix the login - tester"),
                                                  ("Fix the login - tester", "Fix the login")}
-      and "\"Fix the login - writer\" isn't linked with the master: two running sessions" in job["detail"],
-      (arrows(b), job["detail"]))
+      and "\"Fix the login - writer\" isn't linked with the master: two running sessions" in job["detail"]
+      and any(a.startswith('Removed the arrow "Fix the login" → "Fix the login - writer" again') for a in b["activity"]),
+      (arrows(b), job["detail"], b["activity"]))
+
+# The page posts a team, with images, to the server; a body that size gets through.
+taken_bodies = []
+S.start_team, real_start_team = (lambda bid, body: taken_bodies.append(body) or {"launchId": "t"}), S.start_team
+server = S.ThreadingHTTPServer(("127.0.0.1", 0), S.Handler)
+S.PORT = server.server_address[1]
+threading.Thread(target=server.serve_forever, daemon=True).start()
+
+
+def post(action, body, send=True):
+    """The answer's status; send=False sends the headers only (one refused for
+    its size is answered at once, before its body would be read)."""
+    conn = http.client.HTTPConnection("127.0.0.1", S.PORT, timeout=10)
+    data = json.dumps(body).encode()
+    conn.putrequest("POST", f"/api/board/b/{action}")
+    for k, v in (("Content-Type", "application/json"), (S.CSRF_HEADER, "1"), ("Content-Length", str(len(data)))):
+        conn.putheader(k, v)
+    conn.endheaders(data if send else None)
+    return conn.getresponse().status
+
+
+big = {**BODY, "images": [{"data": "A" * (2 << 20)}]}
+check("team: the server takes a team from the page at /launch-team, images and all",
+      post("launch-team", big) == 200 and taken_bodies and taken_bodies[-1]["agents"] == TEAM
+      and post("no-such-thing", big, send=False) == 413, taken_bodies[-1:] and taken_bodies[-1]["prompt"])
+server.shutdown()
+S.start_team = real_start_team
+S.shutil.rmtree(S.CLAUDE_TMP.parent)
 
 failed = [r for r in results if not r[1]]
 for name, ok, detail in results:
