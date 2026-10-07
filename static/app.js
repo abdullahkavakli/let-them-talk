@@ -965,11 +965,11 @@ function nodeDetails(n) {
       n.live && [el("dt", { text: "Opened in" }), el("dd", { text: opener(n) || "?" })],
       n.model && [el("dt", { text: "Model" }), el("dd", { text: modelName(n.model) })],
       el("dt", { text: "Session" }), el("dd", { class: "mono small", text: n.sessionId }))),
-    n.editor && el("div", { class: "drawer-actions" }, el("button", {
+    (n.editor || where(n)) && el("div", { class: "drawer-actions" }, n.editor && el("button", {
       class: "btn primary", text: n.live ? `Open in ${n.editor}` : `Reopen in ${n.editor}`,
       title: `Shows this chat in ${n.editor}`,
       onclick: () => { window.location.href = editorLink(n.editor, { session: n.sessionId }); },
-    })),
+    }), editorButtons(n)),
     ...(stuck ? backgroundSection(n) : []),
     ...chatSection(n),
     ...sendSection(n),
@@ -994,6 +994,47 @@ function nodeDetails(n) {
     handoffNote(n),
     endControls(n),
     removeControls(n, conns),
+  ];
+}
+
+// Open folder: an editor window on the card's folder (the one already there
+// comes forward). Continue: a chat that isn't running and has no editor of
+// its own goes on in the editor's Claude panel. The panel finds a conversation
+// only in a window on its folder, and the link goes to the editor window in
+// front, so the server opens the folder first and the link a moment later.
+// Never for a running chat: two Claude Codes on one conversation would get in
+// each other's way.
+const editorBusy = {};  // sessionId -> its folder is being opened (kept across redraws)
+
+function editorButtons(n) {
+  if (!where(n)) return [];
+  const editor = n.editor || defaultEditor();
+  const busy = editorBusy[n.sessionId];
+  const running = n.live && n.running !== false;
+  const trust = `If ${editor} asks whether you trust the folder, say yes: in Restricted Mode, Claude Code is off there.`;
+  const go = (what) => async () => {
+    editorBusy[n.sessionId] = what;
+    renderDrawer();
+    try {
+      await api(`/api/board/${state.boardId}/open-folder`, { sessionId: n.sessionId, editor, continue: what === "continue" });
+    } catch (e) {
+      toast(failText(e), "error");
+    } finally {
+      delete editorBusy[n.sessionId];
+      renderDrawer();
+    }
+  };
+  return [
+    !n.editor && !running && n.resumable !== false && el("button", {
+      class: "btn primary", text: busy === "continue" ? "Opening…" : `Continue in ${editor}`, disabled: !!busy,
+      title: `Opens its folder in ${editor}, then this conversation in ${editor}'s Claude panel there. ${trust}`,
+      onclick: go("continue"),
+    }),
+    el("button", {
+      class: "btn", text: busy === "folder" ? "Opening…" : `Open folder in ${editor}`, disabled: !!busy,
+      title: `Opens a ${editor} window on ${where(n)}, or brings forward the one already there. ${trust}`,
+      onclick: go("folder"),
+    }),
   ];
 }
 

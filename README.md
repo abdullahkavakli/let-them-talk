@@ -139,6 +139,16 @@ installed inside WSL, where the server runs.
     ×, Esc or a click outside closes it.
   - **Open in Cursor** (or your editor) shows the chat there (**Reopen in
     Cursor** once it has ended).
+  - **Open folder in Cursor** (any card; the chat's own editor, else the one
+    you last picked) opens a window on its folder, or brings forward the one
+    already there. **Continue in Cursor** (a chat that isn't running and has
+    no editor of its own: an ended chat, a background agent whose process
+    stopped) opens that folder, then the conversation in Cursor's Claude
+    panel there, since Cursor finds a chat only in a window on its folder.
+    A chat that is still running doesn't get it: two Claude Codes on one
+    conversation would get in each other's way. The editor must trust the
+    folder (in Restricted Mode, Claude Code is off); if the editor can't be
+    asked, the notice says what to run instead (`cursor "<folder>"`).
 - **Background agents:** **Open in terminal** (`claude attach <id>` in a new
   window), **Show its screen** (click again to hide; it reads **What is it
   asking?** while the agent waits for you), **Stop** (while it works or
