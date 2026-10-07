@@ -20,6 +20,7 @@ const state = {
   chatOpen: {},          // message id -> shown in full in the drawer
   talk: {},              // arrow id -> /api/talk response (what its two chats sent each other)
   talkBusy: {},          // arrow id -> a /api/talk request is in flight
+  popWire: null,         // arrow id shown in the pop-up (opened from a chat's Connections)
   talkLimit: {},         // arrow id -> how many messages to load ("Show earlier" raises it)
   notifyOff: {},         // arrow id -> "Tell both agents" unticked (kept across redraws)
   removeNotifyOff: {},   // sessionId -> "Tell connected agents" unticked (kept across redraws)
@@ -237,6 +238,7 @@ async function poll() {
       if (state.selected?.type === "node") loadDetails(state.selected.id);
       else if (state.selected?.type === "sub") loadSub(state.selected);
       else if (state.selected?.type === "wire") loadTalk(state.selected.id);
+      if (state.popWire && state.popWire !== state.selected?.id) loadTalk(state.popWire);
       reachable(true);
     } catch (e) {
       console.warn("poll failed", e);
@@ -665,6 +667,7 @@ async function loadTalk(id) {
     state.talkBusy[id] = false;
   }
   if (state.selected?.type === "wire" && state.selected.id === id) renderDrawer();
+  else if (state.popWire === id) renderWirePop();
 }
 
 async function loadDetails(sid) {
@@ -698,6 +701,7 @@ function closeDrawer() {
 }
 
 function renderDrawer() {
+  renderWirePop();
   const body = $("#drawer-body");
   const sel = state.selected;
   if (!sel) return;
@@ -726,6 +730,36 @@ function drawDrawer(body, sel) {
 }
 
 $("#drawer").addEventListener("pointerdown", () => { state.pressing = true; });
+$("#wire-pop").addEventListener("pointerdown", () => { state.pressing = true; });
+
+// A connection clicked in a chat's Connections opens in a pop-up over the
+// board, so the chat's details stay underneath. Redrawn with the panel.
+function openWirePop(id) {
+  state.popWire = id;
+  loadTalk(id);
+  renderWirePop();
+  if (!$("#wire-pop").open) $("#wire-pop").showModal();
+}
+
+function renderWirePop() {
+  if (!state.popWire) return;
+  if (state.pressing) {
+    state.redrawAfterPress = true;
+    return;
+  }
+  const c = connById(state.popWire);
+  if (!c) return closeWirePop();
+  swapChildren($("#wire-pop-body"), wireDetails(c, closeWirePop).filter(Boolean));
+}
+
+function closeWirePop() {
+  state.popWire = null;
+  if ($("#wire-pop").open) $("#wire-pop").close();
+}
+
+$("#wire-pop").addEventListener("close", () => { state.popWire = null; });
+$("#wire-pop-close").addEventListener("click", closeWirePop);
+$("#wire-pop").addEventListener("click", (e) => { if (e.target === e.currentTarget) closeWirePop(); });  // its backdrop
 for (const type of ["pointerup", "pointercancel"]) {
   window.addEventListener(type, () => {
     if (!state.pressing) return;
@@ -738,7 +772,7 @@ for (const type of ["pointerup", "pointercancel"]) {
 
 const STATE_TEXT = { sent: "✓ sent", altered: "⚠ sent, reworded", failed: "✗ failed", sending: "sending…", skipped: "not sent" };
 
-function wireDetails(c) {
+function wireDetails(c, close = closeDrawer) {
   const a = nodeById(c.from), b = nodeById(c.to);
   const notes = [["from", a], ["to", b]].map(([side, n]) => {
     const note = c.notes[side];
@@ -777,7 +811,7 @@ function wireDetails(c) {
         onclick: async () => {
           const told = notify.checked ? " Both agents will be told." : "";
           if (!confirm(`Disconnect ${a ? display(a) : "?"} → ${b ? display(b) : "?"}?${told}`)) return;
-          if (await act("disconnect", { id: c.id, notify: notify.checked })) closeDrawer();
+          if (await act("disconnect", { id: c.id, notify: notify.checked })) close();
         },
       })),
   ];
@@ -813,17 +847,21 @@ function nodeDetails(n) {
     ...sendSection(n),
     ...(n.background ? backgroundSection(n) : []),
     ...agentsSection(n),
-    el("h2", { text: "Connections" }),
-    conns.length ? el("ul", {}, ...conns.map((c) => {
+    // Its arrows fold away (the choice is remembered); one opens in a pop-up.
+    ...(conns.length ? [el("details", {
+      class: "conns", open: store("ltt.connsOpen") === true,
+      ontoggle: (e) => store("ltt.connsOpen", e.target.open),
+    }, el("summary", {}, el("h2", { text: `Connections (${conns.length})` })),
+    el("ul", {}, ...conns.map((c) => {
       const other = nodeById(c.from === n.sessionId ? c.to : c.from);
       const dir = c.from === n.sessionId ? "→" : "←";
       return el("li", {}, el("a", {
         href: "#", text: `${dir} ${other ? display(other) : "?"}${c.reason.trim() ? `: ${c.reason.trim()}` : ""}`,
-        onclick: (e) => { e.preventDefault(); select_({ type: "wire", id: c.id }); },
+        onclick: (e) => { e.preventDefault(); openWirePop(c.id); },
       }));
-    })) : el("p", { class: "muted small", text: n.messageBlock
+    })))] : [el("h2", { text: "Connections" }), el("p", { class: "muted small", text: n.messageBlock
       ? "None. This session can't be connected until it can receive notes."
-      : "None. Drag the blue handle onto another agent to connect them." }),
+      : "None. Drag the blue handle onto another agent to connect them." })]),
     handoffable(n) && el("div", { class: "drawer-actions" }, handoffButton(n)),
     handoffNote(n),
     endControls(n),
