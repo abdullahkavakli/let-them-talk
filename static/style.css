@@ -474,14 +474,29 @@ details.run > summary .dot { margin-top: 5px; }
 #activity-box[open] > summary { margin-bottom: 8px; }
 #activity-count { font-weight: 400; text-transform: none; letter-spacing: 0; }
 
-/* drag handle on the left panel's right edge */
+/* Drag handle on a panel's inner edge. Nothing shows until you point at it,
+   drag it or tab to it: then a thin line along the edge, as glass panels
+   have no grip. The 16px strip is what you grab. */
 .resizer {
-  flex: none; width: 7px; margin: 0 -3px; position: relative; z-index: 4;
-  cursor: col-resize; touch-action: none; background: transparent;
+  flex: none; width: 16px; margin: 0 -8px; position: relative; z-index: 4;
+  cursor: col-resize; touch-action: none; background: transparent; outline: none;
 }
-.resizer:hover, .resizer.active { background: var(--accent-soft); box-shadow: inset 2px 0 0 -1px var(--accent); }
+.resizer.edge { position: absolute; left: 0; top: 0; bottom: 0; margin: 0; }  /* the drawer clips its outside */
+.resizer::after {
+  content: ""; position: absolute; top: 28px; bottom: 28px; left: 7px; width: 2px;  /* clear of the round corners */
+  border-radius: 1px; background: var(--accent); opacity: 0; transition: opacity .15s ease;
+}
+.resizer.edge::after { left: 0; }
+.resizer:hover::after, .resizer.active::after, .resizer:focus-visible::after { opacity: 1; }
 body:has(.resizer.active) { cursor: col-resize; user-select: none; }
-.resizer.edge { position: absolute; left: 0; top: 0; bottom: 0; margin: 0; }
+/* no hover on a touch screen: a small grip shows where to drag */
+@media (hover: none) {
+  .resizer::after {
+    top: 50%; bottom: auto; left: 6px; width: 4px; height: 32px; border-radius: 2px;
+    transform: translateY(-50%); background: var(--muted); opacity: .6;
+  }
+  .resizer.edge::after { left: 2px; }
+}
 
 /* Activity toggle: a clear chevron, a hover highlight and a Show/Hide hint */
 #activity-box > summary {
@@ -497,27 +512,6 @@ body:has(.resizer.active) { cursor: col-resize; user-select: none; }
 #activity-box > summary::after { content: "Show"; margin-left: auto; font-size: 12px; color: var(--accent); }
 #activity-box[open] > summary::after { content: "Hide"; }
 #activity-box > summary h2 { color: var(--text); }
-
-/* resize handles: always-visible grip in the middle of the edge */
-.resizer { width: 11px; margin: 0 -5px; }
-.resizer.edge { width: 11px; left: -1px; }
-.resizer::after {
-  content: ""; position: absolute; top: 50%; left: 50%; width: 5px; height: 44px;
-  transform: translate(-50%, -50%); border-radius: 3px;
-  background: var(--border); box-shadow: 0 0 0 1px var(--panel);
-}
-.resizer:hover::after, .resizer.active::after { background: var(--accent); }
-.resizer:hover, .resizer.active { background: transparent; box-shadow: none; }
-
-/* bigger, easier-to-see grips */
-.resizer { width: 16px; margin: 0 -8px; }
-.resizer.edge { width: 16px; left: -2px; }
-.resizer::after {
-  width: 8px; height: 88px; border-radius: 5px;
-  background: var(--muted); opacity: .55;
-  box-shadow: 0 0 0 2px var(--panel);
-}
-.resizer:hover::after, .resizer.active::after { background: var(--accent); opacity: 1; }
 
 /* New agent dialog: two choice cards side by side, then the settings */
 .where { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0 4px; }
@@ -543,7 +537,7 @@ dialog select {
 
 @media (prefers-reduced-motion: reduce) {
   .wire.sending { animation: none; }
-  #activity-box > summary::before, .btn, .icon-btn, .avail-row, .browse-item, .node { transition: none; }
+  #activity-box > summary::before, .btn, .icon-btn, .avail-row, .browse-item, .node, .resizer::after { transition: none; }
 }
 
 /* ------------------------------------------------------------ Liquid Glass

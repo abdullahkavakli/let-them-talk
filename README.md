@@ -161,7 +161,9 @@ installed inside WSL, where the server runs.
   is left as it is: end it, or let it go on. Works for ended chats too.
 - **Arrange:** drag cards and the background; the mouse wheel zooms (down to
   zoom out, up to zoom in) around the pointer; drag a panel's inner edge to
-  resize it (double-click resets). **Fit view** brings every card into sight.
+  resize it (a line shows there as you point at it; double-click resets; or
+  Tab to it, then ← → resize and Enter resets). **Fit view** brings every
+  card into sight.
   Esc cancels an arrow; Esc or a click on the empty board closes the details.
 - **Keyboard:** Tab reaches cards, arrow labels and subagent cards (the board
   moves to show the one in focus); Enter or Space opens it, with focus in its

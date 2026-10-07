@@ -1709,8 +1709,15 @@ $("#delete-board").addEventListener("click", async () => {
 // width is remembered. dir is +1 when the edge is on the panel's right side.
 // The width goes into a CSS variable, since the top bar sits beside the panels.
 function resizable(panel, handle, key, def, dir, cssVar) {
-  const MIN = 180, MAX = 720;
-  const set = (w) => document.documentElement.style.setProperty(cssVar, `${Math.min(MAX, Math.max(MIN, w))}px`);
+  const MIN = 180, MAX = 720, STEP = 16;
+  const set = (w) => {
+    const px = Math.round(Math.min(MAX, Math.max(MIN, w)));
+    document.documentElement.style.setProperty(cssVar, `${px}px`);
+    handle.setAttribute("aria-valuenow", px);
+  };
+  handle.setAttribute("aria-valuemin", MIN);
+  handle.setAttribute("aria-valuemax", MAX);
+  handle.setAttribute("aria-valuenow", store(key) || def);
   if (store(key)) set(store(key));
   handle.addEventListener("pointerdown", (evt) => {
     evt.preventDefault();
@@ -1727,7 +1734,18 @@ function resizable(panel, handle, key, def, dir, cssVar) {
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", up);
   });
-  handle.addEventListener("dblclick", () => { set(def); store(key, def); });
+  const reset = () => { set(def); store(key, def); };
+  handle.addEventListener("dblclick", reset);
+  // from the keyboard: ← → move the edge, Enter resets
+  handle.addEventListener("keydown", (e) => {
+    const step = { ArrowLeft: -STEP, ArrowRight: STEP }[e.key];
+    if (e.key === "Enter") reset();
+    else if (step) {
+      set(panel.getBoundingClientRect().width + dir * step);
+      store(key, Math.round(panel.getBoundingClientRect().width));
+    } else return;
+    e.preventDefault();
+  });
 }
 resizable($(".sidebar"), $("#sidebar-resizer"), "ltt.sidebarW", 280, +1, "--side-w");
 resizable($("#drawer"), $("#drawer-resizer"), "ltt.drawerW", 360, -1, "--drawer-w");
