@@ -47,6 +47,36 @@ function el(tag, attrs = {}, ...children) {
   return node;
 }
 
+// Puts new contents into a panel that every poll redraws (the details, the
+// Add agents list, Activity), but only when they differ from what it shows: a
+// rebuild drops keyboard focus and any text selected in it. While text in it
+// is selected with the mouse, it waits for a later poll. When it does change,
+// focus goes back to the same control: by id, else by kind and label.
+function swapChildren(box, children) {
+  const next = el("div", {}, children);
+  if (next.innerHTML === box.innerHTML) return;
+  const active = document.activeElement, picked = document.getSelection();
+  const inBox = active && active !== box && box.contains(active);
+  if (picked && !picked.isCollapsed && box.contains(picked.anchorNode) && !inBox) return;
+  const keep = inBox ? focusKey(box, active) : null;
+  box.replaceChildren(...next.childNodes);
+  if (keep) refocus(box, keep);
+}
+
+const focusLabel = (e) => e.getAttribute("aria-label") || e.textContent.trim();
+function focusKey(box, e) {
+  if (e.id) return { id: e.id, start: e.selectionStart, end: e.selectionEnd };
+  const same = [...box.querySelectorAll(e.tagName)].filter((x) => focusLabel(x) === focusLabel(e));
+  return { tag: e.tagName, label: focusLabel(e), nth: same.indexOf(e) };
+}
+function refocus(box, k) {
+  const e = k.id ? document.getElementById(k.id)
+    : [...box.querySelectorAll(k.tag)].filter((x) => focusLabel(x) === k.label)[k.nth];
+  if (!e) return;
+  e.focus({ preventScroll: true });
+  if (k.id) try { e.setSelectionRange(k.start, k.end); } catch { /* not a text box */ }
+}
+
 function svg(tag, attrs = {}) {
   const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
   for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
@@ -64,6 +94,10 @@ async function api(path, body) {
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
 }
+
+// What a failed request says: the server's reason, or that no reply came.
+const failText = (e) => e instanceof TypeError
+  ? "Couldn't reach Let Them Talk; it may have stopped or be restarting." : e.message;
 
 // Saved UI state lives under "ltt."; values saved by earlier versions under
 // "organizer." are still read.
@@ -203,11 +237,25 @@ async function poll() {
       if (state.selected?.type === "node") loadDetails(state.selected.id);
       else if (state.selected?.type === "sub") loadSub(state.selected);
       else if (state.selected?.type === "wire") loadTalk(state.selected.id);
+      reachable(true);
     } catch (e) {
       console.warn("poll failed", e);
+      if (e instanceof TypeError) reachable(false);
     }
   }
   state.pollTimer = setTimeout(poll, POLL_MS);
+}
+
+// Whether the server answers. fetch() throws a TypeError when no reply comes
+// (an error status means the server is up). After two polls in a row without
+// one, a banner says so and the board, which may be out of date, fades.
+function reachable(ok, text) {
+  state.misses = ok ? 0 : (state.misses || 0) + 1;
+  const down = !ok && (state.misses >= 2 || !!text);
+  document.body.classList.toggle("offline", down);
+  $("#offline").hidden = !down;
+  if (down) $("#offline").textContent = text ||
+    "Can't reach Let Them Talk. Trying again; the board may be out of date until it answers.";
 }
 
 // ------------------------------------------------------------------- render
@@ -312,7 +360,7 @@ function renderNodes() {
         onWindows(n) && el("span", { class: "badge win state", text: "Windows", title: n.messageBlock || "" }),
         opener(n) && el("span", { class: "badge", text: opener(n) }),
         n.model && el("span", { class: "badge model", text: modelName(n.model), title: n.model }),
-        el("span", { class: `badge state ${st.dot === "needs" ? "warn" : ""}`, text: st.text,
+        el("span", { class: `badge state ${{ needs: "warn", waiting: "warn", failed: "danger" }[st.dot] || ""}`, text: st.text,
           title: n.waitingFor ? `Waiting for: ${n.waitingFor}` : "" }),
         n.ambiguous && el("span", { class: "badge warn", text: "name shared", title: "Another running session has this name; /rename one of them" })),
       ...(n.live && !n.messageBlock ? [el("span", { class: "port out", title: "Drag onto another agent to connect" })] : []),
@@ -567,10 +615,10 @@ function renderAvailable() {
   for (const s of state.view.available) (groups[where(s)] ||= []).push(s);
   const folders = Object.keys(groups).sort();
   if (folders.length === 0) {
-    box.replaceChildren(el("p", { class: "muted small", text: "Every running session is already on this board." }));
+    swapChildren(box, [el("p", { class: "muted small", text: "Every running session is already on this board." })]);
     return;
   }
-  box.replaceChildren(...folders.map((cwd) => el("div", { class: "folder-group" },
+  swapChildren(box, folders.map((cwd) => el("div", { class: "folder-group" },
     el("div", { class: "folder-head" },
       el("p", { class: "folder-name path", title: cwd }, pathNodes(cwd)),
       el("button", { class: "btn new-here", text: "+ New agent", title: `Start a new agent in ${cwd}`,
@@ -584,9 +632,9 @@ function renderAvailable() {
 function renderActivity() {
   const items = state.view.board.activity.slice(0, 30);
   $("#activity-count").textContent = items.length ? `(${state.view.board.activity.length})` : "";
-  $("#activity").replaceChildren(...(items.length ? items.map((a) =>
+  swapChildren($("#activity"), items.length ? items.map((a) =>
     el("li", { class: a.level }, el("time", { text: clock(a.t) }), a.text)) :
-    [el("li", { class: "muted", text: "Nothing yet." })]));
+    [el("li", { class: "muted", text: "Nothing yet." })]);
 }
 
 // Activity is folded away unless you open it; the choice is remembered.
@@ -659,26 +707,20 @@ function renderDrawer() {
     state.redrawAfterPress = true;
     return;
   }
-  const active = document.activeElement;
-  const keep = active?.id && body.contains(active)
-    ? { id: active.id, start: active.selectionStart, end: active.selectionEnd } : null;
-  try { drawDrawer(body, sel); } finally {
-    const e = keep && document.getElementById(keep.id);
-    if (e) { e.focus(); try { e.setSelectionRange(keep.start, keep.end); } catch { /* not a text box */ } }
-  }
+  drawDrawer(body, sel);
 }
 
 function drawDrawer(body, sel) {
   if (sel.type === "wire") {
     const c = connById(sel.id);
     if (!c) return closeDrawer();
-    body.replaceChildren(...wireDetails(c).filter(Boolean));
+    swapChildren(body, wireDetails(c).filter(Boolean));
   } else if (sel.type === "sub") {
-    body.replaceChildren(...subDetails(sel).filter(Boolean));
+    swapChildren(body, subDetails(sel).filter(Boolean));
   } else {
     const n = nodeById(sel.id);
     if (!n) return closeDrawer();
-    body.replaceChildren(...nodeDetails(n).filter(Boolean));
+    swapChildren(body, nodeDetails(n).filter(Boolean));
   }
   $("#drawer").hidden = false;
 }
@@ -735,8 +777,7 @@ function wireDetails(c) {
         onclick: async () => {
           const told = notify.checked ? " Both agents will be told." : "";
           if (!confirm(`Disconnect ${a ? display(a) : "?"} → ${b ? display(b) : "?"}?${told}`)) return;
-          await act("disconnect", { id: c.id, notify: notify.checked });
-          closeDrawer();
+          if (await act("disconnect", { id: c.id, notify: notify.checked })) closeDrawer();
         },
       })),
   ];
@@ -895,7 +936,7 @@ function endControls(n) {
         if (result.ended) toast(`Ended ${display(n)}. To continue it: ${result.resume}`, "ok", 0);
         else toast(`${display(n)} hasn't ended yet; close its terminal window instead.`, "error");
       } catch (e) {
-        toast(e.message, "error", 0);
+        toast(failText(e), "error");
       }
       poll();
     },
@@ -920,8 +961,7 @@ function removeControls(n, conns) {
       text: conns.length ? `Remove from board with ${arrows}` : "Remove from board",
       onclick: async () => {
         if (conns.length && !confirm(`Remove ${display(n)} and ${arrows} from the board?`)) return;
-        await act("remove", { sessionId: n.sessionId, notify: liveEnds > 0 && notify.checked });
-        closeDrawer();
+        if (await act("remove", { sessionId: n.sessionId, notify: liveEnds > 0 && notify.checked })) closeDrawer();
       },
     }));
 }
@@ -1031,13 +1071,18 @@ function agentsSection(n) {
   return out;
 }
 
+// A board action. A failure is a notice that stays until closed; the caller
+// learns whether it worked (Disconnect and Remove close the details only then).
 async function act(action, body) {
   try {
     await api(`/api/board/${state.boardId}/${action}`, body);
+    return true;
   } catch (e) {
-    alert(e.message);
+    toast(failText(e), "error");
+    return false;
+  } finally {
+    poll();
   }
-  poll();
 }
 
 function addNode(sessionId) {
@@ -1180,6 +1225,8 @@ canvas.addEventListener("pointerup", async (evt) => {
     await api(`/api/board/${state.boardId}/layout`, { positions: { [d.id]: pos } });
     const n = nodeById(d.id);
     if (n) Object.assign(n, pos);
+  } catch (e) {
+    toast(`Couldn't save where you moved the card, so it went back. ${failText(e)}`, "error");
   } finally {
     delete state.localPos[d.id];
   }
@@ -1290,7 +1337,7 @@ $("#connect-form").addEventListener("submit", async (evt) => {
     state.selected = { type: "wire", id: res.result.id };
     poll();
   } catch (e) {
-    cd.error.textContent = e.message;
+    cd.error.textContent = failText(e);
     cd.error.hidden = false;
   } finally {
     cd.submit.disabled = false;
@@ -1346,7 +1393,7 @@ async function browse(path, ui = pickers.board) {
       ...(d.truncated ? [el("p", { class: "muted small", text: "Showing the first 1000 folders." })] : []));
     box.hidden = false;
   } catch (e) {
-    error.textContent = e.message;
+    error.textContent = failText(e);
     error.hidden = false;
   }
 }
@@ -1355,8 +1402,12 @@ $("#b-browse").addEventListener("click", () => browse($("#b-folder").value.trim(
 $("#n-browse").addEventListener("click", () => browse(nd.folder.value.trim(), pickers.agent));
 
 $("#new-board").addEventListener("click", async () => {
-  const data = await api("/api/state");
-  openBoardDialog(data.folders, data.boards, data.places);
+  try {
+    const data = await api("/api/state");
+    openBoardDialog(data.folders, data.boards, data.places);
+  } catch (e) {
+    toast(failText(e), "error");
+  }
 });
 
 $("#board-form").addEventListener("submit", async (evt) => {
@@ -1367,7 +1418,7 @@ $("#board-form").addEventListener("submit", async (evt) => {
     $("#board-dialog").close();
     selectBoard(res.id);
   } catch (e) {
-    $("#b-error").textContent = e.message;
+    $("#b-error").textContent = failText(e);
     $("#b-error").hidden = false;
   }
 });
@@ -1377,9 +1428,15 @@ for (const btn of document.querySelectorAll("[data-close]")) {
   btn.addEventListener("click", () => btn.closest("dialog").close());
 }
 
-start().catch((e) => {
-  document.body.prepend(el("p", { class: "error", text: `Could not reach the Let Them Talk server: ${e.message}` }));
-});
+// The server may not be up yet: say so and keep trying until it answers.
+function boot() {
+  start().then(() => reachable(true), (e) => {
+    reachable(false, e instanceof TypeError ? "Can't reach Let Them Talk. Trying again…"
+      : `Let Them Talk couldn't load the board: ${e.message} Trying again…`);
+    setTimeout(boot, POLL_MS * 2);
+  });
+}
+boot();
 
 $("#fit-view").addEventListener("click", fitView);
 
@@ -1690,7 +1747,7 @@ $("#chat-form").addEventListener("submit", async (evt) => {
     nd.name.value = "";
     poll();
   } catch (e) {
-    fail(e.message);
+    fail(failText(e));
   } finally {
     nd.submit.disabled = false;
   }
@@ -1699,7 +1756,8 @@ $("#chat-form").addEventListener("submit", async (evt) => {
 // ------------------------------------------------------------------ toasts
 
 const toasts = $("#toasts");
-function toast(text, level = "info", ms = level === "error" ? 7000 : 5000) {
+// A failure stays until closed (×); other notices go after a few seconds.
+function toast(text, level = "info", ms = level === "error" ? 0 : 5000) {
   const t = el("div", { class: `toast ${level}` }, el("span", { text }),
     el("button", { class: "icon-btn", text: "×", "aria-label": "Dismiss", onclick: () => t.remove() }));
   toasts.append(t);
@@ -1986,7 +2044,7 @@ async function agentAction(n, action, done) {
     const res = await api(`/api/board/${state.boardId}/${action}`, { jobId: n.jobId });
     done?.(res.result);
   } catch (e) {
-    toast(e.message, "error", 0);
+    toast(failText(e), "error");
   }
   poll();
 }

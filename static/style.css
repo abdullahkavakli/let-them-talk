@@ -236,9 +236,13 @@ h2 { font-size: 12px; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
   background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); margin-right: 3px;
 }
 .node .badge.warn { color: var(--warn); border-color: var(--warn); }
+.node .badge.danger { color: var(--error); border-color: var(--error); }
 .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--ended); }
 .dot.idle { background: var(--ok); }
 .dot.busy { background: var(--busy); }
+/* waiting for you: a ring tells it from busy (the same orange in dark mode) */
+.dot.needs, .dot.waiting { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 30%, transparent); }
+.dot.failed { background: var(--error); }
 .port {
   position: absolute; top: 50%; width: 14px; height: 14px; margin-top: -7px;
   border-radius: 50%; border: 2px solid var(--panel);
@@ -357,11 +361,18 @@ dialog textarea:focus, dialog input:focus { outline: 2px solid var(--accent-soft
 #b-suggest button { text-align: left; font-size: 12px; }
 
 @media (max-width: 900px) {
-  .sidebar { width: 220px; }
   .hint { display: none; }
   .note-grid { grid-template-columns: 1fr; }
-  #drawer { position: absolute; right: 0; top: 0; bottom: 0; z-index: 5; width: min(330px, 100vw); }
 }
+
+/* The server stopped answering: a banner, and the board fades as it may be out of date. */
+#offline {
+  position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 19;
+  max-width: calc(100vw - 32px); box-sizing: border-box; padding: 10px 18px; border-radius: 999px;
+  font-size: 13px; color: var(--text); background: var(--panel); border: 1px solid var(--warn);
+  box-shadow: var(--card-shadow);
+}
+body.offline #world { opacity: .45; transition: opacity .3s; }
 
 /* agents in a chat (details panel) */
 details.run {
@@ -571,6 +582,23 @@ body:has(#drawer:not([hidden])) .topbar { right: calc(var(--drawer) + 24px); }
 }
 #drawer-body { padding: 18px 18px 18px 20px; }
 #drawer .close { right: 14px; top: 12px; }
+/* The details lie above the top bar, so top-bar items that don't fit beside
+   them go under the panel, never over its title and close button. */
+#drawer { z-index: 7; }
+
+/* Narrow windows: narrower panels, and the details open over the top bar like
+   a sheet, rather than squeezing the top bar into a column beside them. */
+@media (max-width: 1000px) {
+  body:has(#drawer:not([hidden])) .topbar { right: 12px; }
+}
+@media (max-width: 900px) {
+  :root { --side: min(var(--side-w, 220px), 42vw); --drawer: min(var(--drawer-w, 330px), 100vw - 24px); }
+}
+/* Phone width: the board buttons wrap inside their pill instead of running off screen. */
+@media (max-width: 600px) {
+  .topbar .seg { max-width: 100%; flex-wrap: wrap; border-radius: 20px; }
+  .topbar .seg .btn + .btn::before { display: none; }  /* a wrapped button would start with one */
+}
 
 dialog {
   border-radius: 28px; background: rgb(var(--glass-rgb) / calc(var(--ga) + .38));
