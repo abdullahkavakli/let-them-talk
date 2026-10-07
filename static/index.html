@@ -142,8 +142,8 @@
     <div class="where" id="n-where-box">
       <label class="choice"><input type="radio" name="n-where" value="editor" checked>
         <span><strong>Chat in IDE</strong>
-        <span class="muted small">A new chat tab opens in the editor window you used last, in that
-        window's folder. Your prompt arrives as a message from Let Them Talk.</span></span></label>
+        <span class="muted small">A new chat tab opens in the editor, in the folder you pick (its
+        window opens if it isn't open yet). Your prompt arrives as a message from Let Them Talk.</span></span></label>
       <label class="choice"><input type="radio" name="n-where" value="background">
         <span><strong>Terminal/background agent</strong>
         <span class="muted small">Starts right away in the folder you pick, with your prompt as its
@@ -153,7 +153,7 @@
       <label for="n-editor">Editor</label>
       <select id="n-editor"></select>
     </div>
-    <div id="n-bg-box" hidden>
+    <div id="n-folder-box">
       <label for="n-folder">Folder it works in</label>
       <div class="folder-row">
         <div class="combo">
@@ -168,6 +168,8 @@
       <ul id="n-folder-list" class="combo-list" role="listbox" aria-label="Folders" hidden></ul>
       <div id="n-places"></div>
       <div id="n-browser" hidden></div>
+    </div>
+    <div id="n-bg-box" hidden>
       <div class="n-grid">
         <label for="n-name">Name</label>
         <input id="n-name" placeholder="optional; taken from the prompt">

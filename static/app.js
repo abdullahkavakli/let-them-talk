@@ -1932,8 +1932,8 @@ function workingFolders() {
     ...(v.folders || [])].filter(Boolean))]);
 }
 
-// With a folder (a "+ New agent" in the sidebar), the dialog starts on a
-// background agent in that folder; an editor chat can't be sent to a folder.
+// The folder box starts on the folder given (a "+ New agent" in the sidebar),
+// else the board's; both an editor chat and a background agent start there.
 // With workflow, it starts a workflow (always a background agent).
 function openNewAgent(folder, workflow = false) {
   nd.workflow = workflow;
@@ -1946,7 +1946,6 @@ function openNewAgent(folder, workflow = false) {
   pickers.agent.choices = workingFolders();
   pickers.agent.close();
   nd.folder.value = folder || state.view?.board.folder || "";
-  if (folder) document.querySelector('input[name="n-where"][value="background"]').checked = true;
   pickers.agent.box.hidden = true;
   api("/api/state").then((d) => $("#n-places").replaceChildren(...placeButtons(d.places || [], pickers.agent)))
     .catch(() => {});
@@ -1984,8 +1983,11 @@ $("#chat-form").addEventListener("submit", async (evt) => {
     } else {
       const editor = nd.editor.value;
       store("ltt.editor", editor);
-      await api(`/api/board/${state.boardId}/launch-editor`, { prompt, editor });
-      window.location.href = editorLink(editor, {});  // opens an empty chat; the server sends the prompt
+      // With a folder, the server opens it in the editor and then the new chat
+      // there; without one, this link opens the chat in the window you used last.
+      // The server sends the prompt either way.
+      const res = await api(`/api/board/${state.boardId}/launch-editor`, { prompt, editor, folder: nd.folder.value.trim() });
+      if (!res.result?.opensChat) window.location.href = editorLink(editor, {});
     }
     nd.dialog.close();
     nd.prompt.value = "";

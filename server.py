@@ -32,7 +32,7 @@ from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
@@ -2321,31 +2321,113 @@ def start_background(bid, body, add_dirs=(), near=None):
     return {"jobId": job, "name": name}
 
 
+# The editors' command-line tools and link schemes. A tool opens a folder in a
+# window of its own, or brings up the window that already has it; from WSL it
+# opens the Windows editor on the WSL folder.
+EDITOR_CLIS = {"Cursor": "cursor", "VS Code": "code", "VS Code Insiders": "code-insiders",
+               "Windsurf": "windsurf", "VSCodium": "codium"}
+EDITOR_SCHEMES = {"Cursor": "cursor", "VS Code": "vscode", "VS Code Insiders": "vscode-insiders",
+                  "Windsurf": "windsurf", "VSCodium": "vscodium"}
+FOLDER_SETTLE = 4  # seconds a window opened on a folder gets before a chat link goes to it
+
+
+def open_in_editor(editor, folder):
+    """Open a folder in an editor: {"opened": bool, "command": what to run
+    instead}. A WSL folder opens through the editor's WSL tool (a window
+    connected to WSL); a Windows one (C:\\...) through its Windows tool."""
+    cli = EDITOR_CLIS.get(editor)
+    if not cli:
+        raise ValueError(f"Unknown editor: {editor}")
+    windows = bool(re.match(r"[A-Za-z]:[\\/]", folder))
+    command = f'{cli} "{folder}"'
+    try:
+        if windows and ON_WSL:
+            launch = [shutil.which("cmd.exe") or "/mnt/c/Windows/System32/cmd.exe", "/c", cli, folder]
+        elif shutil.which(cli):
+            launch = [shutil.which(cli), folder]
+        else:
+            return {"opened": False, "command": command}
+        subprocess.Popen(launch, cwd="/mnt/c" if ON_WSL else None, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        return {"opened": True, "command": command}
+    except OSError:
+        return {"opened": False, "command": command}
+
+
+def open_editor_link(editor, **params):
+    """Open <editor>://anthropic.claude-code/open (?session=, ?prompt=) in the
+    editor window in front, as a click on the link would. Each value is encoded
+    twice, as the page does (the editor decodes it once before the extension
+    reads it). Returns whether it could."""
+    query = "&".join(f"{k}={quote(quote(str(v), safe=''), safe='')}" for k, v in params.items() if v)
+    url = f"{EDITOR_SCHEMES.get(editor, 'vscode')}://anthropic.claude-code/open" + (f"?{query}" if query else "")
+    # explorer.exe takes the link as it is (cmd's start would split it at &)
+    opener = ([shutil.which("explorer.exe") or "/mnt/c/Windows/explorer.exe"] if ON_WSL
+              else ["open"] if HOST_LABEL == "macOS" else [shutil.which("xdg-open") or "xdg-open"])
+    try:
+        subprocess.Popen(opener + [url], cwd="/mnt/c" if ON_WSL else None, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        return True
+    except OSError:
+        return False
+
+
 def start_editor_chat(bid, body):
-    """New agent, as a Cursor / VS Code chat. The page opens the editor link;
-    this watches for the new chat to appear and hands it the prompt."""
+    """New agent, as a Cursor / VS Code chat. With a folder, the editor opens
+    it (or the window that has it) and then the new-chat link, both from here;
+    without one, the page opens the link in the window you used last. Either
+    way this watches for the new chat to appear and hands it the prompt."""
     prompt = str(body.get("prompt") or "").strip()
+    editor = str(body.get("editor") or "")
+    raw = str(body.get("folder") or "").strip()
+    folder = normalize_folder(raw) if raw else None
+    if folder and editor not in EDITOR_CLIS:
+        raise ValueError(f"Unknown editor: {editor}")
+    if folder and not shutil.which(EDITOR_CLIS[editor]):
+        raise ValueError(f"{editor}'s command-line tool ({EDITOR_CLIS[editor]}) isn't on the PATH, so it "
+                         f"can't be asked to open {folder}. Install it from {editor}'s command palette "
+                         "(Shell Command: Install …), or clear the folder to use the window you used last.")
     lid = uuid.uuid4().hex[:10]
     launches[lid] = {
-        "id": lid, "board": bid, "at": time.time(), "prompt": prompt,
-        "editor": str(body.get("editor") or ""), "state": "waiting",
-        "detail": "Waiting for the new chat to open…", "session": None,
-        "known": {s["sessionId"] for s in live_sessions()},
+        "id": lid, "board": bid, "at": time.time(), "prompt": prompt, "editor": editor, "folder": folder,
+        "state": "waiting", "detail": f"Opening {folder} in {editor}…" if folder else "Waiting for the new chat to open…",
+        "session": None, "known": {s["sessionId"] for s in live_sessions()},
     }
     threading.Thread(target=_watch_launch, args=(lid,), daemon=True).start()
-    return {"launchId": lid}
+    return {"launchId": lid, "opensChat": bool(folder)}
+
+
+def _open_folder_chat(job):
+    """Open the job's folder, then (once its window is up) the new-chat link."""
+    if not open_in_editor(job["editor"], job["folder"])["opened"]:
+        return f"{job['editor']} couldn't be asked to open {job['folder']}."
+    time.sleep(FOLDER_SETTLE)
+    if not open_editor_link(job["editor"]):
+        return f"{job['folder']} is open in {job['editor']}, but the new chat couldn't be opened there."
+    job["detail"] = f"Waiting for the new chat in {job['folder']} to open…"
+    return None
 
 
 def _watch_launch(lid):
     job = launches[lid]
+    if job["folder"]:
+        problem = _open_folder_chat(job)
+        if problem:
+            job.update(state="failed", detail=problem + " The prompt was not sent.")
+            return
     while time.time() - job["at"] < LAUNCH_WAIT:
         time.sleep(1.5)
         fresh = [s for s in live_sessions() if s["sessionId"] not in job["known"]
                  and s.get("entrypoint") == "claude-vscode"
                  and (s.get("startedAt") or 0) / 1000 >= job["at"] - 5]
-        if not fresh:
+        # A chat in the folder asked for; one in another folder only if none
+        # shows up there (the link went to another window): it is still yours.
+        here = [s for s in fresh if os.path.normpath(s.get("cwd") or "") == job["folder"]] if job["folder"] else fresh
+        if not here and not (fresh and time.time() - job["at"] > LAUNCH_WAIT / 3):
             continue
-        s = min(fresh, key=lambda x: x.get("startedAt") or 0)
+        s = min(here or fresh, key=lambda x: x.get("startedAt") or 0)
+        aside = (f" It opened in {s.get('cwd')}, not {job['folder']}: the link went to another "
+                 f"{job['editor']} window." if job["folder"] and not here else "")
         job["session"] = {"sessionId": s["sessionId"], "name": s["name"]}
         with lock:
             board = load_board(job["board"])
@@ -2353,7 +2435,7 @@ def _watch_launch(lid):
                 board.setdefault("adopt", []).append(s["sessionId"])
                 save_board(board)
         if not job["prompt"]:
-            job.update(state="done", detail="The new chat is open.")
+            job.update(state="done", detail="The new chat is open." + aside)
             return
         if s.get("messageBlock"):
             job.update(state="failed", detail=f"The new chat opened, but {s['messageBlock']} "
@@ -2365,8 +2447,8 @@ def _watch_launch(lid):
         states, _ = relay_send([{"to": s["name"], "text": text}])
         ok = states[0]["state"] != "failed"
         job.update(state="done" if ok else "failed",
-                   detail="The new chat got your prompt." if ok
-                   else f"The chat opened, but the prompt didn't arrive: {states[0]['detail']}")
+                   detail=("The new chat got your prompt." if ok
+                           else f"The chat opened, but the prompt didn't arrive: {states[0]['detail']}") + aside)
         with lock:
             board = load_board(job["board"])
             if board is not None:
@@ -2374,8 +2456,9 @@ def _watch_launch(lid):
                              "ok" if ok else "error")
                 save_board(board)
         return
-    job.update(state="failed", detail="No new chat appeared. Is the editor open? "
-                                      "The prompt was not sent.")
+    job.update(state="failed", detail=(f"No new chat appeared in {job['folder']}. Is {job['editor']} open there? "
+                                       if job["folder"] else "No new chat appeared. Is the editor open? ")
+               + "The prompt was not sent.")
 
 
 # Hand off: a new agent takes over a chat's work. A copy of the chat (a fork,
