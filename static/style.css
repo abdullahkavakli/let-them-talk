@@ -443,10 +443,6 @@ details.run > summary .dot { margin-top: 5px; }
 .combo-empty { padding: 6px 10px; }
 #b-places, #n-places { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
 #b-places .btn, #n-places .btn { font-size: 12px; padding: 3px 10px; }
-/* the folders you're working in, one click each; the picked one is tinted */
-#n-suggest { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0 0; }
-#n-suggest .btn { font-size: 12px; padding: 3px 10px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#n-suggest .btn[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
 #b-browser, #n-browser { border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); margin-top: 6px; }
 .browse-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--border); }
 .browse-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

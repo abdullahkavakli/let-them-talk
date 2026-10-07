@@ -62,9 +62,9 @@ installed inside WSL, where the server runs.
   trusts, with its permissions and model (its terminal opens unless you
   untick that). The folder box's ▾ lists the folders you're working in (the
   board's, the sidebar's and those of the board's running chats; typing
-  narrows the list), and **Working in** under it has a button for each.
-  Other chats' worktrees (`.claude/worktrees/…`) are left out of both;
-  typing a path, **Browse…** and the place buttons still reach any folder.
+  narrows the list), leaving out other chats' worktrees
+  (`.claude/worktrees/…`); typing a path, **Browse…** and the place buttons
+  still reach any folder.
   The editor chat gets your prompt as a message from Let Them Talk; a
   notice says whether it arrived (with **Copy prompt** if not). A new agent
   goes on the board you started it from.

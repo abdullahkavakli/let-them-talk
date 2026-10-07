@@ -1472,7 +1472,6 @@ function folderCombo(ui) {
     close();
     ui.box.hidden = true;
     ui.error.hidden = true;
-    input.dispatchEvent(new Event("input"));  // e.g. marks the matching folder button
     input.focus();
   };
   const open = (filter = "") => {
@@ -1576,7 +1575,6 @@ async function browse(path, ui = pickers.board) {
   try {
     const d = await api("/api/dirs", { path });
     input.value = d.path;
-    input.dispatchEvent(new Event("input"));  // e.g. marks the matching folder button
     error.hidden = true;
     const into = (name) => `${d.path.replace(/\/+$/, "")}/${name}`;
     box.replaceChildren(
@@ -1923,9 +1921,9 @@ function refreshAgentDialog() {
   ].filter(Boolean).join(" ");
 }
 
-// Folders to start an agent in with one click: the board's, then those of the
-// running chats in the sidebar, then those of the board's running cards.
-// Typing, Browse… and the places below still reach any folder.
+// The folders New agent's ▾ lists: the board's, then those of the running
+// chats in the sidebar, then those of the board's running cards. Typing,
+// Browse… and the places below still reach any folder.
 function workingFolders() {
   const v = state.view;
   if (!v) return [];
@@ -1933,25 +1931,6 @@ function workingFolders() {
   return ownFolders([...new Set([v.board.folder, ...cwds(v.available), ...cwds(v.nodes.filter((n) => n.live)),
     ...(v.folders || [])].filter(Boolean))]);
 }
-
-// Each path as its last folder names: as few as tell it apart from the others.
-function shortPaths(paths) {
-  const tail = (p, k) => p.replace(/\/+$/, "").split("/").slice(-k).join("/") || p;
-  return paths.map((p) => {
-    let k = 1;
-    while (tail(p, k) !== tail(p, k + 1) && paths.some((q) => q !== p && tail(q, k) === tail(p, k))) k++;
-    return tail(p, k);
-  });
-}
-
-// The folder button for what the box holds shows as picked.
-function markFolderPick() {
-  const at = nd.folder.value.trim().replace(/(.)\/+$/, "$1");
-  for (const b of $("#n-suggest").querySelectorAll(".folder-pick")) {
-    b.setAttribute("aria-pressed", String(b.dataset.path === at));
-  }
-}
-nd.folder.addEventListener("input", markFolderPick);
 
 // With a folder (a "+ New agent" in the sidebar), the dialog starts on a
 // background agent in that folder; an editor chat can't be sent to a folder.
@@ -1964,22 +1943,9 @@ function openNewAgent(folder, workflow = false) {
   const pick = defaultEditor();
   nd.editor.replaceChildren(...Object.keys(EDITOR_SCHEMES).map((e) =>
     el("option", { value: e, text: e, selected: e === pick })));
-  const folders = workingFolders(), labels = shortPaths(folders);
-  pickers.agent.choices = folders;
+  pickers.agent.choices = workingFolders();
   pickers.agent.close();
-  $("#n-suggest").replaceChildren(
-    ...(folders.length ? [el("span", { class: "small muted", text: "Working in:" })] : []),
-    ...folders.map((f, i) => el("button", {
-      type: "button", class: "btn folder-pick", text: labels[i], title: f, "data-path": f,
-      onclick: () => {
-        nd.folder.value = f;
-        pickers.agent.box.hidden = true;
-        nd.error.hidden = true;
-        markFolderPick();
-      },
-    })));
   nd.folder.value = folder || state.view?.board.folder || "";
-  markFolderPick();
   if (folder) document.querySelector('input[name="n-where"][value="background"]').checked = true;
   pickers.agent.box.hidden = true;
   api("/api/state").then((d) => $("#n-places").replaceChildren(...placeButtons(d.places || [], pickers.agent)))
