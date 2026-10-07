@@ -354,6 +354,21 @@ work. If you run Claude Code with `CLAUDE_CONFIG_DIR`, set it for the server
 too: it then reads sessions, transcripts and background agents from there
 instead of `~/.claude`.
 
+## Checks
+
+`tests/check.sh` runs two sets of checks, each for something that broke once:
+
+- `tests/check_server.py` (plain Python): where new cards go, and **Chat in
+  IDE** in a folder, with every program launch and message faked.
+- `tests/check_page.py`: the page in a headless browser against a made-up
+  board, every server reply faked, so no session or personal data is involved
+  and nothing is sent. It needs Playwright: run `tests/setup.sh` once (a venv
+  in `tests/.venv`, about 150 MB, outside git). Without it these are skipped.
+  `LTT_STATIC=<folder>` checks another copy of `static/`, e.g. an older one.
+
+Each check that fails says what is wrong. A change that alters what a check
+looks at on purpose should change the check with it.
+
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE). The Selawik font files in

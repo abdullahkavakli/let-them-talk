@@ -10,3 +10,5 @@ temp/
 # Written by Claude Code each time it loads a mod
 mods/*/.claude-plugin/types/
 mods/*/tsconfig.json
+# The page checks' browser (tests/setup.sh)
+tests/.venv/

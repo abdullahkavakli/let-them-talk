@@ -1550,6 +1550,8 @@ function revealFocused(target) {
 // panels leave uncovered (e.g. a card the details just opened over).
 function reveal(target) {
   const c = canvas.getBoundingClientRect(), v = viewBox(), b = target.getBoundingClientRect();
+  // No room for it beside the panels (a narrow window, the details open): the board stays put.
+  if (v.right - v.left < b.width + 80 || v.bottom - v.top < b.height + 80) return;
   const r = { left: c.left + v.left, right: c.left + v.right, top: c.top + v.top, bottom: c.top + v.bottom };
   const dx = b.left < r.left ? r.left - b.left + 40 : b.right > r.right ? r.right - b.right - 40 : 0;
   const dy = b.top < r.top ? r.top - b.top + 40 : b.bottom > r.bottom ? r.bottom - b.bottom - 40 : 0;
