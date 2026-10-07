@@ -504,6 +504,34 @@ def checks_wide(browser):
         sent = [b for p, b in page.api.posts if p.endswith("/launch-editor")]
         check(name, sent and sent[-1].get("folder") == OTHER[:9] and not page.evaluate("document.querySelector('#chat-dialog').open"))
 
+    name = "new agent: images pasted or dropped go with the first prompt, either way it starts, then are cleared"
+    with step(page, name):
+        page.evaluate("state.images = {}")
+        page.api.post_result = {"jobId": "abcdef12", "name": "x"}
+        page.locator("#new-chat").click()
+        taken = paste(page, "#n-prompt", "image/png") and paste(page, "#chat-form", "image/png", "drop")
+        page.wait_for_timeout(200)
+        two = page.locator("#n-images .thumb").count() == 2
+        page.locator("#n-images .thumb-x").first.click()  # takes one out; doesn't submit the dialog
+        still = page.evaluate("document.querySelector('#chat-dialog').open")
+        page.locator('input[name="n-where"][value="background"]').check()
+        page.locator("#n-prompt").fill("What is this?")
+        page.locator("#n-submit").click()
+        page.wait_for_timeout(300)
+        bg = [b for p, b in page.api.posts if p.endswith("/launch-background")]
+        page.api.post_result = {"launchId": "x", "opensChat": True}
+        page.locator("#new-chat").click()
+        cleared = page.locator("#n-images .thumb").count() == 0
+        paste(page, "#n-prompt", "image/png")
+        page.wait_for_timeout(200)
+        page.locator('input[name="n-where"][value="editor"]').check()
+        page.locator("#n-prompt").fill("Explain")
+        page.locator("#n-submit").click()
+        page.wait_for_timeout(300)
+        ide = [b for p, b in page.api.posts if p.endswith("/launch-editor")]
+        check(name, taken and two and still and cleared and bg and bg[-1].get("images") == [{"data": PNG_1PX}]
+              and ide and ide[-1].get("images") == [{"data": PNG_1PX}], (taken, two, still, cleared))
+
     name = "offline: a banner while the server doesn't answer, gone when it does"
     with step(page, name):
         page.api.down = True

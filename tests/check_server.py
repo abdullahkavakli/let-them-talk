@@ -359,6 +359,38 @@ try:
     check("images: a link where the image folder goes is refused", False)
 except ValueError as e:
     check("images: a link where the image folder goes is refused", not list(link.iterdir()), str(e))
+
+# ------------------------------------- New agent: images with its first prompt
+
+starts = lambda: [a for a in woken if a[:1] == ["--bg"]]
+S.start_background("b", {"prompt": "what's this", "folder": folder, "images": [{"data": b64(PNG)}]})
+first = starts()[-1][-1] if starts() else ""
+named = S.re.search(r"\[Image: source: (\S+)\]", first)
+check("new agent: a background agent's first prompt names the image, saved in its folder's project temp folder",
+      first.startswith("what's this\n\n") and named and Path(named.group(1)).read_bytes() == PNG
+      and Path(named.group(1)).parent == S.CLAUDE_TMP / S.re.sub(r"[^A-Za-z0-9]", "-", folder) / S.IMAGE_DIR, first)
+S.start_background("b", {"prompt": "", "folder": folder, "images": [{"data": b64(PNG)}]})
+check("new agent: images alone start one", starts()[-1][-1].startswith("[Image: source: "), starts()[-1])
+for body, why in (({"prompt": ""}, "nothing to start with"),
+                  ({"prompt": "x", "images": [{"data": b64(b"<svg/>")}]}, "something that isn't an image")):
+    count = len(starts())
+    try:
+        S.start_background("b", {"folder": folder, **body})
+        check(f"new agent: refused: {why}", False)
+    except ValueError as e:
+        check(f"new agent: refused: {why}", len(starts()) == count, str(e))
+sent.clear()
+r = S.start_editor_chat("b", {"prompt": "explain", "editor": "VS Code", "images": [{"data": b64(PNG)}]})
+check("new agent: an IDE chat's launch, which the page is sent, holds no image data",
+      "images" not in S.launches[r["launchId"]])
+sessions.append(fake("fresh", folder))
+job = finish(r["launchId"])
+note = sent[-1][0]["text"] if sent else ""
+named = S.re.search(r"\[Image: source: (\S+)\]", note)
+check("new agent: an IDE chat gets the image in the message with its prompt, once it has opened",
+      job["state"] == "done" and "explain\n\n[Image: source: " in note and named
+      and Path(named.group(1)).read_bytes() == PNG, job["detail"])
+sessions.pop()
 S.shutil.rmtree(S.CLAUDE_TMP.parent)
 
 failed = [r for r in results if not r[1]]
