@@ -1078,11 +1078,11 @@ function conversationButton(n, verb, cls) {
 // The board's own folder in an editor window (the sidebar's Board folder).
 function renderBoardFolderButton() {
   const btn = $("#open-board-folder"), editor = defaultEditor();
-  const text = editorBusy.board ? "Opening…" : `Open in ${editor}`;
+  const text = editorBusy.board ? "Opening…" : "Open in IDE";
   if (btn.textContent !== text) btn.textContent = text;
   btn.disabled = !!editorBusy.board || !state.view;
-  btn.title = `Opens a ${editor} window on this board's folder, or brings forward the one already there. ` +
-    trustNote(editor);
+  btn.title = `Opens a ${editor} window on this board's folder, or brings forward the one already there ` +
+    `(Settings, the gear, picks the IDE). ${trustNote(editor)}`;
 }
 $("#open-board-folder").addEventListener("click", () => {
   if (state.view && !editorBusy.board) openInEditor("board", { board: true, editor: defaultEditor() });
@@ -2071,6 +2071,9 @@ function editorLink(editor, params) {
   return `${EDITOR_SCHEMES[editor] || "vscode"}://anthropic.claude-code/open${query ? `?${query}` : ""}`;
 }
 
+// The IDE picked under Settings (the gear); until one is, the one most of the
+// board's chats run in. Open in IDE, Chat in IDE and the details' Open in /
+// Continue in buttons all use it (New agent can pick another for one chat).
 function defaultEditor() {
   const saved = store("ltt.editor");
   if (saved && EDITOR_SCHEMES[saved]) return saved;
@@ -2078,6 +2081,14 @@ function defaultEditor() {
   for (const n of state.view?.nodes || []) if (n.editor) counts[n.editor] = (counts[n.editor] || 0) + 1;
   return Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] || "VS Code";
 }
+
+const idePick = $("#ide-pick");
+idePick.replaceChildren(...Object.keys(EDITOR_SCHEMES).map((e) => el("option", { value: e, text: e })));
+$("#appearance").addEventListener("toggle", () => { idePick.value = defaultEditor(); });
+idePick.addEventListener("change", () => {
+  store("ltt.editor", idePick.value);
+  if (state.view) render();
+});
 
 // ------------------------------------------------------------- New agent
 //
@@ -2195,7 +2206,6 @@ $("#chat-form").addEventListener("submit", async (evt) => {
         "It will appear on this board in a moment.", "ok");
     } else {
       const editor = nd.editor.value;
-      store("ltt.editor", editor);
       // With a folder, the server opens it in the editor and then the new chat
       // there; without one, this link opens the chat in the window you used last.
       // The server sends the prompt either way.

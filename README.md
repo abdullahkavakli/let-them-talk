@@ -27,9 +27,9 @@ installed inside WSL, where the server runs.
   out). A folder has one board, so **New board** on a folder that has one
   opens it. Switch boards with **Board** in the top bar. **Change folder**
   (under *Board folder*) points the board at another folder: sessions there
-  join it, and the cards and arrows already on it stay. **Open in Cursor**
-  (under *Board folder*; the editor you last picked) opens a window on the
-  board's folder, or brings forward the one already there. **Delete this
+  join it, and the cards and arrows already on it stay. **Open in IDE**
+  (under *Board folder*; the IDE picked under **Settings**) opens a window on
+  the board's folder, or brings forward the one already there. **Delete this
   board** (under *Board folder*) removes the board with its cards and
   arrows, after asking; the sessions keep running and no agent is told.
 - **Connect:** drag the blue handle on a card onto another card (or click
@@ -147,7 +147,7 @@ installed inside WSL, where the server runs.
   - **Open in Cursor** (or your editor) shows the chat there (**Reopen in
     Cursor** once it has ended).
   - **Continue in Cursor** (an ended chat with no editor of its own; the
-    editor you last picked) opens its folder, then the conversation in
+    IDE picked under **Settings**) opens its folder, then the conversation in
     Cursor's Claude panel there, since Cursor finds a chat only in a window
     on its folder. The editor must trust the folder (in Restricted Mode,
     Claude Code is off); if the editor can't be asked, the notice says what
@@ -197,7 +197,7 @@ installed inside WSL, where the server runs.
   moves to show the one in focus); Enter or Space opens it, with focus in its
   details (Tab goes on from there), and F2 renames a card. When the details
   close, focus goes back to the card or arrow they were opened from. Esc in
-  **Appearance** closes only that.
+  **Settings** closes only that.
 - **Activity** (bottom of the sidebar, folded until you open it): the latest
   30 things that happened on this board, newest first, with the time: arrows
   connected and removed, notes and messages sent or failed, prompts sent,
@@ -209,7 +209,10 @@ installed inside WSL, where the server runs.
   **Remove from board** leaves the details open. If the server stops
   answering, a banner at the bottom says so and the board fades until it
   answers again.
-- **Appearance** (the gear next to *Let Them Talk*): the theme (**System**,
+- **Settings** (the gear next to *Let Them Talk*): the **IDE** that **Open in
+  IDE**, **Chat in IDE** and a chat's **Open in** / **Continue in** use (Cursor,
+  VS Code …; until you pick one, the one most of the board's chats run in;
+  **New agent** can pick another for one chat), the theme (**System**,
   **Light** or **Dark**) and the **Glass** slider, from *Clear* to *Tinted*.
   The sidebar, the top bar, the details and the dialogs are glass over the
   board: in Chromium browsers (Chrome, Edge …) the board bends at each
@@ -222,8 +225,7 @@ installed inside WSL, where the server runs.
   app.
 - The page remembers, in this browser, the board you had open, panel widths,
   each board's pan and zoom, whether Activity and the line under a chat's
-  title are open, the editor you last picked in **New agent**, and your
-  Appearance and Subagents choices.
+  title are open, and your Settings and Subagents choices.
 
 ## How it works
 

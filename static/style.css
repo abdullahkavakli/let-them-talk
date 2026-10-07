@@ -722,6 +722,12 @@ dialog h2 { font-size: 22px; font-weight: 700; letter-spacing: -.3px; }
 .theme-pick label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
 .tint-pick { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; }
 .tint-pick input { flex: 1; min-width: 0; accent-color: var(--accent); }
+.ide-pick { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 13px; }
+.ide-pick select {
+  flex: 1; min-width: 0; font: inherit; color: var(--text); background: var(--field);
+  border: 1px solid transparent; border-radius: 10px; padding: 4px 8px;
+}
+.ide-pick + p { margin: 6px 0 0; }
 .board-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .board-actions .btn { padding: 4px 12px; font-size: 12px; }
 

@@ -285,7 +285,7 @@ def checks_wide(browser):
         page.keyboard.press("Escape")
         check(name, inside and page.evaluate(f"document.activeElement.dataset.id === '{A}'"))
 
-    name = "keyboard: Esc in Appearance leaves the details open"
+    name = "keyboard: Esc in Settings leaves the details open"
     with step(page, name):
         open_card(page, A)
         page.locator(".gear").click()
@@ -303,6 +303,20 @@ def checks_wide(browser):
         check(name, page.evaluate("(s => s.opacity === '1' && s.borderStyle === 'dashed')"
                                   "(getComputedStyle(document.querySelector('#drawer-body .msg.pending .bubble')))"))
         page.evaluate("state.outbox = {}")
+
+    name = "settings: the board folder's button reads Open in IDE"
+    with step(page, name):
+        check(name, page.inner_text("#open-board-folder") == "Open in IDE")
+
+    name = "settings: the IDE picked under the gear is the one every IDE button and New agent use"
+    with step(page, name):
+        page.locator(".gear").click()
+        page.select_option("#ide-pick", "Cursor")
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(100)
+        uses = "Cursor" in page.get_attribute("#open-board-folder", "title")
+        page.locator("#new-chat").click()
+        check(name, uses and page.input_value("#n-editor") == "Cursor" and page.evaluate("defaultEditor()") == "Cursor")
 
     name = "hint: shows on the top bar at 1440 px"
     with step(page, name):
