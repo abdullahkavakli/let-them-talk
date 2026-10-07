@@ -2654,7 +2654,10 @@ def _watch_launch(lid):
 # Hand off: a new agent takes over a chat's work. A copy of the chat (a fork,
 # run headless, so the chat itself is left alone, even mid-turn) runs
 # /handoff, and a new background agent in the chat's folder starts by reading
-# the document it writes.
+# the document it writes. The skill comes with the app (mods/, loaded for the
+# copy only), so it works without installing anything.
+HANDOFF_PLUGIN = APP_DIR / "mods" / "let-them-talk-handoff"
+HANDOFF_SKILL = "/let-them-talk-handoff:handoff"
 HANDOFF_DIR = Path(tempfile.gettempdir()) / "let-them-talk-handoffs"
 HANDOFF_TIMEOUT = 480  # seconds the copy gets to write it
 HANDOFF_FOR = "A new agent takes over this chat and continues its work."
@@ -2728,11 +2731,11 @@ def _hand_off(lid, s):
     # tools that would ask are refused, as nobody can answer a headless run.
     args = ["-p", "--resume", sid, "--fork-session", "--no-session-persistence",
             "--name", f"{RELAY_NAME}-handoff", "--permission-mode", "acceptEdits",
-            "--add-dir", str(HANDOFF_DIR), "--output-format", "json"]
+            "--add-dir", str(HANDOFF_DIR), "--plugin-dir", str(HANDOFF_PLUGIN), "--output-format", "json"]
     if model:
         args += ["--model", model]
     try:
-        proc = run_claude(args + ["--", f"/handoff {HANDOFF_FOR} Save the document as exactly {doc}"],
+        proc = run_claude(args + ["--", f"{HANDOFF_SKILL} {HANDOFF_FOR} Save the document as exactly {doc}"],
                           cwd=cwd or None, timeout=HANDOFF_TIMEOUT)
     except subprocess.TimeoutExpired:
         return step("failed", f"{label(s)} took over {HANDOFF_TIMEOUT // 60} minutes to write a handoff; "

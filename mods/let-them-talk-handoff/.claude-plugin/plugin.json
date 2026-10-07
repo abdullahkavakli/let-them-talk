@@ -1,0 +1,5 @@
+{
+  "name": "let-them-talk-handoff",
+  "version": "0.1.0",
+  "description": "The /handoff skill that Hand off to a new agent runs: Matt Pocock's handoff skill (mattpocock/skills, MIT), so it works without installing anything."
+}

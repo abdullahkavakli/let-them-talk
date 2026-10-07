@@ -178,7 +178,8 @@ installed inside WSL, where the server runs.
   closed the window, which stays open. The conversation is kept;
   `claude --resume <id>` continues it. Chats in an editor are closed there.
 - **Hand off to a new agent** (in a card's details): a copy of the chat
-  writes a handoff with your `/handoff` skill, then a new background agent in
+  writes a handoff with the `/handoff` skill that comes with the app (Matt
+  Pocock's, in `mods/let-them-talk-handoff`; nothing to install), then a new background agent in
   the chat's folder, with its model and permissions, starts by reading it;
   its card appears beside the chat's and its terminal opens. The chat itself
   is left as it is: end it, or let it go on. Works for ended chats too. The
@@ -257,7 +258,9 @@ installed inside WSL, where the server runs.
   once per finished reply of 280+ characters, only when you open that chat,
   and kept in memory until the server restarts.
 - A handoff is written by `claude -p --resume <id> --fork-session` on the
-  chat's own model, running `/handoff` over the whole conversation (a few
+  chat's own model, running the app's `/handoff` skill (loaded for that run
+  only, with `--plugin-dir mods/let-them-talk-handoff`; your own skills are
+  left as they are) over the whole conversation (a few
   seconds to minutes; it costs about one reply of that chat). The fork is not
   saved. Nobody can answer it, so it edits files without asking
   (`acceptEdits`), in the chat's folder and in the handoff folder,
@@ -373,4 +376,7 @@ looks at on purpose should change the check with it.
 
 Licensed under the [Apache License 2.0](LICENSE). The Selawik font files in
 `static/fonts/` are Microsoft's, unmodified, under the SIL Open Font License
-1.1 (`static/fonts/LICENSE-Selawik.txt`).
+1.1 (`static/fonts/LICENSE-Selawik.txt`). The `/handoff` skill in
+`mods/let-them-talk-handoff/skills/handoff/` is Matt Pocock's, from
+[mattpocock/skills](https://github.com/mattpocock/skills), under the MIT
+License (`mods/let-them-talk-handoff/skills/handoff/LICENSE`).
