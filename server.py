@@ -2995,9 +2995,9 @@ def _type_prompt(s, text):
         if box is None:
             raise ValueError("It's showing a question or a menu instead of its prompt box. "
                              "Answer it in its terminal first.")
-        if box:
-            raise ValueError("Its prompt box already has text typed in its terminal. "
-                             "Send or clear it there first.")
+        if box:  # shown, so you can tell your own unsent text from a misread
+            raise ValueError(f'Its terminal has unsent text in its prompt box: "{box[:100]}'
+                             f'{"…" if len(box) > 100 else ""}". Send or clear it there, then try again.')
 
     with type_lock:
         since = time.time()
