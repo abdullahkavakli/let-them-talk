@@ -55,8 +55,9 @@ installed inside WSL, where the server runs.
     default), each end that is still running gets a note from
     `@let-them-talk` saying the connection was removed and to stop
     messaging for it.
-- **New agent:** type a prompt, then either open it as a new chat tab in the
-  editor window you used last (Cursor, VS Code …, in that window's folder)
+- **New agent:** type a prompt, then either open it as a new chat tab
+  (**Chat in IDE**) in the editor window you used last (Cursor, VS Code …,
+  picked under **Editor**, in that window's folder)
   or start a **Terminal/background agent** in a folder Claude Code already
   trusts, with its permissions and model (its terminal opens unless you
   untick that). The folder box's ▾ lists the folders you're working in (the

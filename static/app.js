@@ -1895,7 +1895,6 @@ function refreshAgentDialog() {
   $("#n-agents-label").hidden = nd.agents.hidden = !wf;
   $("#n-editor-box").hidden = bg;
   $("#n-bg-box").hidden = !bg;
-  for (const e of document.querySelectorAll(".n-editor-name")) e.textContent = nd.editor.value;
   nd.submit.textContent = wf ? "Start workflow" : bg ? "Start agent" : `Open in ${nd.editor.value}`;
   nd.note.textContent = [
     wf && "A new background agent starts in this folder and runs your task as a Claude Code workflow; " +
