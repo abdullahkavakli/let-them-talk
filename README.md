@@ -64,7 +64,9 @@ installed inside WSL, where the server runs.
   the chat opens there (the editor must trust the folder: in Restricted
   Mode, Claude Code is off), or start a **Terminal/background agent** there (a
   folder Claude Code already trusts), with its permissions and model (its
-  terminal opens unless you untick that). With the folder box empty, the
+  terminal opens unless you untick that), and with **Ultracode** ticked, it
+  starts with ultracode on (see **Ultracode** below), also each time a
+  prompt wakes it later. With the folder box empty, the
   chat opens in the editor window you used last. The folder box's ▾ lists
   the folders you're working in (the board's, the sidebar's and those of
   the board's running chats; typing narrows the list), leaving out other
@@ -180,6 +182,17 @@ installed inside WSL, where the server runs.
   restart*, and
   **Restart in terminal** runs `claude respawn <id>` in a terminal, where
   Claude Code can ask you to trust its folder.
+- **Ultracode** (in a running background agent's details): with it on, the
+  agent runs a workflow (a team of agents) for every bigger task without
+  being asked each time. The line says *Ultracode is on* or *off*, as its
+  conversation shows it, with **Turn off** or **Turn on**: the app types
+  `/effort ultracode off` (or `on`) into its prompt box, as you would in its
+  terminal, also while it works, and a notice shows Claude Code's answer
+  (or why it can't: workflows off under `/config`, a model without
+  ultracode). It lasts until the agent ends; one started with **Ultracode**
+  ticked in **New agent** starts with it again when woken. After a restart
+  it says *Ultracode: unknown* until its next prompt, with both buttons. In any
+  other chat, type `/effort ultracode on` (or `off`) yourself.
 - A chat you send to the background keeps its card: the card, with its
   arrows, moves to the background agent that goes on with it.
 - **Remove from board:** in a card's details; its arrows go too (the button

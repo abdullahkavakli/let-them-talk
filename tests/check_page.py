@@ -80,6 +80,7 @@ class FakeAPI:
         self.post_result = {}
         self.posts = []
         self.asked = 0
+        self.ultracode = None   # what the server reads off a running background agent
 
     def chat(self, sid):
         self.asked += 1
@@ -87,7 +88,8 @@ class FakeAPI:
                 {"id": "r1", "role": "claude", "at": 2, "done": True,
                  "text": "## Done\n- **All green** now\n- ran `npm test`\n\n| a | b |\n|---|---|\n| 1 | 2 |"}]
         return {"sessionId": sid, "messages": msgs, "asking": None, "plan": None, "queued": [], "suggest": None,
-                "working": self.vary and sid == A, "doing": f"Step {self.asked}" if self.vary else None}
+                "working": self.vary and sid == A, "doing": f"Step {self.asked}" if self.vary else None,
+                "ultracode": self.ultracode if sid == B else None}
 
     def reply(self, route, request):
         url = urlparse(request.url)
@@ -333,6 +335,40 @@ def checks_wide(browser):
         sent = [b for p, b in page.api.posts if p.endswith("/send")]
         check(name, one and refused and len(sent) == 1 and sent[0]["text"] == "" and len(sent[0]["images"]) == 1)
         page.evaluate("state.outbox = {}")
+
+    name = "ultracode: a running agent shows its state with the one button that changes it, and asks the server"
+    with step(page, name):
+        page.api.ultracode = False
+        page.api.post_result = {"ultracode": True, "said": "Ultracode on (this session only): dynamic workflows on every task."}
+        open_card(page, B)
+        row = page.locator("#drawer-body .ultracode")
+        shown = row.inner_text()
+        row.get_by_role("button", name="Turn on").click()
+        page.wait_for_timeout(300)
+        sent = [b for p, b in page.api.posts if p.endswith("/ultracode")]
+        check(name, "Ultracode is off" in shown and "Turn off" not in shown and sent == [{"sessionId": B, "on": True}]
+              and "Ultracode on (this session only)" in page.inner_text("#toasts"), (shown, sent))
+
+    name = "ultracode: unknown shows both buttons; a stopped agent has none"
+    with step(page, name):
+        open_card(page, B)
+        both = page.locator("#drawer-body .ultracode button").all_inner_texts()
+        open_card(page, C)
+        check(name, both == ["Turn on", "Turn off"] and page.locator("#drawer-body .ultracode").count() == 0
+              and "while it runs" in page.inner_text("#drawer-body"), both)
+
+    name = "ultracode: New agent can start a background agent with it, not a Chat in IDE"
+    with step(page, name):
+        page.api.post_result = {"jobId": "abcdef12", "name": "x"}
+        page.locator("#new-chat").click()
+        ide = is_open(page, "#n-ultra")
+        page.locator('input[name="n-where"][value="background"]').check()
+        page.locator("#n-prompt").fill("Fix the tests")
+        page.locator("#n-ultra").check()
+        page.locator("#n-submit").click()
+        page.wait_for_timeout(300)
+        sent = [b for p, b in page.api.posts if p.endswith("/launch-background")]
+        check(name, not ide and sent and sent[-1].get("ultracode") is True, sent)
 
     name = "notices: beside the open details, not over them"
     with step(page, name):

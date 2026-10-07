@@ -314,6 +314,8 @@ body.connecting .node:not(.ended) { cursor: copy; }
 .state-sending, .state-skipped { color: var(--muted); }
 .drawer-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .drawer-actions + h2 { margin-top: 18px; }
+.drawer-actions.ultracode { align-items: center; }
+.drawer-actions.ultracode + p { margin: 6px 0 18px; }
 .logs {
   margin: 10px 0 18px; padding: 8px 10px; font-size: 11.5px; line-height: 1.45;
   white-space: pre-wrap; overflow-wrap: anywhere;

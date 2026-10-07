@@ -2142,7 +2142,7 @@ idePick.addEventListener("change", () => {
 const nd = {
   dialog: $("#chat-dialog"), prompt: $("#n-prompt"), editor: $("#n-editor"),
   folder: $("#n-folder"), name: $("#n-name"), mode: $("#n-mode"), model: $("#n-model"),
-  agents: $("#n-agents"), terminal: $("#n-terminal"), note: $("#n-note"), error: $("#n-error"),
+  agents: $("#n-agents"), terminal: $("#n-terminal"), ultra: $("#n-ultra"), note: $("#n-note"), error: $("#n-error"),
   submit: $("#n-submit"), workflow: false,
 };
 const whereTo = () => nd.workflow ? "background"
@@ -2171,7 +2171,7 @@ function refreshAgentDialog() {
   // A Chat in IDE takes a name (its card's, on this board) and a model (the
   // mod runs it on that), not permissions: an editor link can't carry them.
   $("#n-bg-box").hidden = false;
-  for (const id of ["#n-mode-label", "#n-mode", "#n-terminal-gap", "#n-terminal-row"]) $(id).hidden = !bg;
+  for (const id of ["#n-mode-label", "#n-mode", "#n-terminal-gap", "#n-terminal-row", "#n-ultra-gap", "#n-ultra-row"]) $(id).hidden = !bg;
   if (!bg) nd.name.placeholder = "optional; its card's name on this board";
   nd.submit.textContent = wf ? "Start workflow" : bg ? "Start agent" : `Open in ${nd.editor.value}`;
   nd.note.textContent = [
@@ -2241,8 +2241,9 @@ $("#chat-form").addEventListener("submit", async (evt) => {
       const res = await api(`/api/board/${state.boardId}/launch-background`, {
         prompt: wf ? workflowPrompt({ task: prompt, agents: nd.agents.value, model }) : prompt,
         folder: nd.folder.value.trim(), name: nd.name.value.trim() || (wf ? workflowName(prompt) : ""),
-        permissionMode: nd.mode.value, model, openTerminal: nd.terminal.checked,
+        permissionMode: nd.mode.value, model, openTerminal: nd.terminal.checked, ultracode: nd.ultra.checked,
       });
+      nd.ultra.checked = false;  // it costs more: the next agent asks again
       toast(`Started ${wf ? "workflow" : "background agent"} "${res.result.name}". ` +
         "It will appear on this board in a moment.", "ok");
     } else {
@@ -2688,7 +2689,46 @@ function backgroundSection(n) {
           "in its terminal. It keeps running, and its terminal stays open.")
           && agentAction(n, "agent-stop", () => toast(`Stopped ${display(n)}. It's waiting for you.`, "ok")) })),
     state.logs[n.sessionId] && el("pre", { class: "logs mono", text: state.logs[n.sessionId] }),
+    ...(restart ? [] : ultracodeRow(n)),
   ];
+}
+
+// Ultracode: it runs a workflow for every bigger task without being asked each
+// time. The server types /effort ultracode on|off into a running background
+// agent, as you would in its terminal, and reads its state from its
+// conversation; after a restart that is unknown until its next prompt, so
+// both buttons show then.
+state.ultra = {};  // sessionId -> "on" | "off" being switched (kept across redraws)
+function ultracodeRow(n) {
+  if (!n.running) return [el("p", { class: "muted small", text: "Ultracode can be turned on or off while it runs." })];
+  const on = state.chat[n.sessionId]?.ultracode, busy = state.ultra[n.sessionId];
+  const button = (want) => el("button", { class: "btn", disabled: !!busy,
+    text: busy === want ? `Turning ${want}…` : `Turn ${want}`,
+    title: `Types /effort ultracode ${want} into it, as in its terminal (until it ends)`,
+    onclick: () => setUltracode(n, want) });
+  return [
+    el("div", { class: "drawer-actions ultracode" },
+      el("span", { text: on === true ? "Ultracode is on" : on === false ? "Ultracode is off" : "Ultracode: unknown" }),
+      on !== true && button("on"), on !== false && button("off")),
+    el("p", { class: "muted small", text: "With ultracode on, it runs a workflow (a team of agents) for every bigger task." +
+      (on == null ? " Whether it's on shows after its next prompt." : "") }),
+  ];
+}
+
+async function setUltracode(n, want) {
+  state.ultra[n.sessionId] = want;
+  renderDrawer();
+  try {
+    const res = await api(`/api/board/${state.boardId}/ultracode`, { sessionId: n.sessionId, on: want === "on" });
+    if (state.chat[n.sessionId]) state.chat[n.sessionId].ultracode = res.result.ultracode;
+    toast(`${display(n)}: ${res.result.said}`, "ok");  // Claude Code's own answer
+  } catch (e) {
+    toast(failText(e), "error");
+  } finally {
+    delete state.ultra[n.sessionId];
+    renderDrawer();
+    poll();
+  }
 }
 
 // Deleting a background agent can't be undone, so it sits at the bottom with

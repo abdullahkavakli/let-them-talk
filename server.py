@@ -349,6 +349,87 @@ def session_permission_mode(sid):
     return None
 
 
+# Ultracode: a chat runs a workflow (a team of agents) for every bigger task,
+# without the keyword in each prompt. `/effort ultracode on|off` switches it
+# for the running process only; `--settings '{"ultracode": true}'` starts one
+# with it. Claude Code notes it in the transcript: the command's output
+# ("Ultracode on (this session only): …", "Ultracode off. …"; only while the
+# chat is idle) and, with a prompt, a reminder when it differs from the last
+# one (ultra_effort_enter / ultra_effort_exit), so at each prompt it is on
+# exactly when the last reminder is an enter.
+ultra_lock = threading.Lock()
+ultra_cache = {}  # transcript path -> read offset, latest reminder, switch and typed prompt
+ULTRA_SCAN = (b'"ultra_effort_', b"Ultracode o", b'"role":"user","content":"')
+ULTRA_SAID = re.compile(r"<local-command-stdout>.*?\bUltracode (on|off)\b", re.S)
+
+
+def _ultra_record(c, line):
+    try:
+        rec = json.loads(line)
+    except ValueError:
+        return
+    if not isinstance(rec, dict) or rec.get("isSidechain"):
+        return
+    at, kind = (_ms(rec.get("timestamp")) or 0) / 1000, rec.get("type")
+    note = (rec.get("attachment") or {}).get("type") if kind == "attachment" else None
+    if note in ("ultra_effort_enter", "ultra_effort_exit"):
+        c["reminder"] = (note == "ultra_effort_enter", at)
+        return
+    text = (rec.get("message") or {}).get("content") if kind == "user" else \
+        rec.get("content") if kind == "system" and rec.get("subtype") == "local_command" else None
+    if not isinstance(text, str):
+        return
+    said = ULTRA_SAID.match(text)  # a command's output (/effort, or the slider it opens)
+    if said:
+        c["switch"] = (said.group(1) == "on", at)
+    elif kind == "user" and not rec.get("isMeta") and text.strip() and not text.lstrip().startswith("<"):
+        c["prompt"] = at  # a prompt you typed
+
+
+def ultracode_state(s):
+    """Whether ultracode is on in a running chat: True, False, or None when
+    unknown, because the process running now has had no prompt and no switch
+    yet (it started as its flags say). Only bytes appended since the last
+    call are read."""
+    session_title(s["sessionId"])  # finds the transcript
+    path = title_cache.get(s["sessionId"], {}).get("path")
+    if path is None:
+        return None
+    with ultra_lock:
+        c = ultra_cache.setdefault(str(path), {"offset": 0, "reminder": None, "switch": None, "prompt": 0})
+        try:
+            size = path.stat().st_size
+            if size < c["offset"]:  # transcript replaced: read it again
+                c.update(offset=0, reminder=None, switch=None, prompt=0)
+            with path.open("rb") as f:
+                f.seek(c["offset"])
+                while c["offset"] < size:
+                    block = f.read(min(TITLE_READ_BLOCK, size - c["offset"]))
+                    if not block:
+                        break
+                    end = block.rfind(b"\n") + 1
+                    if end == 0:
+                        if len(block) < TITLE_READ_BLOCK:
+                            break  # a line still being written; finish it next time
+                        c["offset"] += len(block)
+                        continue
+                    for line in block[:end].splitlines():
+                        if any(k in line for k in ULTRA_SCAN):
+                            _ultra_record(c, line)
+                    c["offset"] += end
+                    f.seek(c["offset"])
+        except OSError:
+            pass
+        reminder, switch = c["reminder"], c["switch"]
+        prompt = max(c["prompt"], reminder[1] if reminder else 0)
+    # a switch from here while it worked is in no transcript (see set_ultracode)
+    switch = max(filter(None, (switch, ultra_switched.get(s["sessionId"]))), key=lambda n: n[1], default=None)
+    started = (s.get("startedAt") or 0) / 1000
+    if prompt >= started:
+        return switch[0] if switch and switch[1] > prompt else bool(reminder and reminder[0])
+    return switch[0] if switch and switch[1] >= started else None
+
+
 def label(s, board=None):
     """How the board names a session in text: the name you gave its card,
     else its title, else its address."""
@@ -841,7 +922,8 @@ def session_chat(sid):
         except OSError:
             pass
     msgs = msgs[-CHAT_LAST:]
-    live = next((x for x in live_sessions() if x["sessionId"] == sid), None) if working else None
+    running = next((x for x in live_sessions() if x["sessionId"] == sid), None)
+    live = running if working else None
     if live and live.get("status") in ("idle", "asleep") and live.get("agentState") not in ("working", "blocked"):
         # The transcript left a turn open (a cancelled command, a crash), but
         # Claude Code says the chat is idle: believe it.
@@ -867,7 +949,10 @@ def session_chat(sid):
             "asking": questions or None, "doing": working and doing or None,
             "plan": plan_text and {"path": plan, "text": plan_text},
             "queued": queued if working else [],
-            "suggest": _suggestion(sid, msgs) if waiting else None}
+            "suggest": _suggestion(sid, msgs) if waiting else None,
+            # only a running background agent can be switched from here (see set_ultracode)
+            "ultracode": ultracode_state(running) if running and running.get("background")
+            and running.get("running") else None}
 
 
 # ------------------------------------------------------ agents in a session
@@ -2490,6 +2575,9 @@ def start_background(bid, body, add_dirs=(), near=None, modes=PERMISSION_MODES):
         args += ["--model", model]
     for d in add_dirs:
         args += ["--add-dir", str(d)]
+    if body.get("ultracode") is True:
+        # Claude Code keeps the flag, so a prompt that wakes it later starts it with ultracode too
+        args += ["--settings", json.dumps({"ultracode": True})]
     proc = run_claude(args + ["--", prompt], cwd=folder, timeout=90)
     found = BG_LINE.search(_plain(proc.stdout))
     if not found:
@@ -3058,7 +3146,8 @@ def _press_keys(job, keys, check=None):
     """Attach to a running background agent in a terminal of the app's own,
     press keys (pairs of text and seconds to wait after it) once its prompt
     box is drawn, and leave as a closed window would; the agent runs on.
-    check(screen) sees the drawn screen first and raises to press nothing."""
+    check(screen) sees the drawn screen first and raises to press nothing.
+    Returns everything it drew (render_screen() shows it as the screen)."""
     master, slave = os.openpty()
     try:
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
@@ -3099,6 +3188,7 @@ def _press_keys(job, keys, check=None):
         for key, wait in keys:
             os.write(master, key.encode())
             drain(wait)
+        return seen.decode("utf-8", "replace")
     finally:
         proc.send_signal(signal.SIGHUP)
         try:
@@ -3157,6 +3247,82 @@ def _rename_background(s, name):
             raise ValueError("/rename was typed into its prompt box, but its name hasn't changed. "
                              "Look at its terminal.")
         time.sleep(0.5)
+
+
+ULTRA_SHOWN = 2  # seconds its answer gets to show on its screen
+ULTRA_WAIT = 10  # seconds a background agent gets to answer /effort
+COMMAND_OUT = re.compile(r"^<local-command-stdout>(.*?)</local-command-stdout>", re.S)
+ULTRA_ANSWER = re.compile(r"Ultracode (?:on|off)\b.*|Ultracode needs .*|Ultracode isn't available .*")
+ultra_switched = {}  # sessionId -> (on, at): switched from here (see ultracode_state)
+
+
+def _command_output_since(sid, since):
+    """What a slash command run in the chat since `since` answered (Claude
+    Code records it as <local-command-stdout>), or None."""
+    session_title(sid)  # finds the transcript
+    path = title_cache.get(sid, {}).get("path")
+    if path is None:
+        return None
+    try:
+        with path.open("rb") as f:
+            f.seek(max(0, f.seek(0, 2) - AGENT_TAIL))
+            tail = f.read().splitlines()
+    except OSError:
+        return None
+    for raw in reversed(tail):
+        if b"local-command-stdout" not in raw:
+            continue
+        try:
+            rec = json.loads(raw)
+        except ValueError:
+            continue
+        text = (rec.get("message") or {}).get("content") if rec.get("type") == "user" else rec.get("content")
+        out = isinstance(text, str) and COMMAND_OUT.match(text)
+        if out and (_ms(rec.get("timestamp")) or 0) / 1000 >= since:  # typed after since, so no slack
+            return _plain(out.group(1)).strip()
+    return None
+
+
+def _answer_on_screen(screen):
+    """Claude Code's answer to a command run while the agent works: shown on
+    the line just above its prompt box, and never recorded in the transcript."""
+    lines = [l.strip() for l in render_screen(screen).splitlines()]
+    rules = [i for i, l in enumerate(lines) if l.startswith("─────")]
+    above = [l for l in lines[:rules[-2]] if l] if len(rules) >= 2 else []
+    said = above and ULTRA_ANSWER.match(above[-1])
+    return said.group(0) if said else None
+
+
+def set_ultracode(bid, body):
+    """Turn ultracode on or off in a running background agent: the app types
+    `/effort ultracode on|off` into it, as you would in its terminal (Claude
+    Code runs it at once, even while the agent works). Returns Claude Code's
+    answer; one that isn't the switch (no workflows, a model without it) is
+    the error."""
+    on = body.get("on") is True
+    s = find_session(str(body.get("sessionId") or ""))
+    if not (s.get("background") and s.get("running")):
+        raise ValueError("Only a running background agent can be switched from here. "
+                         "In another chat, type /effort ultracode on (or off) yourself.")
+    word = "on" if on else "off"
+    since = time.time()
+    with type_lock:
+        keys = [(key, 0.02) for key in _typed_keys(f"/effort ultracode {word}")]
+        screen = _press_keys(s["jobId"], keys + [("", 0.4), ("\r", ULTRA_SHOWN)], _box_check(s["jobId"]))
+    deadline = time.time() + ULTRA_WAIT
+    while (said := _command_output_since(s["sessionId"], since) or _answer_on_screen(screen or "")) is None:
+        if time.time() > deadline:
+            raise ValueError("/effort ultracode was typed into its prompt box, but Claude Code hasn't "
+                             "answered. Look at its terminal.")
+        time.sleep(0.5)
+    if not re.match(rf"Ultracode {word}\b", said):
+        raise ValueError(said or "Claude Code didn't switch it.")
+    ultra_switched[s["sessionId"]] = (on, since)
+    with lock:
+        board = load_board(bid)
+        add_activity(board, f"Ultracode {word} for {label(s, board)}", "ok")
+        save_board(board)
+    return {"ultracode": on, "said": said}
 
 
 def _job_of(body):
@@ -3622,6 +3788,7 @@ class Handler(BaseHTTPRequestHandler):
                     "add": lambda: add_node(bid, body),
                     "remove": lambda: remove_node(bid, body),
                     "rename": lambda: rename_node(bid, body),
+                    "ultracode": lambda: set_ultracode(bid, body),
                     "delete": lambda: delete_board(bid),
                     "folder": lambda: change_folder(bid, body),
                 }

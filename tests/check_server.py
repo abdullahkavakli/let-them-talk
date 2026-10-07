@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """Checks parts of server.py without a server: where new cards go, New
-agent → Chat in IDE in a folder, renaming a card, and images sent with a prompt. Every
-program launch, session list and message is faked, so nothing opens and nothing is sent.
-Needs only Python.
+agent → Chat in IDE in a folder, renaming a card, images sent with a prompt and switching
+ultracode. Every program launch, session list and message is faked, so nothing opens and
+nothing is sent. Needs only Python.
 
 Run:  python3 tests/check_server.py      Exit 0: all passed. 1: a check failed.
 """
+import json
 import os
 import sys
 import tempfile
 import threading
 import time
 import types
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -152,6 +154,100 @@ try:
     check("rename: a name that doesn't change in time is reported", False)
 except ValueError as e:
     check("rename: a name that doesn't change in time is reported", "hasn't changed" in str(e), str(e))
+
+# ------------------------------------- Ultracode on/off (typing and transcript faked)
+
+root = Path(tempfile.mkdtemp())
+(root / "proj").mkdir()
+S.PROJECT_ROOTS = [root]
+UC = "0c0c0c0c-0000-4000-8000-00000000000c"
+log = root / "proj" / f"{UC}.jsonl"
+log.write_text("")
+
+
+def note(rec, at):  # one transcript record, written as Claude Code writes them (no spaces)
+    rec["timestamp"] = datetime.fromtimestamp(at, timezone.utc).isoformat().replace("+00:00", "Z")
+    with log.open("a") as f:
+        f.write(json.dumps(rec, separators=(",", ":")) + "\n")
+
+
+prompt = lambda text, at: note({"type": "user", "message": {"role": "user", "content": text}}, at)
+remind = lambda kind, at: note({"type": "attachment", "attachment": {"type": f"ultra_effort_{kind}"}}, at)
+answer = lambda text, at: prompt(f"<local-command-stdout>{text}</local-command-stdout>", at)  # a command's output
+t0 = time.time() - 100
+uc = {"sessionId": UC, "name": "uc", "platform": "wsl", "background": True, "running": True,
+      "jobId": "abcdef12", "startedAt": t0 * 1000}
+prompt("fix it", t0 + 1)
+check("ultracode: a chat that never had it reads off", S.ultracode_state(uc) is False)
+answer("Ultracode on (this session only): dynamic workflows on every task. Effort stays high.", t0 + 2)
+prompt("go on", t0 + 3); remind("enter", t0 + 3)
+prompt("and more", t0 + 4)  # still on: Claude Code notes nothing new
+check("ultracode: on once switched on, and still on at later prompts", S.ultracode_state(uc) is True)
+answer("Ultracode off. Effort stays high.", t0 + 5)
+check("ultracode: off once its /effort answer says so, before any prompt", S.ultracode_state(uc) is False)
+restarted = {**uc, "startedAt": (t0 + 10) * 1000}
+check("ultracode: not known after a restart until its next prompt", S.ultracode_state(restarted) is None)
+prompt("woken", t0 + 11)  # started without it: the last reminder (enter) stands, nothing new
+check("ultracode: after a restart, at its next prompt it reads from the last reminder",
+      S.ultracode_state(restarted) is True)
+note({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text":
+     "<local-command-stdout>Ultracode off</local-command-stdout>"}]}}, t0 + 12)
+check("ultracode: a reply quoting an answer isn't a switch", S.ultracode_state(restarted) is True)
+
+typed[:] = []
+board = {"nodes": {UC: {}}, "activity": []}
+sessions[:] = [uc]
+rules = "─" * 40
+
+
+def press_uc(job, keys, check=None):  # the agent answers in its transcript, as when idle
+    typed.append("".join(k for k, _ in keys))
+    word = typed[-1].split()[-1]
+    real_sleep(0.1)  # typing takes a moment, so the answer comes after it started
+    answer({"on": "Ultracode on (this session only): dynamic workflows on every task. Effort stays high.",
+            "off": "Ultracode off. Effort stays high."}[word], time.time())
+    return ""
+
+
+S._press_keys, S.ULTRA_WAIT = press_uc, 0.5
+r = S.set_ultracode("b", {"sessionId": UC, "on": True})
+check("ultracode: Turn on types /effort ultracode on and passes on Claude Code's answer",
+      typed == ["/effort ultracode on\r"] and r["ultracode"] is True and r["said"].startswith("Ultracode on (this session only)")
+      and board["activity"][-1] == "Ultracode on for @uc", (typed, r, board["activity"]))
+# while it works the answer only shows above its prompt box; no transcript record
+S._press_keys = lambda job, keys, check=None: (typed.append("".join(k for k, _ in keys))
+                                               or f"✽ Working… (3s)\r\n   Ultracode off. Effort stays high.\r\n{rules}\r\n❯ \r\n{rules}\r\n")
+r = S.set_ultracode("b", {"sessionId": UC, "on": False})
+check("ultracode: while it works, the answer is read off its screen, and the state follows",
+      r["said"] == "Ultracode off. Effort stays high." and S.ultracode_state(uc) is False, r)
+S._press_keys = lambda job, keys, check=None: real_sleep(0.1) or answer(
+    "Ultracode isn't available on claude-haiku-4-5. Valid options are: low, medium, high, auto", time.time()) or ""
+try:
+    S.set_ultracode("b", {"sessionId": UC, "on": True})
+    check("ultracode: a model without it is reported with Claude Code's own words", False)
+except ValueError as e:
+    check("ultracode: a model without it is reported with Claude Code's own words", "isn't available" in str(e), str(e))
+S._press_keys = lambda job, keys, check=None: ""
+try:
+    S.set_ultracode("b", {"sessionId": UC, "on": True})
+    check("ultracode: no answer in time is reported", False)
+except ValueError as e:
+    check("ultracode: no answer in time is reported", "hasn't answered" in str(e), str(e))
+sessions[:] = [{**uc, "running": False}]
+try:
+    S.set_ultracode("b", {"sessionId": UC, "on": True})
+    check("ultracode: an asleep agent isn't typed into", False)
+except ValueError:
+    check("ultracode: an asleep agent isn't typed into", True)
+
+ran = []
+S.run_claude = lambda args, **kw: ran.append(args) or types.SimpleNamespace(
+    stdout="backgrounded · abcdef12 · x\n", stderr="", returncode=0)
+S.start_background("b", {"prompt": "hi", "folder": folder, "ultracode": True})
+S.start_background("b", {"prompt": "hi", "folder": folder})
+starts = [a for a in ran if "--bg" in a]
+check("ultracode: New agent with Ultracode ticked starts it with the ultracode setting, only then",
+      starts[0][starts[0].index("--settings") + 1] == '{"ultracode": true}' and "--settings" not in starts[1], ran)
 
 # ------------------------------- Open in IDE: a running background agent ends first
 
