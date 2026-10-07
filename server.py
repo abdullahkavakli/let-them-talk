@@ -2342,13 +2342,21 @@ def open_in_editor(editor, folder):
     command = f'{cli} "{folder}"'
     try:
         if windows and ON_WSL:
+            if re.search(r'[&|<>^%!()"]', folder):  # cmd would read these as its own
+                return {"opened": False, "command": command}
             launch = [shutil.which("cmd.exe") or "/mnt/c/Windows/System32/cmd.exe", "/c", cli, folder]
         elif shutil.which(cli):
             launch = [shutil.which(cli), folder]
         else:
             return {"opened": False, "command": command}
-        subprocess.Popen(launch, cwd="/mnt/c" if ON_WSL else None, stdin=subprocess.DEVNULL,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        proc = subprocess.Popen(launch, cwd="/mnt/c" if ON_WSL else None, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        try:
+            # a tool that finds no editor to hand the folder to says so and exits at once
+            if proc.wait(timeout=3) != 0:
+                return {"opened": False, "command": command}
+        except subprocess.TimeoutExpired:
+            pass  # still starting the editor
         return {"opened": True, "command": command}
     except OSError:
         return {"opened": False, "command": command}
@@ -2456,7 +2464,9 @@ def _watch_launch(lid):
                              "ok" if ok else "error")
                 save_board(board)
         return
-    job.update(state="failed", detail=(f"No new chat appeared in {job['folder']}. Is {job['editor']} open there? "
+    job.update(state="failed", detail=(f"No new chat appeared in {job['folder']}. If {job['editor']} opened it in "
+                                       "Restricted Mode, Claude Code is off there: trust the folder (Manage on its "
+                                       "banner) and try again. "
                                        if job["folder"] else "No new chat appeared. Is the editor open? ")
                + "The prompt was not sent.")
 

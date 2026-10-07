@@ -1920,6 +1920,7 @@ function refreshAgentDialog() {
     bg && /haiku/i.test(nd.model.value) && nd.mode.value === "auto"
       ? "With Haiku, auto mode may not be available; the agent then asks before it acts."
       : bg && "Claude Code must already trust the folder (run claude there once and accept).",
+    !bg && `${nd.editor.value} must trust the folder: in Restricted Mode, Claude Code is off there and no chat opens.`,
   ].filter(Boolean).join(" ");
 }
 

@@ -59,7 +59,8 @@ installed inside WSL, where the server runs.
   with), then either open it as a new chat tab (**Chat in IDE**) in Cursor,
   VS Code … (picked under **Editor**), whose command-line tool (`cursor`,
   `code` …) opens that folder, or brings up the window that has it, before
-  the chat opens there, or start a **Terminal/background agent** there (a
+  the chat opens there (the editor must trust the folder: in Restricted
+  Mode, Claude Code is off), or start a **Terminal/background agent** there (a
   folder Claude Code already trusts), with its permissions and model (its
   terminal opens unless you untick that). With the folder box empty, the
   chat opens in the editor window you used last. The folder box's ▾ lists
