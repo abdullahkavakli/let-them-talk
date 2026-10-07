@@ -2308,12 +2308,13 @@ def start_background(bid, body, add_dirs=(), near=None):
     job = found.group(1)
     with lock:
         board = load_board(bid)
-        board.setdefault("adopt", []).append(job)
-        spot = near in board["nodes"] and beside(board, board["nodes"][near])
-        if spot:
-            board.setdefault("spots", {})[job] = spot
-        add_activity(board, f"Started background agent \"{name}\" in {folder}")
-        save_board(board)
+        if board is not None:  # None: deleted meanwhile (a handoff takes minutes)
+            board.setdefault("adopt", []).append(job)
+            spot = near in board["nodes"] and beside(board, board["nodes"][near])
+            if spot:
+                board.setdefault("spots", {})[job] = spot
+            add_activity(board, f"Started background agent \"{name}\" in {folder}")
+            save_board(board)
     background_rows(fresh=True)
     if body.get("openTerminal"):
         open_terminal(job, folder)
@@ -2423,6 +2424,13 @@ def _handoff_name(name):
 
 
 def _run_handoff(lid, s):
+    try:
+        _hand_off(lid, s)
+    except Exception as e:  # or it stays "writing" and the chat can't be handed off again
+        launches[lid].update(state="failed", detail=f"The handoff stopped on an error: {e}", at=time.time())
+
+
+def _hand_off(lid, s):
     job = launches[lid]
     sid, cwd = s["sessionId"], s.get("cwd") or ""
 
@@ -2646,11 +2654,14 @@ def _press_keys(job, keys, check=None):
     box is drawn, and leave as a closed window would; the agent runs on.
     check(screen) sees the drawn screen first and raises to press nothing."""
     master, slave = os.openpty()
-    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
-    env = {**claude_env(), "TERM": "xterm-256color"}
     try:
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+        env = {**claude_env(), "TERM": "xterm-256color"}
         proc = subprocess.Popen([CLAUDE_BIN, "attach", job], stdin=slave, stdout=slave,
                                 stderr=slave, env=env, start_new_session=True)
+    except BaseException:
+        os.close(master)  # no attach to read it: the finally below is never reached
+        raise
     finally:
         os.close(slave)
     seen = bytearray()

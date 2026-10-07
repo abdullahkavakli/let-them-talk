@@ -2146,7 +2146,7 @@ function backgroundSection(n) {
         onclick: () => state.logs[n.sessionId]
           ? (delete state.logs[n.sessionId], renderDrawer())
           : agentAction(n, "agent-logs", (r) => { state.logs[n.sessionId] = r.text; renderDrawer(); }) }),
-      n.running && (n.status !== "idle" || blocked) && el("button", { class: "btn", text: "Stop",
+      n.running && n.status !== "idle" && el("button", { class: "btn", text: "Stop",
         onclick: () => confirm(`Stop ${display(n)}? It stops whatever it is doing now, as Esc does ` +
           "in its terminal. It keeps running, and its terminal stays open.")
           && agentAction(n, "agent-stop", () => toast(`Stopped ${display(n)}. It's waiting for you.`, "ok")) }),

@@ -126,9 +126,10 @@ installed inside WSL, where the server runs.
     Cursor** once it has ended).
 - **Background agents:** **Open in terminal** (`claude attach <id>` in a new
   window), **Show its screen** (click again to hide; it reads **What is it
-  asking?** while the agent waits for you), **Stop** (while it works: Esc
-  in its prompt box through `claude attach`, so it stops what it is doing
-  and waits for you; it keeps running and its terminal stays open),
+  asking?** while the agent waits for you), **Stop** (while it works or
+  shows a permission prompt or a question: Esc through `claude attach`, so
+  it stops what it is doing, or declines the prompt, and waits for you; it
+  keeps running and its terminal stays open),
   **Delete agent** (`claude rm`: removes it from Claude Code's list, with
   its worktree if it has one; its conversation file stays). An agent whose
   process ended before its first reply finished (`claude stop`, a crash)
@@ -217,8 +218,11 @@ installed inside WSL, where the server runs.
 - A handoff is written by `claude -p --resume <id> --fork-session` on the
   chat's own model, running `/handoff` over the whole conversation (a few
   seconds to minutes; it costs about one reply of that chat). The fork is not
-  saved, and may write only in the handoff folder, `let-them-talk-handoffs`
-  in the system's temp folder (`/tmp` on Linux and WSL).
+  saved. Nobody can answer it, so it edits files without asking
+  (`acceptEdits`), in the chat's folder and in the handoff folder,
+  `let-them-talk-handoffs` in the system's temp folder (`/tmp` on Linux and
+  WSL). It is told only to write the handoff there; nothing else stops it
+  from editing the chat's files.
 - The server listens only on 127.0.0.1 and answers only requests addressed
   to `localhost` or `127.0.0.1` on its port. It takes commands only with its
   own request header, which other web pages can't send, and tells browsers
