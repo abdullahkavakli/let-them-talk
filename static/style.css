@@ -704,6 +704,10 @@ dialog label.choice:has(input:checked) { border-color: var(--accent); background
   width: fit-content; margin: 0 auto; padding: 10px 18px; border-radius: 999px; text-align: center;
   background: var(--accent); color: var(--on-accent); font-weight: 600; box-shadow: 0 6px 18px rgb(0 0 0 / .18);
 }
+/* New agent: images dropped on the dialog go with its prompt */
+#chat-dialog.dropping #n-prompt { border-color: var(--accent); background: var(--accent-soft); }
+#n-images { padding: 8px 0 0; }
+.n-images-hint { margin: 4px 0 0; }
 .composer-row { display: flex; align-items: flex-end; gap: 4px; }
 .send-box {
   flex: 1; min-width: 0; margin: 0; padding: 5px 4px; border: 0; outline: none; background: none; resize: none;

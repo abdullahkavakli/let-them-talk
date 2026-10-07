@@ -71,7 +71,11 @@ installed inside WSL, where the server runs.
   the folders you're working in (the board's, the sidebar's and those of
   the board's running chats; typing narrows the list), leaving out other
   chats' worktrees (`.claude/worktrees/…`); typing a path, **Browse…** and
-  the place buttons still reach any folder.
+  the place buttons still reach any folder. Images go with the prompt as
+  they do in a chat's Send box: paste them into the prompt box or drop them
+  on the dialog (PNG, JPEG, GIF or WebP, up to 5, 10 MB each); a background
+  agent or workflow gets them in its first prompt, a Chat in IDE in the
+  message with your prompt, once it has opened.
   The editor chat gets your prompt as a message from Let Them Talk; a
   notice says whether it arrived (with **Copy prompt** if not). A Chat in
   IDE also takes a **Name**, its card's name on the board (its tab in the

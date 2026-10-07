@@ -2560,7 +2560,8 @@ def start_background(bid, body, add_dirs=(), near=None, modes=PERMISSION_MODES):
     the card of the session near, if there is room. modes are the permission
     modes it may get."""
     prompt = str(body.get("prompt") or "").strip()
-    if not prompt:
+    images = _read_images(body.get("images") or [])
+    if not prompt and not images:
         raise ValueError("A background agent needs a prompt to start with.")
     folder = normalize_folder(str(body.get("folder") or ""))
     mode = body.get("permissionMode") or "auto"
@@ -2578,6 +2579,8 @@ def start_background(bid, body, add_dirs=(), near=None, modes=PERMISSION_MODES):
     if body.get("ultracode") is True:
         # Claude Code keeps the flag, so a prompt that wakes it later starts it with ultracode too
         args += ["--settings", json.dumps({"ultracode": True})]
+    if images:  # where it reads them without asking, named in its prompt as a pasted image is
+        prompt = with_images(prompt, _save_images({"cwd": folder}, images))
     proc = run_claude(args + ["--", prompt], cwd=folder, timeout=90)
     found = BG_LINE.search(_plain(proc.stdout))
     if not found:
@@ -2665,6 +2668,7 @@ def start_editor_chat(bid, body):
     without one, the page opens the link in the window you used last. Either
     way this watches for the new chat to appear and hands it the prompt."""
     prompt = str(body.get("prompt") or "").strip()
+    images = _read_images(body.get("images") or [])  # saved once the chat is there: its folder may be unknown
     editor = str(body.get("editor") or "")
     name = " ".join(str(body.get("name") or "").split())[:ALIAS_MAX]
     model = str(body.get("model") or "").strip()
@@ -2685,7 +2689,7 @@ def start_editor_chat(bid, body):
         "state": "waiting", "detail": f"Opening {folder} in {editor}…" if folder else "Waiting for the new chat to open…",
         "session": None, "known": {s["sessionId"] for s in live_sessions()},
     }
-    threading.Thread(target=_watch_launch, args=(lid,), daemon=True).start()
+    threading.Thread(target=_watch_launch, args=(lid, images), daemon=True).start()
     return {"launchId": lid, "opensChat": bool(folder)}
 
 
@@ -2700,7 +2704,9 @@ def _open_folder_chat(job):
     return None
 
 
-def _watch_launch(lid):
+def _watch_launch(lid, images=()):
+    """images: [(bytes, kind)] going with the prompt (kept here, not in the
+    launch, which the page is sent)."""
     job = launches[lid]
     # the model's full id, looked up while the editor opens (the mod names it)
     lookup = threading.Thread(target=lambda: job.update(modelId=resolve_model(job["model"])), daemon=True)
@@ -2738,7 +2744,7 @@ def _watch_launch(lid):
                 if job["name"]:  # its card's name, once sync_board has made the card
                     board.setdefault("names", {})[s["sessionId"]] = job["name"]
                 save_board(board)
-        if not job["prompt"]:
+        if not job["prompt"] and not images:
             job.update(state="done", detail="The new chat is open." + aside)
             return
         if s.get("messageBlock"):
@@ -2746,8 +2752,16 @@ def _watch_launch(lid):
                                               "Paste the prompt into it yourself.")
             return
         job.update(state="sending", detail="Sending your prompt to the new chat…")
+        prompt = job["prompt"]
+        if images:
+            try:
+                prompt = with_images(prompt, _save_images(s, images))
+            except (ValueError, OSError) as e:
+                job.update(state="failed", detail=f"The chat opened, but its images couldn't be saved ({e}), "
+                                                  "so the prompt was not sent.")
+                return
         text = (f"[{APP_NAME}] Your user started this chat from {APP_NAME} with this prompt:"
-                f"\n\n{job['prompt']}")
+                f"\n\n{prompt}")
         states, _ = relay_send([{"to": s["name"], "text": text}])
         ok = states[0]["state"] != "failed"
         job.update(state="done" if ok else "failed",
@@ -2949,11 +2963,14 @@ def _own_dir(path, private=False):
 
 def _save_images(s, images):
     """Save images where chat s reads them without asking, each under a new
-    random name; old ones go. Returns their paths."""
+    random name; old ones go. Returns their paths. s may be just {"cwd"}: an
+    agent about to start there."""
     if s.get("platform") == "windows":
         raise ValueError("Images can't be sent to a chat running on Windows.")
-    session_title(s["sessionId"])  # finds the transcript
-    path = title_cache.get(s["sessionId"], {}).get("path")
+    sid = s.get("sessionId")
+    if sid:
+        session_title(sid)  # finds the transcript
+    path = title_cache.get(sid, {}).get("path") if sid else None
     project = path.parent.name if path else re.sub(r"[^A-Za-z0-9]", "-", s.get("cwd") or "")
     folder = CLAUDE_TMP / project / IMAGE_DIR
     _own_dir(CLAUDE_TMP, private=True)
@@ -3748,7 +3765,9 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             length = -1
-        if not 0 <= length <= (SEND_BODY if parts[-1:] == ["send"] else MAX_BODY):  # a Send may carry images
+        # a Send, and a new agent's first prompt, may carry images
+        if not 0 <= length <= (SEND_BODY if parts[-1:] in (["send"], ["launch-background"], ["launch-editor"])
+                               else MAX_BODY):
             return self._send(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "request too large"})
         try:
             body = json.loads(self.rfile.read(length) or b"{}")

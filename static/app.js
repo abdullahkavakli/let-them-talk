@@ -2216,11 +2216,55 @@ function openNewAgent(folder, workflow = false) {
     .catch(() => {});
   nd.error.hidden = true;
   refreshAgentDialog();
+  renderAgentImages();  // any still there from a dialog closed without starting
   nd.dialog.showModal();
   nd.prompt.focus();
 }
 $("#new-chat").addEventListener("click", () => openNewAgent());
 $("#new-workflow").addEventListener("click", () => openNewAgent(null, true));
+
+// Images go with the new agent's first prompt, as with a chat's Send box:
+// pasted into the prompt box or dropped anywhere on the dialog. The server
+// saves them where the agent reads them and names them in the prompt.
+const NEW_AGENT = "new-agent";  // their key in state.images
+function renderAgentImages() {
+  const images = state.images[NEW_AGENT] || [];
+  $("#n-images").hidden = !images.length;
+  $("#n-images").replaceChildren(...images.map((img, i) => el("div", { class: "thumb" },
+    el("img", { src: img.url, alt: `Image ${i + 1}` }),
+    el("button", { type: "button", class: "thumb-x", text: "×", "aria-label": `Remove image ${i + 1}`, title: "Remove",
+      onclick: () => {
+        URL.revokeObjectURL(img.url);
+        state.images[NEW_AGENT] = state.images[NEW_AGENT].filter((x) => x !== img);
+        renderAgentImages();
+      } }))));
+}
+function clearAgentImages() {
+  for (const img of state.images[NEW_AGENT] || []) URL.revokeObjectURL(img.url);
+  state.images[NEW_AGENT] = [];
+  renderAgentImages();
+}
+nd.prompt.addEventListener("paste", (e) => {
+  const files = [...(e.clipboardData?.files || [])];
+  if (!files.length || e.clipboardData.getData("text/plain")) return;  // copied text pastes as text
+  e.preventDefault();
+  addImages(NEW_AGENT, files, renderAgentImages);
+});
+nd.dialog.addEventListener("dragover", (e) => {
+  if (!draggingFiles(e)) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "copy";
+  nd.dialog.classList.add("dropping");
+});
+nd.dialog.addEventListener("dragleave", (e) => {
+  if (!nd.dialog.contains(e.relatedTarget)) nd.dialog.classList.remove("dropping");
+});
+nd.dialog.addEventListener("drop", (e) => {
+  nd.dialog.classList.remove("dropping");
+  if (!e.dataTransfer.files.length) return;
+  e.preventDefault();
+  addImages(NEW_AGENT, [...e.dataTransfer.files], renderAgentImages);
+});
 
 for (const e of [nd.editor, nd.mode, nd.model, ...document.querySelectorAll('input[name="n-where"]')]) {
   e.addEventListener("change", refreshAgentDialog);
@@ -2231,15 +2275,18 @@ $("#chat-form").addEventListener("submit", async (evt) => {
   if (evt.submitter?.value !== "ok") return;
   evt.preventDefault();
   const prompt = nd.prompt.value.trim();
+  const images = (state.images[NEW_AGENT] || []).map((i) => ({ data: i.data }));
   const fail = (msg) => { nd.error.textContent = msg; nd.error.hidden = false; nd.submit.disabled = false; };
   nd.submit.disabled = true;
   try {
     if (whereTo() === "background") {
       const wf = nd.workflow;
-      if (!prompt) return fail(wf ? "Say what the workflow should do." : "A background agent needs a prompt to start with.");
+      if (wf ? !prompt : !prompt && !images.length) {
+        return fail(wf ? "Say what the workflow should do." : "A background agent needs a prompt to start with.");
+      }
       const model = nd.model.value.trim();
       const res = await api(`/api/board/${state.boardId}/launch-background`, {
-        prompt: wf ? workflowPrompt({ task: prompt, agents: nd.agents.value, model }) : prompt,
+        prompt: wf ? workflowPrompt({ task: prompt, agents: nd.agents.value, model }) : prompt, images,
         folder: nd.folder.value.trim(), name: nd.name.value.trim() || (wf ? workflowName(prompt) : ""),
         permissionMode: nd.mode.value, model, openTerminal: nd.terminal.checked, ultracode: nd.ultra.checked,
       });
@@ -2252,13 +2299,14 @@ $("#chat-form").addEventListener("submit", async (evt) => {
       // there; without one, this link opens the chat in the window you used last.
       // The server sends the prompt either way.
       const res = await api(`/api/board/${state.boardId}/launch-editor`, {
-        prompt, editor, folder: nd.folder.value.trim(), name: nd.name.value.trim(), model: nd.model.value.trim(),
+        prompt, images, editor, folder: nd.folder.value.trim(), name: nd.name.value.trim(), model: nd.model.value.trim(),
       });
       if (!res.result?.opensChat) window.location.href = editorLink(editor, {});
     }
     nd.dialog.close();
     nd.prompt.value = "";
     nd.name.value = "";
+    clearAgentImages();
     poll();
   } catch (e) {
     fail(failText(e));
@@ -2580,9 +2628,10 @@ function sendIcon() {
   return icon;
 }
 
-// Adds images (pasted or dropped) to what goes with a chat's next text, with a
-// thumbnail each; others are refused with a notice.
-async function addImages(sid, files) {
+// Adds images (pasted or dropped) to what goes with a chat's next text (key:
+// its sessionId) or a new agent's first prompt (NEW_AGENT), with a thumbnail
+// each; others are refused with a notice. redraw shows them.
+async function addImages(sid, files, redraw = renderDrawer) {
   const take = [], refused = new Set();
   for (const f of files) {
     if (!IMAGE_TYPES.includes(f.type)) refused.add("Only PNG, JPEG, GIF and WebP images can be sent.");
@@ -2605,7 +2654,7 @@ async function addImages(sid, files) {
   } catch (e) {
     toast(`An image couldn't be read: ${e?.message || e}`, "error");
   }
-  renderDrawer();
+  redraw();
 }
 
 // Images dropped anywhere on a chat's details go into its Send box, so they
