@@ -3044,6 +3044,25 @@ def stop_background(bid, body):
     return {"stopped": job}  # _stoppable just refreshed the list the board reads
 
 
+def end_background(bid, body):
+    """End a background agent but keep it (`claude stop`), as End this chat
+    does for a chat in a terminal: its process exits and its terminals close,
+    its conversation stays, and a prompt (or `claude attach <id>`) wakes it.
+    Refused before its first reply is saved: it could only be restarted then."""
+    job = _job_of(body)
+    row = next((r for r in background_rows(fresh=True) if r["id"] == job), None)
+    if row is None or not row.get("pid"):
+        raise ValueError("It isn't running, so there is nothing to end.")
+    if not has_transcript(row["sessionId"]):
+        raise ValueError("It hasn't saved its first reply yet; ended now, it couldn't be woken again. "
+                         "Wait for that reply, or use Stop.")
+    proc = run_claude(["stop", job], timeout=60)
+    if proc.returncode != 0:
+        raise ValueError(_cli_error(proc))
+    background_rows(fresh=True)
+    return {"ended": job, "resume": f"claude attach {job}"}
+
+
 def delete_background(bid, body):
     job = _job_of(body)
     proc = run_claude(["rm", job], timeout=60)
@@ -3425,6 +3444,7 @@ class Handler(BaseHTTPRequestHandler):
                     "handoff": lambda: start_handoff(bid, body),
                     "send": lambda: send_to_session(bid, body),
                     "agent-stop": lambda: stop_background(bid, body),
+                    "agent-end": lambda: end_background(bid, body),
                     "agent-delete": lambda: delete_background(bid, body),
                     "agent-logs": lambda: background_logs(bid, body),
                     "agent-attach": lambda: attach_background(bid, body),

@@ -160,6 +160,10 @@ installed inside WSL, where the server runs.
   shows a permission prompt or a question: Esc through `claude attach`, so
   it stops what it is doing, or declines the prompt, and waits for you; it
   keeps running and its terminal stays open),
+  **End agent** (while it runs; `claude stop`: it exits and its terminal
+  windows close, as **End this chat** does for a chat in a terminal; its
+  card stays, and a prompt wakes it; not before its first reply is saved,
+  as it could only be restarted then),
   **Delete agent** (`claude rm`: removes it from Claude Code's list, with
   its worktree if it has one; its conversation file stays). An agent whose
   process ended before its first reply finished (`claude stop`, a crash)

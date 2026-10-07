@@ -2577,9 +2577,22 @@ function backgroundSection(n) {
 
 // Deleting a background agent can't be undone, so it sits at the bottom with
 // the other ways a card goes, not beside Open in terminal and Stop.
+// End: it stops and its terminals close, but it stays (a prompt wakes it), as
+// End this chat for a chat in a terminal. Delete: it is gone from the list.
 function deleteControls(n) {
-  return el("div", { class: "drawer-actions" }, el("button", { class: "btn danger", text: "Delete agent",
-    title: "claude rm: removes it from Claude Code's list (its conversation stays on disk)",
-    onclick: () => confirm(`Delete the background agent ${display(n)}? Its conversation stays on disk.`)
-      && agentAction(n, "agent-delete", () => { toast(`Deleted ${display(n)}.`, "ok"); closeDrawer(); }) }));
+  return el("div", { class: "drawer-actions" },
+    n.running && el("button", { class: "btn", text: "End agent",
+      title: "claude stop: it stops and its terminal windows close; it stays here, and a prompt wakes it",
+      onclick: () => {
+        const midway = n.status === "busy" ? " It stops in the middle of what it is doing." : "";
+        if (confirm(`End ${display(n)}?${midway} It stops and its terminal windows close. ` +
+          "It stays on the board: send it a prompt to wake it.")) {
+          agentAction(n, "agent-end", () => toast(`Ended ${display(n)}. Send it a prompt to wake it.`, "ok"));
+        }
+      } }),
+    el("button", { class: "btn danger", text: "Delete agent",
+      title: "claude rm: removes it from Claude Code's list, with its own worktree if it has one (its conversation stays on disk)",
+      onclick: () => confirm(`Delete the background agent ${display(n)}? It's removed for good, with its own ` +
+        "worktree if it has one. Its conversation stays on disk.")
+        && agentAction(n, "agent-delete", () => { toast(`Deleted ${display(n)}.`, "ok"); closeDrawer(); }) }));
 }

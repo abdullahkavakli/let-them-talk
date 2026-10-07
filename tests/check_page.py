@@ -263,6 +263,16 @@ def checks_wide(browser):
         check(name, "Delete agent" in flat and not any("Delete agent" in r and "Open in terminal" in r for r in rows)
               and flat.index("Delete agent") > flat.index("Open in terminal"))
 
+    name = "details: End agent on a running background agent only, and it asks for agent-end"
+    with step(page, name):
+        open_card(page, C)  # gamma: its process ended
+        ended = page.locator("#drawer-body button", has_text="End agent").count()
+        open_card(page, B)  # beta: running
+        page.locator("#drawer-body button", has_text="End agent").click()  # the confirm is accepted
+        page.wait_for_timeout(200)
+        sent = [b for p, b in page.api.posts if p.endswith("/agent-end")]
+        check(name, ended == 0 and "confirm" in page.dialogs and sent == [{"jobId": "abcdef12"}])
+
     name = "notices: beside the open details, not over them"
     with step(page, name):
         open_card(page, B)
