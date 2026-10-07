@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Checks parts of server.py without a server: where new cards go, and New
-agent → Chat in IDE in a folder. Every program launch, session list and
+"""Checks parts of server.py without a server: where new cards go, New
+agent → Chat in IDE in a folder, and renaming a card. Every program launch, session list and
 message is faked, so nothing opens and nothing is sent. Needs only Python.
 
 Run:  python3 tests/check_server.py      Exit 0: all passed. 1: a check failed.
@@ -108,6 +108,49 @@ S.open_editor_link("Cursor", session="x")
 S.ON_WSL = on_wsl
 check("open_editor_link: from WSL through Windows' link handler, which keeps ?session= (explorer.exe drops it)",
       launched[-1] == ["/win/rundll32.exe", "url.dll,FileProtocolHandler", "cursor://anthropic.claude-code/open?session=x"])
+
+# ------------------------------------------------ Rename a card (typing faked)
+
+typed, board = [], {"nodes": {"bg": {"alias": "mine"}, "ide": {}, "nap": {}}, "activity": []}
+S.load_board = lambda bid: board
+S.add_activity = lambda board, text, level="info": board["activity"].append(text)
+S._box_check = lambda job: None
+agent = {"sessionId": "bg", "name": "old name", "title": "old name", "platform": "wsl",
+         "background": True, "running": True, "jobId": "j1"}
+
+
+def press(job, keys, check=None):  # Claude Code takes the new name, in a fresh registry read
+    typed.append("".join(k for k, _ in keys))
+    sessions[0] = {**agent, "name": typed[-1].removeprefix("/rename ").rstrip("\r")}
+
+
+S._press_keys = press
+sessions[:] = [agent,
+               {"sessionId": "ide", "name": "ide-1", "platform": "wsl", "background": False, "running": True},
+               {"sessionId": "nap", "name": "nap", "platform": "wsl", "background": True, "running": False},
+               {"sessionId": "x", "name": "Taken", "platform": "wsl", "background": False, "running": True}]
+r = S.rename_node("b", {"sessionId": "bg", "name": "  new   name "})
+check("rename: a running background agent gets /rename typed into it",
+      typed == ["/rename new name\r"] and r["renamed"] == "new name", typed)
+check("rename: its card drops the board's own name, and Activity says so",
+      "alias" not in board["nodes"]["bg"] and board["activity"][-1] == 'Renamed "mine" to "new name"', board)
+typed.clear()
+for sid in ("ide", "nap"):
+    S.rename_node("b", {"sessionId": sid, "name": "Card only"})
+check("rename: a chat in a terminal or an editor, or an asleep agent, gets the name on this board only",
+      not typed and board["nodes"]["ide"]["alias"] == board["nodes"]["nap"]["alias"] == "Card only")
+sessions[0] = agent
+try:
+    S.rename_node("b", {"sessionId": "bg", "name": "taken"})
+    check("rename: a name another running chat has is refused", False)
+except ValueError:
+    check("rename: a name another running chat has is refused", not typed)
+S._press_keys, S.RENAME_WAIT = (lambda job, keys, check=None: None), 0.2
+try:
+    S.rename_node("b", {"sessionId": "bg", "name": "never taken"})
+    check("rename: a name that doesn't change in time is reported", False)
+except ValueError as e:
+    check("rename: a name that doesn't change in time is reported", "hasn't changed" in str(e), str(e))
 
 failed = [r for r in results if not r[1]]
 for name, ok, detail in results:

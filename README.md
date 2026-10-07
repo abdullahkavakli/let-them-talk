@@ -106,10 +106,13 @@ installed inside WSL, where the server runs.
   address, folder, model and session id (and the chat's own title once you
   renamed the card).
 - **Rename a card:** double-click it, press F2 on it, or click ✎ beside the
-  name in its details; type a name and press Enter (Esc cancels). Only this
-  board shows the name, Activity included; the chat keeps its own title and
-  `@address`, so notes and messages still reach it. **Use its title** (or an
-  empty name) goes back to the chat's title.
+  name in its details; type a name and press Enter (Esc cancels). A running
+  background agent is renamed itself: the app types `/rename` into it, so
+  Claude Code, every board and messages to it use the new name. Any other
+  chat gets the name on this board only, Activity included; it keeps its own
+  title and `@address`, so notes and messages still reach it (run `/rename`
+  in the chat to rename it itself). **Use its title** (or an empty name) goes
+  back to the chat's title.
   - **Recent messages:** the last 3 messages, like a phone: your prompts as
     typed (including ones sent while it worked; ones typed in its own window
     while it works show as *queued* until it reads them), and Claude's

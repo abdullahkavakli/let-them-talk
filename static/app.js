@@ -1107,8 +1107,12 @@ $("#open-board-folder").addEventListener("click", () => {
   if (state.view && !editorBusy.board) openInEditor("board", { board: true, editor: defaultEditor() });
 });
 
-// Rename: a name of your own for a card, kept with the board. The chat keeps
-// its title and its address, so notes and messages still find it.
+// Rename: a running background agent is renamed itself (the server types
+// /rename into it), so Claude Code, its address and every board follow. Any
+// other chat gets a name of its own on this board; it keeps its title and
+// its address, so notes and messages still find it.
+const renamesItself = (n) => n.background && n.running;
+
 function nameHeading(n) {
   if (state.renaming !== n.sessionId) {
     return [el("div", { class: "name-head" },
@@ -1117,7 +1121,7 @@ function nameHeading(n) {
         onclick: () => startRename(n) }))];
   }
   const box = el("input", {
-    id: "rename-box", class: "rename-box", maxlength: 60, "aria-label": "Name on this board",
+    id: "rename-box", class: "rename-box", maxlength: 60, "aria-label": renamesItself(n) ? "Name" : "Name on this board",
     placeholder: n.title || `@${n.name}`,
     oninput: (e) => { state.renameDraft = e.target.value; },
     onkeydown: (e) => {
@@ -1134,7 +1138,9 @@ function nameHeading(n) {
       el("button", { class: "btn", text: "Cancel", onclick: stopRename }),
       n.alias && el("button", { class: "btn", text: n.title ? "Use its title" : "Use its address",
         title: n.title || `@${n.name}`, onclick: () => saveRename(n, "") })),
-    el("p", { class: "muted small", text: `Only this board shows this name. Messages still reach it as @${n.name}.` }),
+    el("p", { class: "muted small", text: renamesItself(n)
+      ? "This renames the agent itself: in Claude Code, on every board, and in messages to it."
+      : `Only this board shows this name. Messages still reach it as @${n.name}. To rename the chat itself, run /rename in it.` }),
   ];
 }
 

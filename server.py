@@ -2367,10 +2367,33 @@ ALIAS_MAX = 60
 
 
 def rename_node(bid, body):
-    """Name a card on this board, or with no name go back to the chat's own
-    title. Only the board uses it: the chat keeps its title and address."""
+    """Rename a card. A running background agent is renamed itself (the app
+    types /rename into it), so Claude Code, its address and every board use
+    the new name. Any other chat gets the name on this board only: the app
+    can't type into a terminal or an editor, and a running chat writes its
+    own name back to its transcript on every turn. No name goes back to the
+    chat's own title."""
     sid = str(body.get("sessionId") or "")
     name = " ".join(str(body.get("name") or "").split())[:ALIAS_MAX]
+    with lock:
+        if sid not in load_board(bid)["nodes"]:
+            raise ValueError("That chat isn't on this board.")
+    live = live_sessions()
+    s = next((x for x in live if x["sessionId"] == sid), None)
+    if name and s and s.get("background") and s.get("running"):
+        if any(x["sessionId"] != sid and x["platform"] == s["platform"]
+               and x["name"].casefold() == name.casefold() for x in live):
+            raise ValueError(f'Another running chat is already called "{name}". Pick another name.')
+        with lock:
+            was = label(s, load_board(bid))
+        took = s["name"] if name == s["name"] else _rename_background(s, name)
+        with lock:
+            board = load_board(bid)
+            board["nodes"].get(sid, {}).pop("alias", None)  # its title is the new name now
+            if took != s["name"]:
+                add_activity(board, f'Renamed {was} to "{took}"')
+            save_board(board)
+        return {"alias": None, "renamed": took}
     with lock:
         board = load_board(bid)
         node = board["nodes"].get(sid)
@@ -2987,9 +3010,8 @@ def _press_keys(job, keys, check=None):
         os.close(master)
 
 
-def _type_prompt(s, text):
-    """Type a prompt into a running background agent's prompt box and send it."""
-    job = s["jobId"]
+def _box_check(job):
+    """A check for _press_keys: the agent's prompt box is showing and empty."""
     suggestion = " ".join(str((job_state(job) or {}).get("suggestedReply") or "").split())
 
     def check(screen):
@@ -3000,15 +3022,42 @@ def _type_prompt(s, text):
         if box:  # shown, so you can tell your own unsent text from a misread
             raise ValueError(f'Its terminal has unsent text in its prompt box: "{box[:100]}'
                              f'{"…" if len(box) > 100 else ""}". Send or clear it there, then try again.')
+    return check
 
+
+def _type_prompt(s, text):
+    """Type a prompt into a running background agent's prompt box and send it."""
+    job = s["jobId"]
     with type_lock:
         since = time.time()
         keys = [(key, 0.05 if key in ("\\", "\r") else 0.02) for key in _typed_keys(text)]
-        _press_keys(job, keys + [("", 0.4), ("\r", 1.0)], check)
+        _press_keys(job, keys + [("", 0.4), ("\r", 1.0)], _box_check(job))
     deadline = since + TYPE_STARTED
     while not _prompted_since(s["sessionId"], since):
         if time.time() > deadline:
             raise ValueError("It was typed into its prompt box but hasn't started on it. Look at its terminal.")
+        time.sleep(0.5)
+
+
+RENAME_WAIT = 10  # seconds a background agent gets to take its new name
+
+
+def _rename_background(s, name):
+    """Type /rename into a running background agent, as you would in its
+    terminal. Claude Code renames the chat itself (it does so even while the
+    agent works), so its title and its address change everywhere. Returns
+    the name it took."""
+    with type_lock:
+        keys = [(key, 0.02) for key in _typed_keys(f"/rename {name}")]
+        _press_keys(s["jobId"], keys + [("", 0.4), ("\r", 1.0)], _box_check(s["jobId"]))
+    deadline = time.time() + RENAME_WAIT
+    while True:
+        now = next((x for x in live_sessions() if x["sessionId"] == s["sessionId"]), None)
+        if now and now["name"] != s["name"]:
+            return now["name"]
+        if time.time() > deadline:
+            raise ValueError("/rename was typed into its prompt box, but its name hasn't changed. "
+                             "Look at its terminal.")
         time.sleep(0.5)
 
 
