@@ -1332,7 +1332,8 @@ function runGroup(r, n, open) {
         ? ["Ask it to resume this workflow", `Please resume the workflow "${r.name}" (run ${r.runId}) from where it stopped.`]
         : null;
     if (ask) body.unshift(el("div", { class: "drawer-actions run-actions" }, el("button", {
-      class: "btn", text: ask[0], onclick: () => sendTo(n, ask[1]) })));
+      class: "btn", text: ask[0],
+      onclick: async () => { if (await sendTo(n, ask[1])) toast(`Asked ${display(n)}.`, "ok"); } })));  // no bubble shows it
   }
   return group(r.runId, r.status === "running", [
     el("span", { class: stateClass(r.status), title: r.status }),
@@ -2374,13 +2375,13 @@ const imageTags = (text) => { let i = 0; return text.replace(/^\[Image: source: 
 const canReach = (n) => n.live && (n.background || !n.messageBlock);
 const promptable = (n) => n.background && n.agentState !== "working" && n.status !== "busy";
 
+// Sends a chat your text. Sent is said by the caller (the Send box's bubble);
+// only a copy started instead, or a failure, gets a notice here.
 async function sendTo(n, text, how, images = []) {
   try {
     const res = await api(`/api/board/${state.boardId}/send`,
       { sessionId: n.sessionId, text, how, images: images.map((i) => ({ data: i.data })) });
-    toast(res.result.how === "prompt"
-      ? (res.result.copy ? `Claude Code started a copy (${res.result.copy}) instead of waking it.` : `Sent the prompt to ${display(n)}.`)
-      : `Sent the message to ${display(n)}.`, res.result.copy ? "error" : "ok");
+    if (res.result.copy) toast(`Claude Code started a copy (${res.result.copy}) instead of waking it.`, "error");
     return true;
   } catch (e) {
     // A dropped connection (e.g. the server restarted) says nothing about delivery.

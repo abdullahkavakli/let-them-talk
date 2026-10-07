@@ -320,6 +320,19 @@ def checks_wide(browser):
         check(name, sent == [{"sessionId": B, "text": "what is wrong here?", "images": [{"data": PNG_1PX}]}]
               and page.locator("#drawer-body .composer .thumb").count() == 0
               and "[Image #1]" in page.inner_text("#drawer-body .msg.pending .bubble"), str(sent)[:200])
+
+    name = "send box: no \"Sent the …\" notice after a send; its bubble shows it"
+    with step(page, name):
+        page.evaluate("document.querySelectorAll('#toasts .toast').forEach((t) => t.remove())")
+        for result in ({"how": "message"}, {"how": "prompt", "copy": None}):
+            page.api.post_result = result
+            open_card(page, B)
+            page.locator("#send-box").fill("hello")
+            page.locator("#drawer-body .composer-send").click()
+            page.wait_for_timeout(300)
+        notes = page.locator("#toasts .toast").all_inner_texts()
+        page.api.post_result = {}
+        check(name, not any("Sent the" in t for t in notes), notes)
         page.evaluate("state.outbox = {}")
 
     name = "send box: × takes an image out, a dropped non-image is refused, images alone can go"
