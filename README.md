@@ -160,7 +160,10 @@ installed inside WSL, where the server runs.
 - **Notices** (bottom right) say how an action went. Most go after a few
   seconds; a command to run in a terminal, the resume command after **End
   this chat**, a new editor chat that didn't get your prompt and anything
-  that failed stay until you close them (×).
+  that failed stay until you close them (×). A failed **Disconnect** or
+  **Remove from board** leaves the details open. If the server stops
+  answering, a banner at the bottom says so and the board fades until it
+  answers again.
 - **Appearance** (the gear next to *Let Them Talk*): the theme (**System**,
   **Light** or **Dark**) and the **Glass** slider, from *Clear* to *Tinted*.
   The sidebar, the top bar, the details and the dialogs are glass over the
