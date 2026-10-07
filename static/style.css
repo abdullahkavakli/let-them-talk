@@ -421,6 +421,25 @@ details.run > summary .dot { margin-top: 5px; }
 /* New board: folder browser */
 .folder-row { display: flex; gap: 8px; }
 .folder-row input { flex: 1; }
+/* a folder box with its own drop-down (▾); the list opens in place, below the row */
+.combo { position: relative; flex: 1; min-width: 0; display: flex; }
+.combo input { padding-right: 36px; }
+.combo-toggle {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  width: 30px; height: 30px; border: 0; border-radius: 8px; background: none;
+  color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer;
+}
+.combo-toggle:hover, .combo-toggle[aria-expanded="true"] { background: var(--field-hover); color: var(--text); }
+.combo-list {
+  list-style: none; margin: 6px 0 0; padding: 4px; max-height: 196px; overflow-y: auto;
+  border-radius: 12px; background: var(--field); border: 1px solid var(--border);
+}
+.combo-item {
+  padding: 6px 10px; border-radius: 8px; cursor: pointer; font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.combo-item:hover, .combo-item.active { background: var(--accent-soft); }
+.combo-empty { padding: 6px 10px; }
 #b-places, #n-places { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
 #b-places .btn, #n-places .btn { font-size: 12px; padding: 3px 10px; }
 /* the folders you're working in, one click each; the picked one is tinted */

@@ -156,11 +156,16 @@
     <div id="n-bg-box" hidden>
       <label for="n-folder">Folder it works in</label>
       <div class="folder-row">
-        <input id="n-folder" class="mono" list="n-folders" autocomplete="off"
-          placeholder="Type or paste a folder, or click Browse">
+        <div class="combo">
+          <input id="n-folder" class="mono" autocomplete="off" role="combobox" aria-autocomplete="list"
+            aria-expanded="false" aria-controls="n-folder-list"
+            placeholder="Type or paste a folder, or click Browse">
+          <button type="button" id="n-folder-toggle" class="combo-toggle" tabindex="-1"
+            aria-label="Show folders" aria-expanded="false" aria-controls="n-folder-list">▾</button>
+        </div>
         <button type="button" id="n-browse" class="btn">Browse…</button>
       </div>
-      <datalist id="n-folders"></datalist>
+      <ul id="n-folder-list" class="combo-list" role="listbox" aria-label="Folders" hidden></ul>
       <div id="n-suggest"></div>
       <div id="n-places"></div>
       <div id="n-browser" hidden></div>
@@ -204,11 +209,16 @@
     <p id="b-note" class="muted small">A board belongs to a folder. Sessions running in that folder (or below it) join the board automatically; you can add sessions from other folders by hand.</p>
     <label for="b-folder">Folder</label>
     <div class="folder-row">
-      <input id="b-folder" list="b-folders" class="mono" autocomplete="off"
-        placeholder="Type or paste a folder, e.g. C:\Users\you\project">
+      <div class="combo">
+        <input id="b-folder" class="mono" autocomplete="off" role="combobox" aria-autocomplete="list"
+          aria-expanded="false" aria-controls="b-folder-list"
+          placeholder="Type or paste a folder, e.g. C:\Users\you\project">
+        <button type="button" id="b-folder-toggle" class="combo-toggle" tabindex="-1"
+          aria-label="Show folders" aria-expanded="false" aria-controls="b-folder-list">▾</button>
+      </div>
       <button type="button" id="b-browse" class="btn">Browse…</button>
     </div>
-    <datalist id="b-folders"></datalist>
+    <ul id="b-folder-list" class="combo-list" role="listbox" aria-label="Folders" hidden></ul>
     <p class="muted small">Windows paths (C:\…), WSL paths (/mnt/c/…, /home/…) and ~/… all work.</p>
     <div id="b-places"></div>
     <div id="b-browser" hidden></div>

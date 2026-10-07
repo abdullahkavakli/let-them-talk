@@ -22,8 +22,9 @@ installed inside WSL, where the server runs.
   *Add agents*, where **Add** puts one on the board and **+ New agent** next
   to a folder starts a terminal/background agent there. **New board** takes
   any existing folder (`C:\...`, `/mnt/c/...`, `~/...`), typed or picked with
-  **Browse…**, and suggests folders with running sessions that have no board
-  yet. A folder has one board, so **New board** on a folder that has one
+  **Browse…**, or picked from its ▾ list of folders with running sessions,
+  and suggests those that have no board yet (other chats' worktrees left
+  out). A folder has one board, so **New board** on a folder that has one
   opens it. Switch boards with **Board** in the top bar. **Change folder**
   (under *Board folder*) points the board at another folder: sessions there
   join it, and the cards and arrows already on it stay. **Delete this
@@ -58,12 +59,14 @@ installed inside WSL, where the server runs.
   editor window you used last (Cursor, VS Code …, in that window's folder)
   or start a **Terminal/background agent** in a folder Claude Code already
   trusts, with its permissions and model (its terminal opens unless you
-  untick that). Under the folder box, **Working in** has a button for each
-  folder you're working in (the board's, the sidebar's and those of the
-  board's running chats); typing a path, **Browse…** and the place buttons
-  still reach any folder. The editor chat gets your prompt as a message from Let Them
-  Talk; a notice says whether it arrived (with **Copy prompt** if not). A new
-  agent goes on the board you started it from.
+  untick that). The folder box's ▾ lists the folders you're working in (the
+  board's, the sidebar's and those of the board's running chats; typing
+  narrows the list), and **Working in** under it has a button for each.
+  Other chats' worktrees (`.claude/worktrees/…`) are left out of both;
+  typing a path, **Browse…** and the place buttons still reach any folder.
+  The editor chat gets your prompt as a message from Let Them Talk; a
+  notice says whether it arrived (with **Copy prompt** if not). A new agent
+  goes on the board you started it from.
 - **New workflow** (top bar): say what it should do, and optionally how many
   agents and which model. It starts a background agent of its own, not tied
   to any chat, in the folder you pick, whose first prompt is *Use a workflow

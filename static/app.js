@@ -1384,11 +1384,108 @@ $("#connect-form").addEventListener("submit", async (evt) => {
 
 // ------------------------------------------------------------ board dialog
 
-// The two dialogs that ask for a folder share one browser.
+// The two dialogs that ask for a folder share one browser and one drop-down.
 const pickers = {
-  board: { input: $("#b-folder"), box: $("#b-browser"), error: $("#b-error") },
-  agent: { input: $("#n-folder"), box: $("#n-browser"), error: $("#n-error") },
+  board: { input: $("#b-folder"), toggle: $("#b-folder-toggle"), list: $("#b-folder-list"),
+    box: $("#b-browser"), error: $("#b-error") },
+  agent: { input: $("#n-folder"), toggle: $("#n-folder-toggle"), list: $("#n-folder-list"),
+    box: $("#n-browser"), error: $("#n-error") },
 };
+
+// A folder box's drop-down (a native datalist filters by the text in the
+// box, so a full path lists only itself): ▾, ↓ or an empty box lists every
+// folder in ui.choices, typing narrows the list, and it opens in place,
+// pushing what is below it down. A pick, Esc or a click elsewhere closes it.
+function folderCombo(ui) {
+  const { input, toggle, list } = ui;
+  ui.choices = [];
+  let shown = [], active = -1;
+  const expanded = (on) => {
+    for (const e of [input, toggle]) e.setAttribute("aria-expanded", String(on));
+  };
+  const mark = () => {
+    list.querySelectorAll(".combo-item").forEach((li, i) => {
+      li.classList.toggle("active", i === active);
+      li.setAttribute("aria-selected", String(i === active));
+    });
+    const li = active >= 0 && list.children[active];
+    if (li) {
+      input.setAttribute("aria-activedescendant", li.id);
+      li.scrollIntoView({ block: "nearest" });
+    } else {
+      input.removeAttribute("aria-activedescendant");
+    }
+  };
+  const close = () => {
+    list.hidden = true;
+    active = -1;
+    expanded(false);
+    input.removeAttribute("aria-activedescendant");
+  };
+  const pick = (folder) => {
+    input.value = folder;
+    close();
+    ui.box.hidden = true;
+    ui.error.hidden = true;
+    input.dispatchEvent(new Event("input"));  // e.g. marks the matching folder button
+    input.focus();
+  };
+  const open = (filter = "") => {
+    const q = filter.trim().toLowerCase();
+    shown = ui.choices.filter((f) => !q || f.toLowerCase().includes(q));
+    active = -1;
+    list.replaceChildren(...(shown.length
+      ? shown.map((f, i) => el("li", {
+        id: `${list.id}-${i}`, role: "option", class: "combo-item mono", text: f, title: f,
+        "aria-selected": "false",
+        onpointerdown: (e) => e.preventDefault(),  // keeps the focus in the box
+        onclick: () => pick(f),
+      }))
+      : [el("li", { class: "combo-empty muted small", text: ui.choices.length
+        ? "No folder here matches; type the whole path or use Browse…."
+        : "No folders with running chats; type one or use Browse…." })]));
+    list.hidden = false;
+    expanded(true);
+    mark();
+  };
+  ui.close = close;
+  toggle.addEventListener("click", () => {
+    if (list.hidden) open();
+    else close();
+    input.focus();
+  });
+  // typing narrows the list (a value set by the app doesn't open it)
+  input.addEventListener("input", (e) => { if (e.isTrusted) open(input.value); });
+  input.addEventListener("focus", () => { if (!input.value.trim() && list.hidden) open(); });
+  input.addEventListener("keydown", (e) => {
+    if (e.isComposing) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (list.hidden) open();
+      if (!shown.length) return;
+      active = (active + (e.key === "ArrowDown" ? 1 : shown.length - 1)) % shown.length;
+      mark();
+    } else if (e.key === "Enter" && !list.hidden && active >= 0) {
+      e.preventDefault();
+      pick(shown[active]);
+    } else if (e.key === "Escape" && !list.hidden) {
+      e.preventDefault();  // closes the list, not the dialog
+      e.stopPropagation();
+      close();
+    } else if (e.key === "Tab") {
+      close();
+    }
+  });
+  document.addEventListener("pointerdown", (e) => {
+    if (!list.hidden && !input.parentElement.contains(e.target) && !list.contains(e.target)) close();
+  });
+}
+for (const ui of Object.values(pickers)) folderCombo(ui);
+
+// Folders suggested for a board or an agent leave out other chats' worktrees
+// (.claude/worktrees/<name>): those come and go with each chat's work. Typing
+// a path or Browse… still reaches them.
+const ownFolders = (folders) => folders.filter((f) => !/\/\.claude\/worktrees\/[^/]/.test(f.replace(/\\/g, "/")));
 
 const placeButtons = (places, ui) => places.map((pl) => el("button", {
   type: "button", class: "btn place", text: pl.label, title: pl.path, onclick: () => browse(pl.path, ui),
@@ -1407,9 +1504,11 @@ function openBoardDialog(folders, boards, places = [], board = null) {
     : "A board belongs to a folder. Sessions running in that folder (or below it) join the board " +
       "automatically; you can add sessions from other folders by hand.";
   $("#b-submit").textContent = board ? "Change" : "Create";
+  folders = ownFolders(folders);
   const have = new Set(boards.map((b) => b.folder));
   const free = folders.filter((f) => !have.has(f));
-  $("#b-folders").replaceChildren(...folders.map((f) => el("option", { value: f })));
+  pickers.board.choices = folders;
+  pickers.board.close();
   $("#b-places").replaceChildren(...placeButtons(places, pickers.board));
   $("#b-suggest").replaceChildren(
     ...(free.length ? [el("span", { class: "small muted", text: "Folders with running sessions:" })] : []),
@@ -1428,6 +1527,7 @@ function openBoardDialog(folders, boards, places = [], board = null) {
 // the folder you are in, so Create (or Start agent) uses it.
 async function browse(path, ui = pickers.board) {
   const { input, box, error } = ui;
+  ui.close();
   try {
     const d = await api("/api/dirs", { path });
     input.value = d.path;
@@ -1764,8 +1864,8 @@ function workingFolders() {
   const v = state.view;
   if (!v) return [];
   const cwds = (list) => list.map((s) => s.cwd).filter(Boolean).sort();
-  return [...new Set([v.board.folder, ...cwds(v.available), ...cwds(v.nodes.filter((n) => n.live)),
-    ...(v.folders || [])].filter(Boolean))];
+  return ownFolders([...new Set([v.board.folder, ...cwds(v.available), ...cwds(v.nodes.filter((n) => n.live)),
+    ...(v.folders || [])].filter(Boolean))]);
 }
 
 // Each path as its last folder names: as few as tell it apart from the others.
@@ -1799,7 +1899,8 @@ function openNewAgent(folder, workflow = false) {
   nd.editor.replaceChildren(...Object.keys(EDITOR_SCHEMES).map((e) =>
     el("option", { value: e, text: e, selected: e === pick })));
   const folders = workingFolders(), labels = shortPaths(folders);
-  $("#n-folders").replaceChildren(...folders.map((f) => el("option", { value: f })));
+  pickers.agent.choices = folders;
+  pickers.agent.close();
   $("#n-suggest").replaceChildren(
     ...(folders.length ? [el("span", { class: "small muted", text: "Working in:" })] : []),
     ...folders.map((f, i) => el("button", {
