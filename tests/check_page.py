@@ -366,6 +366,17 @@ def checks_wide(browser):
         poll(page)
         check(name, banner and not is_open(page, "#offline"))
 
+    name = "offline: a bug while drawing the board isn't shown as the server being down"
+    with step(page, name):
+        page.evaluate("""() => { window.__render = render;
+            render = () => { throw new TypeError("Cannot read properties of undefined (reading 'x')"); }; }""")
+        try:
+            poll(page, 3)
+            notices = page.locator("#toasts .toast.error").count()
+        finally:
+            page.evaluate("() => { render = window.__render; state.drawError = null; }")
+        check(name, not is_open(page, "#offline") and notices == 1)
+
     name = "boards: a late reply for the old board doesn't come back after a switch"
     with step(page, name):
         page.api.hold = {"b1"}

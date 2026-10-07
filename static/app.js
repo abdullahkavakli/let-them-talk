@@ -91,14 +91,16 @@ async function api(path, body) {
     headers: { "Content-Type": "application/json", "X-Let-Them-Talk": "1" },
     body: JSON.stringify(body),
   };
-  const res = await fetch(path, opts);
+  // No reply at all (the server stopped or is restarting) is marked here, so
+  // only that reads as "can't reach", not a bug in the code using a reply.
+  const res = await fetch(path, opts).catch((e) => { throw Object.assign(e, { unreachable: true }); });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
 }
 
 // What a failed request says: the server's reason, or that no reply came.
-const failText = (e) => e instanceof TypeError
+const failText = (e) => e?.unreachable
   ? "Couldn't reach Let Them Talk; it may have stopped or be restarting." : e.message;
 
 // Saved UI state lives under "ltt."; values saved by earlier versions under
@@ -234,26 +236,43 @@ function selectBoard(id) {
 async function poll() {
   clearTimeout(state.pollTimer);
   if (state.boardId) {
+    // A reply that comes after you switched boards is for the old one: dropped
+    // (the switch started its own poll).
+    const id = state.boardId;
+    let view;
     try {
-      // A reply that comes after you switched boards is for the old one: dropped
-      // (the switch started its own poll).
-      const id = state.boardId;
-      const view = await api(`/api/state?board=${encodeURIComponent(id)}${state.showSubs ? "&subagents=1" : ""}`);
-      if (state.boardId !== id) return;
-      state.view = view;
-      render();
-      if (state.selected?.type === "node") loadDetails(state.selected.id);
-      else if (state.selected?.type === "sub") loadSub(state.selected);
-      else if (state.selected?.type === "wire") loadTalk(state.selected.id);
-      if (state.popWire && state.popWire !== state.selected?.id) loadTalk(state.popWire);
-      if (state.popAgents?.sub) loadPopSub();
-      reachable(true);
+      view = await api(`/api/state?board=${encodeURIComponent(id)}${state.showSubs ? "&subagents=1" : ""}`);
     } catch (e) {
       console.warn("poll failed", e);
-      if (e instanceof TypeError) reachable(false);
+      if (e.unreachable) reachable(false);
+    }
+    if (state.boardId !== id) return;
+    if (view) {
+      state.view = view;
+      reachable(true);
+      try {
+        render();
+        if (state.selected?.type === "node") loadDetails(state.selected.id);
+        else if (state.selected?.type === "sub") loadSub(state.selected);
+        else if (state.selected?.type === "wire") loadTalk(state.selected.id);
+        if (state.popWire && state.popWire !== state.selected?.id) loadTalk(state.popWire);
+        if (state.popAgents?.sub) loadPopSub();
+        state.drawError = null;
+      } catch (e) {
+        drawFailed(e);
+      }
     }
   }
   state.pollTimer = setTimeout(poll, POLL_MS);
+}
+
+// A bug while drawing the board: the server did answer, so it's said as what
+// it is, once (not on every poll), and never as "can't reach".
+function drawFailed(e) {
+  console.error("drawing the board failed", e);
+  if (state.drawError === e.message) return;
+  state.drawError = e.message;
+  toast(`Part of the board couldn't be drawn (${e.message}). Reloading the page may help.`, "error");
 }
 
 // Whether the server answers. fetch() throws a TypeError when no reply comes
@@ -1850,7 +1869,7 @@ for (const btn of document.querySelectorAll("[data-close]")) {
 // The server may not be up yet: say so and keep trying until it answers.
 function boot() {
   start().then(() => reachable(true), (e) => {
-    reachable(false, e instanceof TypeError ? "Can't reach Let Them Talk. Trying again…"
+    reachable(false, e.unreachable ? "Can't reach Let Them Talk. Trying again…"
       : `Let Them Talk couldn't load the board: ${e.message} Trying again…`);
     setTimeout(boot, POLL_MS * 2);
   });
@@ -2285,7 +2304,7 @@ async function sendTo(n, text, how) {
     return true;
   } catch (e) {
     // A dropped connection (e.g. the server restarted) says nothing about delivery.
-    toast(e instanceof TypeError
+    toast(e.unreachable
       ? "Lost the connection to Let Them Talk while sending (the server may have restarted). " +
         "Check the chat before sending again."
       : e.message, "error", 0);

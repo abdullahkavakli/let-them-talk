@@ -208,7 +208,8 @@ installed inside WSL, where the server runs.
   that failed stay until you close them (×). A failed **Disconnect** or
   **Remove from board** leaves the details open. If the server stops
   answering, a banner at the bottom says so and the board fades until it
-  answers again.
+  answers again; a fault in the page itself shows as a notice instead (once),
+  so the banner only ever means the server.
 - **Settings** (the gear next to *Let Them Talk*): the **IDE** that **Open in
   IDE**, **Chat in IDE** and a chat's **Open in** / **Continue in** use (Cursor,
   VS Code …; until you pick one, the one most of the board's chats run in;
