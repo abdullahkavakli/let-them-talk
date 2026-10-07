@@ -654,6 +654,82 @@ def mod_hello(body):
     return {"ok": True}
 
 
+MODELS_FILE = APP_DIR / "logs" / "models.json"
+MODELS_KEEP = 7 * 86400  # a chat resumed within a week still runs on it
+chat_models = {}  # sessionId -> {"model", "at"}: a Chat in IDE started with a model (see the mod)
+MODEL_RE = re.compile(r"[\w.\[\]-]{1,60}")
+
+
+def load_models():
+    try:
+        chat_models.update(json.loads(MODELS_FILE.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        pass
+
+
+def set_chat_model(sid, model):
+    """The model a chat should run on; its mod asks for it (GET /api/mod/model)."""
+    with suggest_lock:
+        cutoff = time.time() - MODELS_KEEP
+        for old in [k for k, v in chat_models.items() if v["at"] < cutoff]:
+            del chat_models[old]
+        chat_models[sid] = {"model": model, "at": time.time()}
+        try:
+            MODELS_FILE.parent.mkdir(exist_ok=True)
+            tmp = MODELS_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(chat_models), encoding="utf-8")
+            tmp.replace(MODELS_FILE)
+        except OSError:
+            pass  # memory still has it
+
+
+model_ids = {}  # a model name (sonnet) -> (the full id Claude Code resolves it to, when looked up)
+MODEL_ID_KEEP = 86400
+MODEL_ID_WAIT = 20  # seconds
+
+
+def resolve_model(model):
+    """The full id Claude Code resolves a model name to (sonnet: claude-sonnet-5-5),
+    as a request names it: the mod can't name `sonnet` there. Read off the first
+    line of a headless run, which is stopped before it asks the model anything;
+    kept a day. None when it can't be found."""
+    if model.startswith("claude-"):
+        return model
+    hit = model_ids.get(model)
+    if hit and time.time() - hit[1] < MODEL_ID_KEEP:
+        return hit[0]
+    try:
+        proc = subprocess.Popen([CLAUDE_BIN, "-p", "--model", model, "--output-format", "stream-json", "--verbose",
+                                 "--no-session-persistence", "--tools", ""],
+                                cwd=str(APP_DIR), env=claude_env(), stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    except OSError:
+        return None
+    timer = threading.Timer(MODEL_ID_WAIT, proc.kill)
+    timer.start()
+    found = None
+    try:
+        proc.stdin.write("x")  # its prompt; the run is stopped before it is sent
+        proc.stdin.close()
+        for line in proc.stdout:
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if rec.get("type") == "system" and rec.get("subtype") == "init":
+                found = rec.get("model") or None
+                break
+    except OSError:
+        pass
+    finally:
+        timer.cancel()
+        proc.kill()
+        proc.wait()
+    if found:
+        model_ids[model] = (found, time.time())
+    return found
+
+
 def suggestion_wanted(sid):
     """GET /api/suggestion/wanted: whether the mod should make a suggestion
     itself, which costs a model call: only while the page has the chat open,
@@ -1734,6 +1810,9 @@ def sync_board(board, live):
         if wanted:  # a chat this board started: it's on the board now
             board["adopt"] = [a for a in adopt if a not in (sid, s.get("jobId"))]
             changed = True
+        if node is not None and sid in board.get("names", {}):  # see _watch_launch
+            node["alias"] = board["names"].pop(sid)
+            changed = True
         if node is not None:
             fresh = {"name": s["name"], "cwd": s["cwd"], "platform": s["platform"],
                      "winCwd": s["winCwd"]}
@@ -2460,6 +2539,10 @@ def start_editor_chat(bid, body):
     way this watches for the new chat to appear and hands it the prompt."""
     prompt = str(body.get("prompt") or "").strip()
     editor = str(body.get("editor") or "")
+    name = " ".join(str(body.get("name") or "").split())[:ALIAS_MAX]
+    model = str(body.get("model") or "").strip()
+    if model and not MODEL_RE.fullmatch(model):
+        raise ValueError("That model name has characters Claude Code won't accept.")
     raw = str(body.get("folder") or "").strip()
     folder = normalize_folder(raw) if raw else None
     if folder and editor not in EDITOR_CLIS:
@@ -2471,6 +2554,7 @@ def start_editor_chat(bid, body):
     lid = uuid.uuid4().hex[:10]
     launches[lid] = {
         "id": lid, "board": bid, "at": time.time(), "prompt": prompt, "editor": editor, "folder": folder,
+        "name": name, "model": model,
         "state": "waiting", "detail": f"Opening {folder} in {editor}…" if folder else "Waiting for the new chat to open…",
         "session": None, "known": {s["sessionId"] for s in live_sessions()},
     }
@@ -2491,6 +2575,10 @@ def _open_folder_chat(job):
 
 def _watch_launch(lid):
     job = launches[lid]
+    # the model's full id, looked up while the editor opens (the mod names it)
+    lookup = threading.Thread(target=lambda: job.update(modelId=resolve_model(job["model"])), daemon=True)
+    if job["model"]:
+        lookup.start()
     if job["folder"]:
         problem = _open_folder_chat(job)
         if problem:
@@ -2510,10 +2598,18 @@ def _watch_launch(lid):
         aside = (f" It opened in {s.get('cwd')}, not {job['folder']}: the link went to another "
                  f"{job['editor']} window." if job["folder"] and not here else "")
         job["session"] = {"sessionId": s["sessionId"], "name": s["name"]}
+        if job["model"]:
+            lookup.join(MODEL_ID_WAIT)
+        if job.get("modelId"):  # its mod asks for it as the first turn starts, before the prompt below
+            set_chat_model(s["sessionId"], job["modelId"])
+        elif job["model"]:
+            aside += f" Its model couldn't be set ({job['model']} wasn't found), so it runs on its own."
         with lock:
             board = load_board(job["board"])
             if board is not None:
                 board.setdefault("adopt", []).append(s["sessionId"])
+                if job["name"]:  # its card's name, once sync_board has made the card
+                    board.setdefault("names", {})[s["sessionId"]] = job["name"]
                 save_board(board)
         if not job["prompt"]:
             job.update(state="done", detail="The new chat is open." + aside)
@@ -3250,6 +3346,9 @@ class Handler(BaseHTTPRequestHandler):
                                                               query.get("limit", [TALK_LIMIT])[0]))
             except ValueError as e:
                 return self._send(HTTPStatus.BAD_REQUEST, {"error": str(e)})
+        if url.path == "/api/mod/model":
+            sid = parse_qs(url.query).get("session", [""])[0]
+            return self._send(HTTPStatus.OK, {"model": (chat_models.get(sid) or {}).get("model")})
         if url.path == "/api/suggestion/wanted":
             return self._send(HTTPStatus.OK, suggestion_wanted(parse_qs(url.query).get("session", [""])[0]))
         if url.path == "/api/state":
@@ -3343,6 +3442,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     BOARDS_DIR.mkdir(exist_ok=True)
     load_suggestions()
+    load_models()
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"{APP_NAME} running at http://localhost:{PORT}  (Ctrl+C to stop)")
     try:

@@ -71,8 +71,13 @@ installed inside WSL, where the server runs.
   chats' worktrees (`.claude/worktrees/…`); typing a path, **Browse…** and
   the place buttons still reach any folder.
   The editor chat gets your prompt as a message from Let Them Talk; a
-  notice says whether it arrived (with **Copy prompt** if not). A new agent
-  goes on the board you started it from.
+  notice says whether it arrived (with **Copy prompt** if not). A Chat in
+  IDE also takes a **Name**, its card's name on the board (its tab in the
+  editor keeps its own title), and a **Model**, which the mod (see
+  [below](#claude-codes-own-suggestion)) runs its replies on; the editor's
+  model menu still shows its own, and a model you pick there wins. It
+  starts with its usual permissions: an editor link can't carry them. A new
+  agent goes on the board you started it from.
 - **New workflow** (top bar): say what it should do, and optionally how many
   agents and which model. It starts a background agent of its own, not tied
   to any chat, in the folder you pick, whose first prompt is *Use a workflow
@@ -317,6 +322,13 @@ nothing:
 - **Chats in Cursor or VS Code** show none, like their own composer: the
   extension doesn't ask Claude Code for suggestions.
 - **Chats started before the mod was loaded** show none until restarted.
+
+The same mod runs a **Chat in IDE** started from the app on the model picked
+in **New agent** (an editor link can't name one): the app tells it which as
+the chat's first turns start, and it names that model on the chat's own
+requests, not its subagents'. A model you then pick in the chat wins. It only
+works where the mod is loaded: a Cursor or VS Code connected to WSL reads the
+same `~/.claude/settings.json`; one on Windows has its own.
 
 To load the mod in every chat started from then on, add its absolute path to
 the `env` block of `~/.claude/settings.json` (it talks to port 8765; edit

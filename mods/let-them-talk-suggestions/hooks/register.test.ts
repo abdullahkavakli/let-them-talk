@@ -1,5 +1,5 @@
 import { test, expect } from 'claude-code/testing'
-import { cleanSuggestion, report } from './register'
+import { cleanSuggestion, modelFor, report } from './register'
 
 // Sending needs the chat's id ($.session.id) and making one needs its
 // conversation ($.model.fork), which only a real session has; those paths
@@ -36,4 +36,14 @@ test('reports a suggestion only when the box shows it', () => {
   expect(report('yes', true, 'fork')).toEqual({ text: 'yes', made: 'fork' })
   expect(report(undefined, true, 'fork')).toEqual({ text: '', made: 'none' })
   expect(report('   ', true, 'claude')).toEqual({ text: '', made: 'none' })
+})
+
+test('runs on the app\'s model until the chat picks another', () => {
+  expect(modelFor(undefined, undefined, 'claude-opus-5-5')).toEqual({ model: 'claude-opus-5-5', startedOn: undefined, dropped: false })
+  const first = modelFor('claude-sonnet-5-5', undefined, 'claude-opus-5-5')
+  expect(first).toEqual({ model: 'claude-sonnet-5-5', startedOn: 'claude-opus-5-5', dropped: false })
+  expect(modelFor('claude-sonnet-5-5', first.startedOn, 'claude-opus-5-5').model).toBe('claude-sonnet-5-5')
+  expect(modelFor('claude-sonnet-5-5', first.startedOn, 'claude-haiku-4-5')).toEqual({ model: 'claude-haiku-4-5', startedOn: 'claude-opus-5-5', dropped: true })
+  // the same model in the chat's own spelling stays as it is
+  expect(modelFor('claude-opus-5-5', undefined, 'claude-opus-5-5[1m]').model).toBe('claude-opus-5-5[1m]')
 })

@@ -11,6 +11,11 @@ import type { Register } from 'claude-code'
 // - A background agent that ends its turn waiting on you is left alone:
 //   Claude Code makes that one itself and saves it, and the app reads it there.
 // Only text the box really shows is reported; otherwise "none".
+//
+// It also runs a chat on the model picked in the app's New agent, for a Chat in
+// IDE: the editor link that opens one can't name a model, so the app says
+// which when the chat's first turns start, and this names it on the chat's
+// own requests (not its subagents'). A model you then pick in the chat wins.
 
 const APP = 'http://localhost:8765' // Let Them Talk's default port (LTT_PORT)
 const HEADERS = { 'Content-Type': 'application/json', 'X-Let-Them-Talk': '1' }
@@ -18,6 +23,7 @@ const TICK_MS = 2000
 const OWN_WAIT_MS = 12000 // Claude Code makes its own within a few seconds of the turn's end
 const WINDOW_MS = 300_000 // after that the conversation may no longer be cached (server: MOD_WINDOW)
 const HELLO_EVERY_MS = 300_000 // so the app keeps counting this chat as having the mod
+const MODEL_ASKS = 3 // turns at a chat's start the app is asked for a model (it knows by the first)
 
 const PROMPT = `[Suggestion only. Do not answer this message or continue the task.]
 Predict what the user will most likely type next in this chat. Predict what they
@@ -42,6 +48,15 @@ export function cleanSuggestion(text: string): string | undefined {
   return line && !SILENT.test(line) && line.split(/\s+/).length <= 12 ? line : undefined
 }
 
+/** The model a request of this chat names: the app's pick (a full id), until
+ * the chat's own model changes under it (you picked another in the chat), then
+ * the chat's. The chat's own spelling of the same model ([1m]) is kept. */
+export function modelFor(wanted: string | undefined, startedOn: string | undefined, now: string) {
+  if (!wanted) return { model: now, startedOn, dropped: false }
+  if (startedOn !== undefined && now !== startedOn) return { model: now, startedOn, dropped: true }
+  return { model: now.startsWith(wanted) ? now : wanted, startedOn: startedOn ?? now, dropped: false }
+}
+
 export const register: Register = on => {
   let turn = 0 // main-loop turns ended so far
   let starts = 0 // main-loop turns started so far
@@ -51,6 +66,9 @@ export const register: Register = on => {
   let helloFor: string | undefined
   let sinceHello = 0
   let unsent: string | undefined // a report the app didn't take (it was down), sent again next tick
+  let wanted: string | undefined // the model the app picked for this chat
+  let startedOn: string | undefined // the chat's own model when that took over
+  let asked = 0
 
   // Work after a turn outlives the turn's own hooks, so a timer started here does it.
   on('session.start', async ($, e, next) => {
@@ -125,7 +143,24 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     starts++
     pending = undefined // the user moved on: a suggestion for the last turn is moot
+    if (!wanted && asked < MODEL_ASKS) {
+      asked++
+      try {
+        const reply = await $.http.fetch(`${APP}/api/mod/model?session=${await $.session.id()}`)
+        if (reply.ok) wanted = JSON.parse(reply.text).model || undefined
+      } catch {
+        // Let Them Talk isn't running: the chat's own model
+      }
+    }
     return next(e)
+  })
+
+  on('turn.step', async function* ($, e, next) {
+    if (e.agentId || !wanted) return yield* next(e)
+    const pick = modelFor(wanted, startedOn, e.model)
+    startedOn = pick.startedOn
+    if (pick.dropped) wanted = undefined
+    return yield* next(pick.model === e.model ? e : { ...e, model: pick.model })
   })
 
   on('turn.complete', async ($, e, next) => {

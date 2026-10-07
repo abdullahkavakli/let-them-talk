@@ -179,7 +179,7 @@
       <div class="n-grid">
         <label for="n-name">Name</label>
         <input id="n-name" placeholder="optional; taken from the prompt">
-        <label for="n-mode">Permissions</label>
+        <label for="n-mode" id="n-mode-label">Permissions</label>
         <select id="n-mode">
           <option value="auto" selected>auto: decides safe actions itself</option>
           <option value="acceptEdits">acceptEdits: edits files, asks for the rest</option>
@@ -197,8 +197,8 @@
           <option value="sonnet">Sonnet</option>
           <option value="haiku">Haiku</option>
         </select>
-        <span></span>
-        <label class="check"><input type="checkbox" id="n-terminal" checked> Open a terminal window to watch it</label>
+        <span id="n-terminal-gap"></span>
+        <label class="check" id="n-terminal-row"><input type="checkbox" id="n-terminal" checked> Open a terminal window to watch it</label>
       </div>
     </div>
     <p id="n-note" class="muted small"></p>

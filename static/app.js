@@ -2077,7 +2077,11 @@ function refreshAgentDialog() {
   nd.name.placeholder = wf ? "optional; \"workflow\" and the task's first words" : "optional; taken from the prompt";
   $("#n-agents-label").hidden = nd.agents.hidden = !wf;
   $("#n-editor-box").hidden = bg;
-  $("#n-bg-box").hidden = !bg;
+  // A Chat in IDE takes a name (its card's, on this board) and a model (the
+  // mod runs it on that), not permissions: an editor link can't carry them.
+  $("#n-bg-box").hidden = false;
+  for (const id of ["#n-mode-label", "#n-mode", "#n-terminal-gap", "#n-terminal-row"]) $(id).hidden = !bg;
+  if (!bg) nd.name.placeholder = "optional; its card's name on this board";
   nd.submit.textContent = wf ? "Start workflow" : bg ? "Start agent" : `Open in ${nd.editor.value}`;
   nd.note.textContent = [
     wf && "A new background agent starts in this folder and runs your task as a Claude Code workflow; " +
@@ -2086,6 +2090,8 @@ function refreshAgentDialog() {
       ? "With Haiku, auto mode may not be available; the agent then asks before it acts."
       : bg && "Claude Code must already trust the folder (run claude there once and accept).",
     !bg && `${nd.editor.value} must trust the folder: in Restricted Mode, Claude Code is off there and no chat opens.`,
+    !bg && nd.model.value && `Let Them Talk's mod runs it on ${nd.model.selectedOptions[0].text} ` +
+      `(${nd.editor.value}'s model menu still shows its own); it starts with its usual permissions.`,
   ].filter(Boolean).join(" ");
 }
 
@@ -2154,7 +2160,9 @@ $("#chat-form").addEventListener("submit", async (evt) => {
       // With a folder, the server opens it in the editor and then the new chat
       // there; without one, this link opens the chat in the window you used last.
       // The server sends the prompt either way.
-      const res = await api(`/api/board/${state.boardId}/launch-editor`, { prompt, editor, folder: nd.folder.value.trim() });
+      const res = await api(`/api/board/${state.boardId}/launch-editor`, {
+        prompt, editor, folder: nd.folder.value.trim(), name: nd.name.value.trim(), model: nd.model.value.trim(),
+      });
       if (!res.result?.opensChat) window.location.href = editorLink(editor, {});
     }
     nd.dialog.close();
