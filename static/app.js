@@ -21,7 +21,7 @@ const state = {
   talk: {},              // arrow id -> /api/talk response (what its two chats sent each other)
   talkBusy: {},          // arrow id -> a /api/talk request is in flight
   popWire: null,         // arrow id shown in the pop-up (opened from a chat's Connections)
-  popAgents: null,       // {sid, sub}: the open chat's agents in their pop-up (sub: one agent's details)
+  popAgents: null,       // {sid, sub, pane}: the open chat's agents in their pop-up (sub: the agent picked; pane: "list" or "detail", what a narrow pop-up shows)
   talkLimit: {},         // arrow id -> how many messages to load ("Show earlier" raises it)
   notifyOff: {},         // arrow id -> "Tell both agents" unticked (kept across redraws)
   removeNotifyOff: {},   // sessionId -> "Tell connected agents" unticked (kept across redraws)
@@ -53,16 +53,32 @@ function el(tag, attrs = {}, ...children) {
 // Add agents list, Activity), but only when they differ from what it shows: a
 // rebuild drops keyboard focus and any text selected in it. While text in it
 // is selected with the mouse, it waits for a later poll. When it does change,
-// focus goes back to the same control: by id, else by kind and label.
+// focus goes back to the same control: by id, else by kind and label. When
+// only clocks that tick (a duration, "12s ago": marked .tick) differ, their
+// text is changed in place and nothing is rebuilt, so what is hovered,
+// focused or turning there stays as it is.
 function swapChildren(box, children) {
   const next = el("div", {}, children);
-  if (next.innerHTML === box.innerHTML) return;
+  if (next.innerHTML === box.innerHTML || retime(box, next)) return;
   const active = document.activeElement, picked = document.getSelection();
   const inBox = active && active !== box && box.contains(active);
   if (picked && !picked.isCollapsed && box.contains(picked.anchorNode) && !inBox) return;
   const keep = inBox ? focusKey(box, active) : null;
   box.replaceChildren(...next.childNodes);
   if (keep) refocus(box, keep);
+}
+
+function retime(box, next) {
+  const shown = [...box.querySelectorAll(".tick")], fresh = [...next.querySelectorAll(".tick")];
+  if (!shown.length || shown.length !== fresh.length) return false;
+  const bare = (root) => {
+    const copy = root.cloneNode(true);
+    for (const t of copy.querySelectorAll(".tick")) t.textContent = "";
+    return copy.innerHTML;
+  };
+  if (bare(box) !== bare(next)) return false;
+  shown.forEach((t, i) => { if (t.textContent !== fresh[i].textContent) t.textContent = fresh[i].textContent; });
+  return true;
 }
 
 const focusLabel = (e) => e.getAttribute("aria-label") || e.textContent.trim();
@@ -669,8 +685,11 @@ function foldBubble(key, text) {
       onclick: () => { state.chatOpen[key] = !open; renderDrawer(); } })];
 }
 
-// back: {text, label, go} for the button at the top (in the panel: back to
-// the chat that started it); toChat: what clicking that chat's name does.
+// An agent's details: its name and state, a short list of facts, its steps as
+// a timeline, what it said and the task it was given. back: {text, label, go}
+// for the button at the top (in the panel: back to the chat that started it;
+// in a pop-up too narrow for the list beside it: back to the list); toChat:
+// what clicking that chat's name does.
 function subDetails(sel, back, toChat) {
   const key = `${sel.parent}:${sel.id}`, d = state.subInfo[key], n = nodeById(sel.parent);
   toChat ||= () => select_({ type: "node", id: n.sessionId });
@@ -680,24 +699,25 @@ function subDetails(sel, back, toChat) {
   if (!d) return [...head, el("p", { class: "muted small", text: "Loading…" })];
   if (d.error) return [...head, el("p", { class: "error small", text: d.error })];
   const running = d.state === "running", steps = [...d.steps].reverse();
+  const calls = listedAgent(sel.parent, sel.id)?.toolCalls;  // only the list has them
+  const fact = (name, value, cls) => value ? el("div", {}, el("dt", { text: name }), el("dd", { class: cls }, value)) : null;
   return [
     ...head,
-    el("p", { class: "sub-state" }, el("span", { class: stateClass(d.state), title: d.state }),
-      el("span", { text: [AGENT_STATE_TEXT[d.state] || d.state, modelName(d.model), fmtDur(d.durationMs),
-        fmtTok(d.tokens)].filter(Boolean).join(" · ") })),
-    el("dl", {},
-      el("dt", { text: "Started by" }), el("dd", {}, n ? el("a", {
-        href: "#", text: display(n), onclick: (e) => { e.preventDefault(); toChat(); },
-      }) : "a chat that isn't on this board"),
-      d.workflow && [el("dt", { text: "Workflow" }), el("dd", { text: [d.workflow, d.phase].filter(Boolean).join(" · ") })],
-      !d.workflow && d.kind && [el("dt", { text: "Type" }), el("dd", { text: d.kind })]),
+    el("p", { class: "sub-state" }, stateBadge(d.state)),
+    el("dl", { class: "facts" }, ...[
+      fact("Model", modelName(d.model)), fact("Duration", fmtDur(d.durationMs), "tick"),
+      d.tokens != null && fact("Tokens", fmtCount(d.tokens)), calls != null && fact("Tool calls", String(calls)),
+      fact("Started by", n ? el("button", { class: "chip link", type: "button", text: display(n),
+        title: `Show ${display(n)}`, onclick: toChat }) : "a chat that isn't on this board"),
+      fact("Workflow", d.workflow && [d.workflow, d.phase].filter(Boolean).join(" · ")),
+      fact("Type", !d.workflow && d.kind)].filter(Boolean)),
     ...subActions(sel, d, n),
-    el("h2", { text: running ? "Doing now" : "Last step" }),
-    steps.length ? el("div", { class: "sub-steps" }, ...steps.map((s, i) => el("div", { class: `sub-step${i ? "" : " now"}` },
-      el("span", { class: "mono", text: s.text }), el("span", { class: "muted small", text: ago(s.at) }))))
+    el("h2", { text: running ? "Doing now" : "Recent steps" }),
+    steps.length ? el("div", { class: "sub-steps" }, ...steps.map((s, i) => el("div", { class: `sub-step${i ? "" : " now"}${running ? " running" : ""}` },
+      el("span", { class: "mono", text: s.text }), el("span", { class: "when tick", text: ago(s.at) }))))
       : el("p", { class: "muted small", text: running ? "Getting started…" : "It took no steps." }),
     el("h2", { text: running ? "Latest message" : "Final message" }),
-    ...(d.said ? [el("div", { class: "msg-meta", text: ago(d.said.at) }), ...foldBubble(`${key}:said`, d.said.text)]
+    ...(d.said ? [el("div", { class: "msg-meta tick", text: ago(d.said.at) }), ...foldBubble(`${key}:said`, d.said.text)]
       : [el("p", { class: "muted small", text: running ? "It hasn't written anything yet; it reports when it finishes." : "None." })]),
     el("h2", { text: "Its task" }),
     ...(d.task ? foldBubble(`${key}:task`, d.task) : [el("p", { class: "muted small", text: "Not recorded." })]),
@@ -938,17 +958,27 @@ $("#wire-pop").addEventListener("close", () => { state.popWire = null; });
 $("#wire-pop-close").addEventListener("click", closeWirePop);
 $("#wire-pop").addEventListener("click", (e) => { if (e.target === e.currentTarget) closeWirePop(); });  // its backdrop
 
-// A chat's agents open in a pop-up over the board from the line in its
+// A chat's agents open in a pop-up over the board from the row in its
 // details, which stay underneath; it goes with them (closed when they close or
-// show something else). An agent clicked there shows its own details in the
-// pop-up, with a way back to the list. Redrawn with the panel.
+// show something else). It has two panes: the agents on the left, and on the
+// right the details of the one picked, with the list staying where it is (a
+// narrow pop-up shows one pane at a time, with a way back to the list).
+// Redrawn with the panel.
 $("#agents-pop").addEventListener("pointerdown", () => { state.pressing = true; });
 
+// It opens on what is running now, if anything (its card unfolds, if you had
+// folded it), with the keyboard on that row.
 function openAgentsPop(sid) {
   closeWirePop();  // one pop-up at a time
-  state.popAgents = { sid, sub: null };
+  const data = state.agents[sid], first = data && !data.error && everyAgent(data).find((a) => a.state === "running");
+  state.popAgents = { sid, sub: first ? { id: first.id, label: first.label || first.description } : null, pane: "list" };
+  if (first) {
+    state.runOpen[data.workflows.find((r) => r.agents.includes(first))?.runId || `direct:${sid}`] = true;
+    loadPopSub();
+  }
   renderAgentsPop();
   if (!$("#agents-pop").open) $("#agents-pop").showModal();
+  $('#agents-pop-list .agent-row[tabindex="0"]')?.focus();
 }
 
 function renderAgentsPop() {
@@ -960,9 +990,9 @@ function renderAgentsPop() {
   }
   const n = state.selected?.type === "node" && state.selected.id === p.sid && nodeById(p.sid);
   if (!n) return closeAgentsPop();
-  swapChildren($("#agents-pop-body"), (p.sub
-    ? subDetails({ parent: p.sid, ...p.sub }, { text: "← All agents", label: "Back to all agents", go: backToAgents }, closeAgentsPop)
-    : agentsPopList(n)).filter(Boolean));
+  $("#agents-pop").dataset.pane = p.pane;
+  swapChildren($("#agents-pop-list"), agentsPopList(n).filter(Boolean));
+  swapChildren($("#agents-pop-detail"), agentsPopDetail().filter(Boolean));
 }
 
 function closeAgentsPop() {
@@ -973,31 +1003,73 @@ function closeAgentsPop() {
 function agentsPopList(n) {
   const data = state.agents[n.sessionId];
   const { count, running } = data && !data.error ? agentCounts(data) : {};
+  const cards = agentsList(n, openPopSub);
+  // One row in view is in the tab order, the picked one (else the first):
+  // Tab enters the list there and the arrows go on.
+  const shown = cards.flatMap((c) => [...c.querySelectorAll(".agent-row")]).filter((r) => !r.closest("details:not([open])"));
+  const stop = shown.find((r) => r.hasAttribute("aria-current")) || shown[0];
+  if (stop) stop.tabIndex = 0;
   return [
     el("h3", { text: "Agents in this chat" }),
     el("p", { class: "muted small pop-note", text: [display(n), count != null && `${count} agent${count === 1 ? "" : "s"}`,
       running && `${running} running`].filter(Boolean).join(" · ") }),
-    ...agentsList(n, openPopSub),
+    ...cards,
   ];
 }
 
-function openPopSub(id, label) {
-  const p = state.popAgents, box = $("#agents-pop-body");
-  p.listScroll = box.scrollTop;
+function agentsPopDetail() {
+  const p = state.popAgents;
+  if (!p.sub) return [el("div", { class: "pop-empty" }, el("p", { class: "pop-empty-title", text: "Pick an agent" }),
+    el("p", { class: "muted small", text: "Pick one in the list to see what it is doing, its steps and its task." }))];
+  return subDetails({ parent: p.sid, ...p.sub }, { text: "← All agents", label: "Back to all agents", go: backToAgents },
+    closeAgentsPop);
+}
+
+// Picks an agent: its details show on the right, the list stays as it is. A
+// pick by the arrow keys asks for them a moment later, so a key held down
+// doesn't ask for every row it passes.
+function pickPopSub(id, label, byKey) {
+  const p = state.popAgents;
+  if (p.sub?.id === id) return;
   p.sub = { id, label };
-  loadPopSub();
+  $("#agents-pop-detail").scrollTop = 0;
+  clearTimeout(p.loadTimer);
+  if (byKey) p.loadTimer = setTimeout(() => { if (state.popAgents === p) loadPopSub(); }, 120);
+  else loadPopSub();
   renderAgentsPop();
-  box.scrollTop = 0;
-  box.querySelector(".back")?.focus({ preventScroll: true });
+}
+
+// A click (or Enter) on a row: picks it, and a narrow pop-up swaps the list for its details.
+function openPopSub(id, label) {
+  pickPopSub(id, label);
+  state.popAgents.pane = "detail";
+  renderAgentsPop();
+  document.getElementById(`agent-row-${id}`)?.focus({ preventScroll: true });  // some browsers don't focus a clicked button
+  $("#agents-pop-detail .back")?.focus({ preventScroll: true });  // only shown in a narrow pop-up
 }
 
 function backToAgents() {
-  const p = state.popAgents, box = $("#agents-pop-body"), { id } = p.sub;
-  p.sub = null;
+  const p = state.popAgents;
+  p.pane = "list";
   renderAgentsPop();
-  box.scrollTop = p.listScroll || 0;
-  [...box.querySelectorAll(".agent-row")].find((r) => r.dataset.agent === id)?.focus({ preventScroll: true });
+  document.getElementById(`agent-row-${p.sub?.id}`)?.focus({ preventScroll: true });
 }
+
+// ↑ and ↓ move the pick through the rows in view (Home and End to the first
+// and last), as in a list in Finder. On a card's header or its button, ↓ and ↑
+// go to the next row that way.
+$("#agents-pop-list").addEventListener("keydown", (e) => {
+  const rows = [...e.currentTarget.querySelectorAll(".agent-row")].filter((r) => !r.closest("details:not([open])"));
+  if (!rows.length || !["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key) || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  const from = document.activeElement, on = rows.indexOf(from);
+  const after = rows.findIndex((r) => from.compareDocumentPosition(r) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const at = on >= 0 ? on : (after < 0 ? rows.length : after) - (e.key === "ArrowDown" ? 1 : 0);
+  const to = { ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: rows.length - 1 }[e.key];
+  e.preventDefault();
+  const row = rows[Math.min(Math.max(to, 0), rows.length - 1)];
+  pickPopSub(row.dataset.agent, row.querySelector(".agent-label").textContent, true);
+  document.getElementById(row.id).focus();  // the pick redraws the list: its row is a new element
+});
 
 async function loadPopSub() {
   const p = state.popAgents;
@@ -1115,21 +1187,24 @@ function nodeDetails(n) {
       class: "conns", open: store("ltt.connsOpen") === true,
       ontoggle: (e) => store("ltt.connsOpen", e.target.open),
     }, el("summary", {}, el("h2", { text: `Connections (${conns.length})` })),
-    el("ul", {}, ...conns.map((c) => {
-      const other = nodeById(c.from === n.sessionId ? c.to : c.from);
-      const dir = c.from === n.sessionId ? "→" : "←";
-      return el("li", {}, el("a", {
-        href: "#", text: `${dir} ${other ? display(other) : "?"}${c.reason.trim() ? `: ${c.reason.trim()}` : ""}`,
-        onclick: (e) => { e.preventDefault(); openWirePop(c.id); },
-      }));
+    el("ul", { class: "conn-list" }, ...conns.map((c) => {
+      const other = nodeById(c.from === n.sessionId ? c.to : c.from), why = c.reason.trim();
+      const name = other ? display(other) : "?", dir = c.from === n.sessionId ? "→" : "←";
+      return el("li", {}, el("button", {
+        class: "conn-row", type: "button", title: `${dir} ${name}${why ? `: ${why}` : ""}`,
+        onclick: () => openWirePop(c.id),
+      }, el("span", { class: "dir", text: dir }), el("span", { class: "name", text: name }),
+      why && el("span", { class: "why", text: why })));
     })))] : [el("h2", { text: "Connections" }), el("p", { class: "muted small", text: n.messageBlock
       ? "None. This session can't be connected until it can receive notes."
       : "None. Drag the blue handle onto another agent to connect them." })]),
-    handoffable(n) && el("div", { class: "drawer-actions" }, handoffButton(n)),
-    handoffNote(n),
-    endControls(n),
-    n.background && deleteControls(n),
-    removeControls(n, conns),
+    // what can be done with the card itself, apart from the rest
+    el("div", { class: "drawer-foot" },
+      handoffable(n) && el("div", { class: "drawer-actions" }, handoffButton(n)),
+      handoffNote(n),
+      endControls(n),
+      n.background && deleteControls(n),
+      removeControls(n, conns)),
   ];
 }
 
@@ -1350,8 +1425,8 @@ const fmtDur = (ms) => {
   if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
   return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 };
-const fmtTok = (n) => n == null ? null
-  : n >= 1e6 ? `${(n / 1e6).toFixed(2)}M tokens` : n >= 1000 ? `${(n / 1000).toFixed(1)}k tokens` : `${n} tokens`;
+const fmtCount = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
+const fmtTok = (n) => n == null ? null : `${fmtCount(n)} tokens`;
 
 function modelName(m) {
   const hit = /claude-(opus|sonnet|haiku|fable)-(\d+)-(\d+)/.exec(m || "");
@@ -1359,36 +1434,86 @@ function modelName(m) {
   return `${hit[1][0].toUpperCase()}${hit[1].slice(1)} ${hit[2]}.${hit[3]}`;
 }
 
-const AGENT_STATE_TEXT = { running: "running", done: "done", stopped: "stopped", failed: "failed",
-  queued: "queued", "not run": "not run", skipped: "skipped", completed: "completed", killed: "killed" };
-const stateClass = (s) => `dot a-${String(s).replace(/\s+/g, "-")}`;
-
-// open: shows the agent's own details when the row is clicked
-function agentRow(a, labelText, open) {
-  const press = open && ((e) => {
-    if (e.type === "click" || e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
-  });
-  return el("div", { class: "agent-row", "data-agent": a.id, role: open && "button", tabindex: open && 0,
-    title: open && "Show what it is doing", onclick: press, onkeydown: press },
-    el("span", { class: stateClass(a.state), title: a.state }),
-    el("div", { class: "agent-main" },
-      el("div", { class: "agent-label", text: labelText, title: labelText }),
-      el("div", { class: "agent-meta", text: [
-        AGENT_STATE_TEXT[a.state] || a.state, modelName(a.model), fmtDur(a.durationMs),
-        fmtTok(a.tokens), a.toolCalls != null ? `${a.toolCalls} tool calls` : null,
-      ].filter(Boolean).join(" · ") }),
-      a.lastTool && el("div", { class: "agent-last mono", text: a.lastTool, title: a.lastTool })));
+// How a state of an agent or a workflow looks: its icon, its badge and its
+// words. A state not listed (not run, skipped, unknown) is an empty ring.
+const STATE_KIND = { running: "running", done: "done", completed: "done", failed: "failed",
+  stopped: "stopped", killed: "stopped", queued: "queued" };
+const stateKind = (s) => STATE_KIND[s] || "idle";
+function stateLabel(s) {
+  const text = { completed: "done", killed: "stopped" }[s] || String(s || "unknown");
+  return text[0].toUpperCase() + text.slice(1);
 }
 
+// A drawn icon for a state (see .state-icon in style.css): a turning ring while
+// it runs, a check, a cross, a stop square, a clock, or an empty ring.
+function stateIcon(state) {
+  const kind = stateKind(state);
+  const icon = svg("svg", { class: `state-icon ${kind}`, width: 16, height: 16, viewBox: "0 0 16 16", "aria-hidden": "true" });
+  const draw = (tag, cls, attrs) => icon.append(svg(tag, { class: cls, ...attrs }));
+  const ring = (cls) => draw("circle", cls, { cx: 8, cy: 8, r: 6.2 });
+  if (kind === "running") {
+    ring("ring faint");
+    draw("path", "ring arc", { d: "M8 1.8a6.2 6.2 0 0 1 6.2 6.2" });
+  } else if (kind === "done" || kind === "failed") {
+    draw("circle", "disc", { cx: 8, cy: 8, r: 7 });
+    draw("path", "glyph", { d: kind === "done" ? "M4.7 8.2 7 10.4l4.3-4.8" : "M5.7 5.7l4.6 4.6m0-4.6-4.6 4.6" });
+  } else if (kind === "stopped") {
+    ring("ring");
+    draw("rect", "disc", { x: 5.6, y: 5.6, width: 4.8, height: 4.8, rx: 1 });
+  } else if (kind === "queued") {
+    ring("ring");
+    draw("path", "ring", { d: "M8 4.9V8l2.1 1.3" });
+  } else {
+    ring("ring dashed");
+  }
+  return icon;
+}
+
+const stateBadge = (state, icon = true) =>
+  el("span", { class: `state-badge ${stateKind(state)}` }, icon && stateIcon(state), stateLabel(state));
+
+// One agent as a row of the pop-up's list: its state, its name and, quietly at
+// the right, how long it ran (what it is doing now is in its tooltip).
+// open(id, label) picks it; the picked row is blue.
+function agentRow(a, labelText, picked, open) {
+  const title = [a.agentType ? `${labelText} (${a.agentType})` : labelText, stateLabel(a.state).toLowerCase(),
+    a.lastTool && `now: ${a.lastTool}`].filter(Boolean).join(" · ");
+  return el("button", { class: "agent-row", type: "button", id: `agent-row-${a.id}`, "data-agent": a.id,
+    "aria-current": a.id === picked && "true", tabindex: -1, title, onclick: () => open(a.id, labelText) },
+  stateIcon(a.state),
+  el("span", { class: "agent-label", text: labelText }),
+  el("span", { class: "agent-time tick", text: fmtDur(a.durationMs) }));
+}
+
+// A fold of the pop-up's list (and the arrow's notes). A card you open or shut
+// redraws the list: which row the keyboard enters at depends on what is in view.
 function group(key, openByDefault, summary, body) {
   const d = el("details", { class: "run", open: state.runOpen[key] ?? openByDefault },
-    el("summary", {}, ...summary), ...body);
-  d.addEventListener("toggle", () => { state.runOpen[key] = d.open; });
+    el("summary", { id: `fold-${key}` }, ...summary), ...body);
+  d.addEventListener("toggle", () => {
+    if (d.open === (state.runOpen[key] ?? openByDefault)) return;
+    state.runOpen[key] = d.open;
+    renderAgentsPop();
+  });
   return d;
 }
 
-// open(id, label): shows an agent's own details
-function runGroup(r, n, open) {
+// The rest of a card's header: how a workflow (or the chat's own subagents)
+// stands, how long it has gone on and, in words, how far it got; under them a
+// thin bar of the agents that are done (failed ones in red).
+function runStatus(agents, status, time) {
+  const count = (kind) => agents.filter((a) => stateKind(a.state) === kind).length;
+  const done = count("done"), failed = count("failed");
+  const width = (k) => `width: ${(100 * k / agents.length).toFixed(1)}%`;
+  return el("span", { class: "run-status" },
+    el("span", { class: "run-line" }, stateBadge(status, false), time && el("span", { class: "run-time tick", text: time }),
+      agents.length > 0 && el("span", { class: "run-count", text: `${done} of ${agents.length} done${failed ? ` · ${failed} failed` : ""}` })),
+    agents.length > 0 && el("span", { class: `bar ${stateKind(status)}` },
+      done > 0 && el("i", { style: width(done) }), failed > 0 && el("i", { class: "bad", style: width(failed) })));
+}
+
+// open(id, label): picks an agent; picked: the id of the one picked
+function runGroup(r, n, open, picked) {
   const phases = [...r.phases];
   for (const a of r.agents) if (a.phase && !phases.includes(a.phase)) phases.push(a.phase);
   const body = [];
@@ -1396,39 +1521,44 @@ function runGroup(r, n, open) {
     const inPhase = r.agents.filter((a) => (a.phase || null) === phase);
     if (!inPhase.length) continue;
     const counts = {};
-    for (const a of inPhase) counts[a.state] = (counts[a.state] || 0) + 1;
-    body.push(el("div", { class: "phase-title", text:
-      `${phase || "Other"} · ${Object.entries(counts).map(([s, k]) => `${k} ${s}`).join(", ")}` }));
-    body.push(...inPhase.map((a) => agentRow(a, a.label, open && (() => open(a.id, a.label)))));
+    for (const a of inPhase) {
+      const word = stateLabel(a.state).toLowerCase();
+      counts[word] = (counts[word] || 0) + 1;
+    }
+    body.push(el("div", { class: "phase-title" }, el("span", { text: phase || "Other" }),
+      el("span", { class: "phase-counts", text: Object.entries(counts).map(([s, k]) => `${k} ${s}`).join(" · ") })));
+    body.push(...inPhase.map((a) => agentRow(a, a.label, picked, open)));
   }
   if (!r.agents.length) body.push(el("p", { class: "muted small", text: "No agents recorded yet." }));
-  if (n && canReach(n)) {
-    const ask = r.status === "running"
-      ? ["Ask it to stop this workflow", `Please stop the workflow "${r.name}" (run ${r.runId}) now and tell me where it got to.`]
-      : ["killed", "stopped", "failed"].includes(r.status)
-        ? ["Ask it to resume this workflow", `Please resume the workflow "${r.name}" (run ${r.runId}) from where it stopped.`]
-        : null;
-    if (ask) body.unshift(el("div", { class: "drawer-actions run-actions" }, el("button", {
-      class: "btn", text: ask[0],
-      onclick: async () => { if (await sendTo(n, ask[1])) toast(`Asked ${display(n)}.`, "ok"); } })));  // no bubble shows it
-  }
+  // what can be asked of it: the chat gets a message saying so
+  const ask = !(n && canReach(n)) ? null : r.status === "running"
+    ? ["Ask to stop", "Ask it to stop this workflow", `Please stop the workflow "${r.name}" (run ${r.runId}) now and tell me where it got to.`]
+    : ["killed", "stopped", "failed"].includes(r.status)
+      ? ["Ask to resume", "Ask it to resume this workflow", `Please resume the workflow "${r.name}" (run ${r.runId}) from where it stopped.`]
+      : null;
   return group(r.runId, r.status === "running", [
-    el("span", { class: stateClass(r.status), title: r.status }),
-    el("div", { class: "run-head" },
-      el("div", { class: "run-name", text: r.name, title: r.summary || r.name }),
-      el("div", { class: "agent-meta", text: [
-        `workflow ${r.status}`, `${r.agentCount} agents`, fmtTok(r.totalTokens), fmtDur(r.durationMs),
-      ].filter(Boolean).join(" · ") })),
+    el("span", { class: "run-name", text: r.name, title: r.summary || r.name }),
+    ask && el("button", { class: "btn run-action", type: "button", text: ask[0], title: ask[1],
+      onclick: async () => { if (await sendTo(n, ask[2])) toast(`Asked ${display(n)}.`, "ok"); } }),  // no bubble shows it
+    runStatus(r.agents, r.status, fmtDur(r.durationMs)),
   ], body);
 }
 
+const everyAgent = ({ workflows, direct }) => [...workflows.flatMap((r) => r.agents), ...direct];
+
+// The list's own entry for an agent: it has the tool calls its details lack.
+function listedAgent(sid, id) {
+  const data = state.agents[sid];
+  return data && !data.error ? everyAgent(data).find((a) => a.id === id) : null;
+}
+
 // How many agents a chat started (in its workflows and on its own), and how many run now.
-function agentCounts({ workflows, direct }) {
-  const all = [...direct, ...workflows.flatMap((r) => r.agents)];
+function agentCounts(data) {
+  const all = everyAgent(data);
   return { count: all.length, running: all.filter((a) => a.state === "running").length };
 }
 
-// In a chat's details its agents take one line; it opens them in a pop-up.
+// In a chat's details its agents take one row; it opens them in a pop-up.
 function agentsSection(n) {
   const data = state.agents[n.sessionId];
   const head = el("h2", { text: "Agents in this chat" });
@@ -1441,27 +1571,24 @@ function agentsSection(n) {
   return [el("button", {
     class: "agents-line", "aria-haspopup": "dialog", title: "Show its workflows and subagents",
     onclick: () => openAgentsPop(n.sessionId),
-  }, `Agents in this chat (${count})`, running > 0 && el("span", { class: "muted", text: ` · ${running} running` }))];
+  }, el("span", { class: "agents-main" }, "Agents in this chat", el("span", { class: "count", text: count })),
+  running > 0 && el("span", { class: "running-now" }, el("i"), `${running} running`))];
 }
 
 // The workflows and subagents a chat started (the pop-up's list); open(id,
-// label) shows one agent's details.
+// label) picks one agent.
 function agentsList(n, open) {
-  const data = state.agents[n.sessionId];
+  const data = state.agents[n.sessionId], picked = state.popAgents?.sub?.id;
   if (!data) return [el("p", { class: "muted small", text: "Loading…" })];
   if (data.error) return [el("p", { class: "error small", text: data.error })];
   const { workflows: runs, direct } = data;
   if (!runs.length && !direct.length) return [el("p", { class: "muted small", text: "No subagents or workflows yet." })];
-  const out = runs.map((r) => runGroup(r, n, open));
+  const out = runs.map((r) => runGroup(r, n, open, picked));
   if (direct.length) {
-    const live = direct.filter((a) => a.state === "running").length;
+    const status = direct.some((a) => a.state === "running") ? "running" : "done";
     out.push(group(`direct:${n.sessionId}`, true, [
-      el("span", { class: stateClass(live ? "running" : "done") }),
-      el("div", { class: "run-head" },
-        el("div", { class: "run-name", text: "Subagents" }),
-        el("div", { class: "agent-meta", text: `${direct.length} started${live ? ` · ${live} running` : ""}` })),
-    ], direct.map((a) => agentRow(a, a.agentType ? `${a.description} (${a.agentType})` : a.description,
-      open && (() => open(a.id, a.description))))));
+      el("span", { class: "run-name", text: "Subagents" }), runStatus(direct, status),
+    ], direct.map((a) => agentRow(a, a.description, picked, open))));
   }
   return out;
 }
@@ -1761,7 +1888,7 @@ const pickers = {
 };
 
 // A folder box's drop-down (a native datalist filters by the text in the
-// box, so a full path lists only itself): ▾, ↓ or an empty box lists every
+// box, so a full path lists only itself): its chevron, ↓ or an empty box lists every
 // folder in ui.choices, typing narrows the list, and it opens in place,
 // pushing what is below it down. A pick, Esc or a click elsewhere closes it.
 function folderCombo(ui) {
@@ -2331,7 +2458,7 @@ function refreshAgentDialog() {
   ].filter(Boolean).join(" ");
 }
 
-// The folders New agent's ▾ lists: the board's, then those of the running
+// The folders New agent's drop-down lists: the board's, then those of the running
 // chats in the sidebar, then those of the board's running cards. Typing,
 // Browse… and the places below still reach any folder.
 function workingFolders() {

@@ -114,7 +114,8 @@
 
 <dialog id="agents-pop" aria-label="Agents in this chat">
   <button class="icon-btn close" id="agents-pop-close" aria-label="Close">&times;</button>
-  <div class="pop-body" id="agents-pop-body"></div>
+  <div class="pop-side" id="agents-pop-list"></div>
+  <div class="pop-main" id="agents-pop-detail"></div>
 </dialog>
 
 <dialog id="connect-dialog" aria-labelledby="c-title">
@@ -171,7 +172,7 @@
             aria-expanded="false" aria-controls="n-folder-list"
             placeholder="Type or paste a folder, or click Browse">
           <button type="button" id="n-folder-toggle" class="combo-toggle" tabindex="-1"
-            aria-label="Show folders" aria-expanded="false" aria-controls="n-folder-list">▾</button>
+            aria-label="Show folders" aria-expanded="false" aria-controls="n-folder-list"></button>
         </div>
         <button type="button" id="n-browse" class="btn">Browse…</button>
       </div>
@@ -240,7 +241,7 @@
           aria-expanded="false" aria-controls="b-folder-list"
           placeholder="Type or paste a folder, e.g. C:\Users\you\project">
         <button type="button" id="b-folder-toggle" class="combo-toggle" tabindex="-1"
-          aria-label="Show folders" aria-expanded="false" aria-controls="b-folder-list">▾</button>
+          aria-label="Show folders" aria-expanded="false" aria-controls="b-folder-list"></button>
       </div>
       <button type="button" id="b-browse" class="btn">Browse…</button>
     </div>

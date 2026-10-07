@@ -9,9 +9,11 @@ Run it with the venv from tests/setup.sh:  tests/.venv/bin/python tests/check_pa
 LTT_STATIC=<folder> checks another copy of static/ (e.g. an older one).
 Exit 0: all passed. 1: a check failed. 2: the browser couldn't run (skipped).
 """
+import copy
 import json
 import os
 import sys
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -70,6 +72,40 @@ def view(bid):
     }
 
 
+def agent(i, label, state, phase=None, **kw):
+    a = {"id": f"a{i}", "label": label, "state": state, "model": "claude-sonnet-5-5", "phase": phase,
+         "durationMs": 60000 + i * 1000, "tokens": 12000, "toolCalls": None if state == "running" else 5, "lastTool": None}
+    a.update(kw)
+    return a
+
+
+# A chat's agents: a running workflow in two phases (one agent done, two running, one queued, one failed) and
+# two subagents of its own (one running, one done).
+AGENTS = {"sessionId": B, "live": True,
+          "workflows": [{"runId": "r1", "name": "review-changes", "status": "running", "phases": ["Review", "Verify"],
+                         "agentCount": 5, "totalTokens": 60000, "durationMs": 300000, "summary": "Review the diff",
+                         "agents": [agent(1, "review:bugs", "done", "Review"), agent(2, "review:perf", "running", "Review"),
+                                    agent(3, "review:security", "running", "Review"),
+                                    agent(4, "verify:server.py", "queued", "Verify", durationMs=None),
+                                    agent(5, "verify:app.js", "failed", "Verify")]}],
+          "direct": [{"id": "d1", "description": "Fix the poll loop", "agentType": "general-purpose", "state": "running",
+                      "model": "claude-opus-5-5", "durationMs": 90000, "tokens": 5000, "lastTool": None},
+                     {"id": "d2", "description": "Find the old marker", "agentType": "Explore", "state": "done",
+                      "model": "claude-haiku-5-5", "durationMs": 20000, "tokens": 3000, "lastTool": None}]}
+
+
+def subagent(agents, aid):
+    """What /api/subagent says about one of those agents."""
+    flat = [(a, r) for r in agents["workflows"] for a in r["agents"]] + [(d, None) for d in agents["direct"]]
+    a, run = next(x for x in flat if x[0]["id"] == aid)
+    now = int(time.time() * 1000)
+    return {"id": aid, "label": a.get("label") or a["description"], "state": a["state"], "model": a["model"],
+            "durationMs": a["durationMs"], "tokens": a["tokens"], "workflow": run and run["name"], "phase": a.get("phase"),
+            "kind": a.get("agentType"), "startedAt": now - 60000,
+            "steps": [{"text": "Read static/app.js", "at": now - 40000}, {"text": "Edit static/style.css", "at": now - 9000}],
+            "said": {"at": now - 5000, "text": "Looking at the poll loop."}, "task": "Review the diff."}
+
+
 class FakeAPI:
     def __init__(self):
         self.down = False       # every /api request fails as if the server were gone
@@ -84,6 +120,7 @@ class FakeAPI:
         self.checking = False   # it is looking in that agent's /effort panel
         self.suggest = None     # alpha's suggested reply
         self.arrows = []        # more arrows on the project board
+        self.agents = None      # every chat's agents (like AGENTS above); none by default
 
     def chat(self, sid):
         self.asked += 1
@@ -124,11 +161,12 @@ class FakeAPI:
         elif path == "/api/chat":
             data = self.chat(q.get("session"))
         elif path == "/api/agents":
-            data = {"sessionId": q.get("session"), "live": True, "direct": [], "workflows": []}
+            data = self.agents or {"sessionId": q.get("session"), "live": True, "direct": [], "workflows": []}
         elif path == "/api/subagent":
-            data = {"id": q.get("agent"), "sessionId": q.get("session"), "label": "Fable judge", "kind": "general-purpose",
-                    "workflow": None, "phase": None, "model": "claude-fable-5-1", "tokens": 1000, "state": "running",
-                    "startedAt": 0, "lastAt": 0, "durationMs": 1000, "task": "Judge it", "steps": [], "said": None}
+            data = subagent(self.agents, q.get("agent")) if self.agents else {
+                "id": q.get("agent"), "sessionId": q.get("session"), "label": "Fable judge", "kind": "general-purpose",
+                "workflow": None, "phase": None, "model": "claude-fable-5-1", "tokens": 1000, "state": "running",
+                "startedAt": 0, "lastAt": 0, "durationMs": 1000, "task": "Judge it", "steps": [], "said": None}
         elif path == "/api/talk":
             data = {"createdAt": 1, "total": 1, "messages": [{"id": "t1", "at": 2, "before": False, "from": A, "to": B,
                                                            "kind": "msg", "state": "read", "text": "**hi** `there`"}]}
@@ -187,6 +225,19 @@ def open_card(page, sid):
     page.locator(f'.node[data-id="{sid}"] .name').click()
     page.wait_for_function("!document.querySelector('#drawer').hidden")
     poll(page)
+
+
+def open_agents(page, sid=B, agents=None):
+    """A chat's details with the made-up agents (AGENTS, or the ones given), then the pop-up that lists them."""
+    page.api.agents = copy.deepcopy(agents or AGENTS)
+    open_card(page, sid)
+    page.locator("#drawer-body .agents-line").click()
+    page.wait_for_selector("#agents-pop[open] .agent-row")
+
+
+def picked_agent(page):
+    """The name of the agent picked in the pop-up's list."""
+    return page.locator("#agents-pop .agent-row[aria-current] .agent-label").inner_text()
 
 
 PNG_1PX = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
@@ -495,6 +546,197 @@ def checks_wide(browser):
         page.locator(".gear").click()
         page.keyboard.press("Escape")
         check(name, not page.evaluate("!!document.querySelector(':popover-open')") and is_open(page, "#drawer"))
+
+    name = "agents: the details have one row for them, with how many there are and how many run"
+    with step(page, name):
+        page.api.agents = copy.deepcopy(AGENTS)
+        open_card(page, B)
+        row = page.locator("#drawer-body .agents-line")
+        check(name, row.locator(".count").inner_text() == "7" and "3 running" in row.locator(".running-now").inner_text())
+
+    name = "agents: a row picked in the pop-up shows its details on the right, the list stays where it is"
+    with step(page, name):
+        open_agents(page)
+        first = page.locator("#agents-pop-detail h3").inner_text()  # it opens on the first agent running
+        rows = page.locator("#agents-pop .agent-row")
+        before = rows.count()
+        page.locator("#agents-pop .agent-row", has_text="verify:app.js").click()
+        page.wait_for_function("document.querySelector('#agents-pop-detail h3')?.textContent === 'verify:app.js'")
+        side, main = page.locator("#agents-pop-list").bounding_box(), page.locator("#agents-pop-detail").bounding_box()
+        check(name, first == "review:perf" and before == rows.count() == 7 and is_open(page, "#agents-pop-list")
+              and main["x"] >= side["x"] + side["width"] - 1 and picked_agent(page) == "verify:app.js"
+              and "Failed" in page.inner_text("#agents-pop-detail"), (first, before, side, main))
+
+    name = "agents: ↑ and ↓ move the pick through the list, Enter and Space pick the row in focus, Esc closes"
+    with step(page, name):
+        open_agents(page)
+        start = picked_agent(page)
+        page.keyboard.press("ArrowDown")
+        down = picked_agent(page)
+        page.wait_for_function(f"document.querySelector('#agents-pop-detail h3')?.textContent === '{down}'")
+        page.keyboard.press("ArrowUp")
+        up = picked_agent(page)
+        page.keyboard.press("End")
+        end = picked_agent(page)
+        keys = []
+        for key, label in (("Enter", "verify:app.js"), ("Space", "review:bugs")):
+            page.locator("#agents-pop .agent-row", has_text=label).focus()
+            page.keyboard.press(key)
+            keys.append(picked_agent(page))
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(100)
+        check(name, (start, down, up, end) == ("review:perf", "review:security", "review:perf", "Find the old marker")
+              and keys == ["verify:app.js", "review:bugs"] and not page.evaluate("document.querySelector('#agents-pop').open"),
+              (start, down, up, end, keys))
+
+    name = "agents: Tab, and ↑ ↓ from a card's header, reach a row in view, with the picked agent's card folded too"
+    with step(page, name):
+        open_agents(page)
+        page.locator("#agents-pop details.run > summary").first.click()  # folds review-changes, which holds the pick
+        page.wait_for_timeout(200)
+        stops = page.evaluate("""[...document.querySelectorAll('#agents-pop .agent-row')]
+            .filter(r => r.getAttribute('tabindex') === '0' && r.offsetParent).map(r => r.id)""")
+        page.locator("#agents-pop-close").focus()
+        reached = ""
+        for _ in range(8):
+            page.keyboard.press("Tab")
+            if page.evaluate("document.activeElement.classList.contains('agent-row')"):
+                reached = page.evaluate("document.activeElement.id")
+                break
+        page.locator("#agents-pop details.run > summary").nth(1).focus()  # the Subagents card's header
+        page.keyboard.press("ArrowDown")
+        down = picked_agent(page)
+        check(name, stops == ["agent-row-d1"] == [reached] and down == "Fix the poll loop", (stops, reached, down))
+
+    name = "agents: a card folded earlier unfolds for the running agent the pop-up opens on, and the keyboard is there"
+    with step(page, name):
+        page.api.agents = copy.deepcopy(AGENTS)
+        open_card(page, B)
+        page.evaluate("state.runOpen = { r1: false }")
+        page.locator("#drawer-body .agents-line").click()
+        page.wait_for_selector("#agents-pop[open] .agent-row")
+        page.wait_for_timeout(100)
+        check(name, page.evaluate("document.querySelector('#agents-pop details.run').open")
+              and page.evaluate("document.activeElement.id") == "agent-row-a2")
+
+    name = "agents: with nothing running the pop-up opens on an empty details pane, and a row fills it"
+    with step(page, name):
+        quiet = copy.deepcopy(AGENTS)
+        for a in [x for r in quiet["workflows"] for x in r["agents"]] + quiet["direct"]:
+            a["state"] = "done" if a["state"] == "running" else a["state"]
+        quiet["workflows"][0]["status"] = "completed"
+        open_agents(page, agents=quiet)
+        empty = page.locator("#agents-pop-detail .pop-empty").count() == 1 and not page.locator("#agents-pop .agent-row[aria-current]").count()
+        page.locator("#agents-pop .agent-row", has_text="Find the old marker").click()
+        page.wait_for_function("document.querySelector('#agents-pop-detail h3')?.textContent === 'Find the old marker'")
+        check(name, empty and not page.locator("#agents-pop-detail .pop-empty").count(), empty)
+
+    name = "agents: keyboard focus stays on its row, or its card's header, when the list redraws"
+    with step(page, name):
+        open_agents(page)
+        page.keyboard.press("ArrowDown")
+        before = page.evaluate("document.activeElement.id")
+        page.api.agents["workflows"][0]["agents"][1]["state"] = "done"  # a row and the card's count change
+        poll(page, 2)
+        page.wait_for_timeout(300)
+        row = page.evaluate("document.activeElement.id")
+        page.locator("#agents-pop details.run > summary").first.focus()
+        page.api.agents["workflows"][0]["agents"][2]["state"] = "done"  # the card's count changes again
+        poll(page, 2)
+        page.wait_for_timeout(300)
+        check(name, before == "agent-row-a3" == row and page.evaluate("document.activeElement.id") == "fold-r1", (before, row))
+
+    name = "agents: a clock that ticks changes in place, so the list isn't rebuilt under the pointer and keyboard"
+    with step(page, name):
+        open_agents(page)
+        page.evaluate("""() => { window.__swaps = 0; new MutationObserver(m => window.__swaps += m.length)
+            .observe(document.querySelector('#agents-pop-list'), { childList: true }); }""")
+        time = page.locator("#agents-pop .agent-row", has_text="review:security").locator(".agent-time")
+        before = time.inner_text()
+        page.api.agents["workflows"][0]["agents"][2]["durationMs"] += 7000  # the next polls show it longer
+        poll(page, 2)
+        page.wait_for_timeout(300)
+        check(name, time.inner_text() != before and page.evaluate("window.__swaps") == 0, (before, time.inner_text()))
+
+    name = "agents: a row has a hover fill, and a focus ring from the keyboard, so it's plain it can be clicked"
+    with step(page, name):
+        open_agents(page)
+        row = page.locator("#agents-pop .agent-row", has_text="review:bugs")
+        fill = lambda: row.evaluate("e => getComputedStyle(e).backgroundColor")
+        idle = fill()
+        row.hover()
+        page.wait_for_timeout(300)
+        hover = fill()
+        page.keyboard.press("ArrowUp")  # from the picked row, the one before it: review:bugs
+        ring = page.evaluate("[document.activeElement.textContent, getComputedStyle(document.activeElement).outlineStyle]")
+        check(name, idle == "rgba(0, 0, 0, 0)" and hover != idle and ring[1] == "solid" and "review:bugs" in ring[0], (idle, hover, ring))
+
+    name = "agents: a workflow card shows how far it got and has its ask in the header, which doesn't fold it"
+    with step(page, name):
+        open_agents(page)
+        card = page.locator("#agents-pop details.run").first
+        bar = card.locator(".run-status .bar i").first.evaluate("e => e.style.width")
+        card.locator("summary .run-action").click()
+        page.wait_for_timeout(300)
+        sent = [b for p, b in page.api.posts if p.endswith("/send")]
+        check(name, card.locator(".run-count").inner_text() == "1 of 5 done · 1 failed" and bar == "20%"
+              and card.locator("summary .state-badge").inner_text() == "Running" and card.get_attribute("open") is not None
+              and card.locator("summary .run-action").inner_text() == "Ask to stop"
+              and len(sent) == 1 and "stop the workflow" in sent[0]["text"] and "Asked beta." in page.inner_text("#toasts"),
+              (bar, sent))
+
+    name = "agents: \"Started by\" is a chip in the app's style, not the browser's blue underlined link"
+    with step(page, name):
+        open_agents(page)
+        chip = page.locator("#agents-pop-detail .chip.link")
+        look = chip.evaluate("e => { const s = getComputedStyle(e); return [e.tagName, s.textDecorationLine, s.color, e.textContent]; }")
+        chip.click()
+        page.wait_for_timeout(100)
+        check(name, look[0] == "BUTTON" and look[1] == "none" and look[2] != "rgb(0, 0, 238)" and look[3] == "beta"
+              and not page.evaluate("document.querySelector('#agents-pop').open") and is_open(page, "#drawer"), look)
+
+    name = "folds: no browser marker is left on any fold, and each chevron is the same drawn one"
+    with step(page, name):
+        open_agents(page)
+        marks = """() => [...document.querySelectorAll('summary')].map(s => { const c = getComputedStyle(s), b = getComputedStyle(s, '::before');
+            return [c.display === 'list-item' || c.listStyleType !== 'none', b.width, b.height, b.backgroundImage.startsWith('url(')]; })"""
+        found = page.evaluate(marks)  # the chat's status line and Connections, the sidebar's Activity, the pop-up's cards
+        page.evaluate("openWirePop('c1')")  # an arrow's notes fold
+        found += page.evaluate(marks)
+        text = page.inner_text("body")
+        check(name, len(found) >= 8 and not any(m[0] for m in found) and {tuple(m[1:]) for m in found} == {("12px", "12px", True)}
+              and "▸" not in text and "▾" not in text, found)
+
+    name = "motion: with reduced motion the running ring and the running dot stand still"
+    with step(page, name):
+        open_agents(page)
+        spin = "[getComputedStyle(document.querySelector('#agents-pop .state-icon .arc')).animationName, " \
+               "getComputedStyle(document.querySelector('#drawer .running-now i')).animationName]"
+        moving = page.evaluate(spin)
+        page.emulate_media(reduced_motion="reduce")
+        try:
+            still = page.evaluate(spin)
+        finally:
+            page.emulate_media(reduced_motion="no-preference")
+        check(name, "none" not in moving and still == ["none", "none"], (moving, still))
+
+    name = "dropdowns: still native selects, drawn as the app's fields with its chevron and a focus ring"
+    with step(page, name):
+        looks = page.evaluate("""() => ['board-select', 'ide-pick', 'n-editor', 'n-model'].map(id => { const e = document.getElementById(id), s = getComputedStyle(e);
+            return [e.tagName, s.appearance, s.backgroundImage.startsWith('url(')]; })""")
+        page.locator("#new-chat").focus()
+        page.keyboard.press("Shift+Tab")  # back to the Board picker, from the keyboard
+        ring = page.evaluate("[document.activeElement.id, getComputedStyle(document.activeElement).boxShadow]")
+        check(name, looks == [["SELECT", "none", True]] * 4 and ring[0] == "board-select" and ring[1] != "none", (looks, ring))
+
+    name = "details: buttons in a chat's rows are one height, and the four of Background agent sit in two even columns"
+    with step(page, name):
+        open_card(page, B)
+        rows = page.evaluate("""() => [...document.querySelectorAll('#drawer-body .drawer-actions:not(.ultracode)')].map(r =>
+            [...r.querySelectorAll('.btn')].map(b => { const k = b.getBoundingClientRect(); return [Math.round(k.left), Math.round(k.width), Math.round(k.height)]; }))""")
+        every, bg = [b for r in rows for b in r], rows[0]
+        check(name, len({h for _, _, h in every}) == 1 and len(bg) == 4 and len({w for _, w, _ in bg}) == 1
+              and len({x for x, _, _ in bg}) == 2, rows)
 
     name = "contrast: an ended card's name is readable (4.5:1)"
     with step(page, name):
@@ -881,6 +1123,21 @@ def checks_narrow(browser):
         name = f"narrow {w} px: no sideways scrolling"
         with step(page, name):
             check(name, page.evaluate("document.documentElement.scrollWidth <= innerWidth"))
+        # the agents pop-up: its list and the details beside it, or (too narrow for both) one at a time
+        side_by_side = w > 720
+        name = f"narrow {w} px: the agents pop-up shows " + ("its list and details side by side" if side_by_side
+                                                            else "the list, then the agent picked, and ← All agents goes back")
+        with step(page, name):
+            open_agents(page, A)
+            list_in, detail_in = (lambda: is_open(page, "#agents-pop-list")), (lambda: is_open(page, "#agents-pop-detail"))
+            if side_by_side:
+                check(name, list_in() and detail_in())
+            else:
+                list_first = list_in() and not detail_in()
+                page.locator("#agents-pop .agent-row", has_text="verify:app.js").click()
+                detail_then = detail_in() and not list_in() and "verify:app.js" in page.inner_text("#agents-pop-detail h3")
+                page.locator("#agents-pop-detail .back").click()
+                check(name, list_first and detail_then and list_in() and not detail_in())
         page.context.close()
 
 

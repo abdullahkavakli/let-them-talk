@@ -9,10 +9,10 @@ What each part of the board does, from boards and arrows to a chat's details.
   *Add agents*, where a row's **+** puts it on the board and **+ New agent**
   next to a folder opens [New agent](#new-agent) on that folder.
 - **New board** takes any existing folder (`C:\...`, `/mnt/c/...`, `~/...`),
-  typed or picked with **Browse…**, or picked from its ▾ list of folders with
-  running sessions. It suggests those that have no board yet (other chats'
-  worktrees left out). A folder has one board, so **New board** on a folder
-  that has one opens it.
+  typed or picked with **Browse…**, or picked from its drop-down list of
+  folders with running sessions. It suggests those that have no board yet
+  (other chats' worktrees left out). A folder has one board, so **New board**
+  on a folder that has one opens it.
 - Switch boards with **Board** in the top bar.
 - Under *Board folder*:
   - **Change folder** points the board at another folder: sessions there
@@ -83,10 +83,11 @@ runs:
   with ultracode on (see [Ultracode](#ultracode)), also each time a prompt
   wakes it later.
 
-The folder box's ▾ lists the folders you're working in: the board's, the
-sidebar's and those of the board's running chats (typing narrows the list).
-It leaves out other chats' worktrees (`.claude/worktrees/…`). Typing a path,
-**Browse…** and the place buttons still reach any folder.
+The folder box's drop-down (its chevron) lists the folders you're working
+in: the board's, the sidebar's and those of the board's running chats (typing
+narrows the list). It leaves out other chats' worktrees
+(`.claude/worktrees/…`). Typing a path, **Browse…** and the place buttons
+still reach any folder.
 
 Images go with the prompt as they do in a chat's
 [Send box](#send-a-message): paste them into the prompt box or drop them on
@@ -149,10 +150,11 @@ running now, as small cards linked to it; each goes away when it finishes.
 Past six, the first five show and the rest fold into *+N more running*; click
 it to show them all (**Show fewer** folds them again).
 
-Click one (or its row under [Agents in this chat](#agents-in-this-chat)) to
-see what it is doing: its state, model, time and tokens, its latest steps,
-its latest message, the task it was given, its workflow and phase (or its
-type) and the chat that started it. The **←** button at the top, with that
+Click one (or its row in the [Agents in this chat](#agents-in-this-chat)
+pop-up) to see what it is doing: its state, a short list of facts (model,
+time, tokens, its workflow and phase or its type, and the chat that started
+it, a button back to that chat), its latest steps as a timeline, its latest
+message and the task it was given. The **←** button at the top, with that
 chat's name, goes back to its details.
 
 A subagent runs inside the chat that started it, and only that chat can reach
@@ -225,16 +227,36 @@ use it. Enter sends, Shift+Enter adds a line.
 
 ### Agents in this chat
 
-**Agents in this chat (N)** is one line, with how many are running. Click it
-to open the workflows and subagents the chat started in a pop-up over the
-board, with their state, model, time and tokens, and a running one's current
-step. Click one to see what it is doing in the pop-up (**← All agents** goes
-back).
+**Agents in this chat** is one row, with how many agents there are and how
+many run now. Click it to open the workflows and subagents the chat started
+in a pop-up over the board. The pop-up has two panes: the agents on the left,
+and the one picked on the right.
 
-A workflow has **Ask it to stop this workflow** while it runs and **Ask it to
-resume this workflow** once it stopped or failed; each sends the chat a
-message asking for that. The chat's details stay underneath; ×, Esc or a
-click outside closes the pop-up.
+- On the left, each workflow is a card: its name, its state (*Running*,
+  *Done*, *Failed*, *Stopped* …), how long it has gone on, how far it got
+  (*3 of 5 done*, as words and as a thin bar, failed ones in red) and its
+  agents under their phases. The chat's own subagents are a card too. Each
+  agent has an icon for its state (a turning ring while it runs, a check, a
+  cross, a clock while it waits) and, quietly at the right, how long it ran;
+  what a running one is doing now is in its tooltip. A card folds and
+  unfolds.
+- Click an agent to see it on the right while the list stays where it is: its
+  state, model, time, tokens and tool calls (when the server knows them), the
+  chat that started it (click it to go back to that chat), its steps as a
+  timeline, its latest message and the task it was given. The pop-up opens on
+  the first agent that is running (its card unfolds if you had folded it), or
+  with nothing picked if none runs.
+- A narrow window shows one pane at a time: **← All agents** goes back to the
+  list.
+
+A workflow has **Ask to stop** in its card while it runs and **Ask to
+resume** once it stopped or failed; each sends the chat a message asking for
+that. The chat's details stay underneath; ×, Esc or a click outside closes
+the pop-up.
+
+With the keyboard: Tab enters the list at the picked row, ↑ and ↓ move the
+pick (also from a card's header or its button), Home and End go to the first
+and last row in view, and Enter or Space pick the row in focus.
 
 ### Continue in IDE
 

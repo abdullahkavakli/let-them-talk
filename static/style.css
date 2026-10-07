@@ -30,6 +30,10 @@
   --field-hover: rgba(118, 118, 128, .2);
   --card-shadow: 0 1px 2px rgba(0, 0, 0, .06), 0 6px 20px rgba(0, 0, 0, .06);
   --scrim: rgba(0, 0, 0, .2);
+  /* small text on a fill (a card, a field): --muted, a little nearer the text colour to stay readable */
+  --quiet: color-mix(in srgb, var(--muted) 78%, var(--text));
+  /* the one chevron (pointing down; turned for the other ways), drawn in --muted */
+  --chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%236e6e73' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.6 4.4 6 7.8l3.4-3.4'/%3E%3C/svg%3E");
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -61,6 +65,7 @@
     --field-hover: rgba(118, 118, 128, .34);
     --card-shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 6px 20px rgba(0, 0, 0, .35);
     --scrim: rgba(0, 0, 0, .45);
+    --chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%2398989d' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.6 4.4 6 7.8l3.4-3.4'/%3E%3C/svg%3E");
     color-scheme: dark;
   }
 }
@@ -74,7 +79,7 @@
   --glass-glow: rgba(255, 255, 255, .07);
   --glass-shadow: 0 10px 40px rgba(0, 0, 0, .55); --field: rgba(118, 118, 128, .24);
   --field-hover: rgba(118, 118, 128, .34); --card-shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 6px 20px rgba(0, 0, 0, .35);
-  --scrim: rgba(0, 0, 0, .45);
+  --scrim: rgba(0, 0, 0, .45); --chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%2398989d' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.6 4.4 6 7.8l3.4-3.4'/%3E%3C/svg%3E");
 }
 
 * { box-sizing: border-box; }
@@ -118,9 +123,27 @@ h2 { font-size: 12px; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
   display: inline-flex; align-items: center; justify-content: center;
 }
 .icon-btn:hover { color: var(--text); background: var(--panel-2); }
-:is(.btn, .icon-btn, .fold, .browse-item, summary, select, .node, .wire-label):focus-visible {
+:is(.btn, .icon-btn, .fold, .browse-item, summary, .node, .wire-label):focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
+
+/* Drop-downs stay native selects (the keyboard and the system's own menu work as
+   they do everywhere), drawn as the app's fields: a fill, round corners, the
+   shared chevron and, focused, the accent halo of the Send box. */
+select {
+  -webkit-appearance: none; appearance: none;
+  font: inherit; color: var(--text); cursor: pointer;
+  background: var(--field) var(--chev) no-repeat right 10px center / 12px;
+  border: 1px solid transparent; border-radius: 12px; padding: 8px 32px 8px 12px;
+  transition: background-color .15s ease, border-color .15s ease, box-shadow .15s ease;
+}
+select:hover:not(:disabled) { background-color: var(--field-hover); }
+select:focus-visible {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3.5px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+select:disabled { opacity: .5; cursor: default; }
+select option { background: var(--panel); color: var(--text); }
 
 /* top bar */
 .topbar {
@@ -131,10 +154,7 @@ h2 { font-size: 12px; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
 }
 .brand { margin: 0; font-weight: 650; font-size: 15px; }
 .board-pick { display: flex; align-items: center; gap: 6px; color: var(--muted); }
-.board-pick select {
-  font: inherit; color: var(--text); background: var(--panel-2);
-  border: 1px solid var(--border); border-radius: 7px; padding: 6px 8px; max-width: 280px;
-}
+.board-pick select { max-width: 280px; }
 .spacer { flex: 1; }
 .hint { color: var(--muted); font-size: 13px; }
 .hint-port { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); vertical-align: -1px; }
@@ -271,39 +291,98 @@ body.connecting .node:not(.ended) { cursor: copy; }
 :is(#drawer, #wire-pop, #agents-pop) .close { position: absolute; right: 10px; top: 8px; }
 :is(#drawer, #wire-pop, #agents-pop) h3 { margin: 0 0 10px; font-size: 15px; padding-right: 24px; }
 :is(#drawer, #wire-pop, #agents-pop) dl { display: grid; grid-template-columns: 90px 1fr; gap: 6px 10px; margin: 0 0 14px; font-size: 13px; }
+/* One chevron for every fold, drawn the same: on the left of its line, pointing
+   right when shut and down when open (never the browser's own marker). A row
+   that opens a pop-up ends with the same chevron, pointing right; the folder
+   box's drop-down shows it down. */
+:is(details.info, details.conns, details.run, #activity-box) > summary {
+  display: flex; align-items: center; list-style: none; cursor: pointer; user-select: none;
+}
+:is(details.info, details.conns, #activity-box) > summary { gap: 8px; }
+details.run > summary { gap: 8px 11px; }
+:is(details.info, details.conns, details.run, #activity-box) > summary::-webkit-details-marker { display: none; }
+:is(details.info, details.conns, details.run, #activity-box) > summary::before, .agents-line::after, .conn-row::after {
+  content: ""; flex: none; width: 12px; height: 12px; background: var(--chev) center / 12px no-repeat;
+  transform: rotate(-90deg); transition: transform .15s ease;
+}
+:is(details.info, details.conns, details.run, #activity-box)[open] > summary::before { transform: none; }
+/* the line under a chat's title: its state, model and where it runs; folds out to the facts */
 #drawer details.info { margin: -4px 0 14px; }
-#drawer details.info > summary { cursor: pointer; }
+#drawer details.info > summary { min-height: 24px; }
+#drawer details.info > summary:hover { color: var(--text); }
 #drawer details.info[open] > summary { margin-bottom: 8px; }
-#drawer details.info dl { margin: 0; }
+#drawer details.info dl { margin: 0; padding: 10px 14px; border-radius: 14px; background: var(--field); }
 :is(#drawer, #wire-pop, #agents-pop) dt { color: var(--muted); }
 :is(#drawer, #wire-pop, #agents-pop) dd { margin: 0; word-break: break-word; }
-/* a chat's Connections fold; one opens in the pop-up below */
+/* a chat's Connections fold: its arrows as one list of rows; one opens in the pop-up below */
 #drawer details.conns { margin-top: 18px; }
-#drawer details.conns > summary { cursor: pointer; list-style: none; display: flex; align-items: center; }
-#drawer details.conns > summary::-webkit-details-marker { display: none; }
-#drawer details.conns > summary::before { content: "▸"; color: var(--muted); margin-right: 6px; font-size: 11px; }
-#drawer details.conns[open] > summary::before { content: "▾"; }
 #drawer details.conns > summary h2 { margin: 0; }
 #drawer details.conns[open] > summary { margin-bottom: 8px; }
-#wire-pop, #agents-pop { width: min(620px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
-:is(#wire-pop, #agents-pop)[open] { display: flex; flex-direction: column; }
-:is(#wire-pop, #agents-pop) .pop-body { overflow-y: auto; padding: 18px 20px; }
-/* a chat's agents: one line in its details; the list opens in its pop-up */
+.conn-list { list-style: none; margin: 0; padding: 0; border-radius: 14px; background: var(--field); overflow: hidden; }
+.conn-list li + li { border-top: 1px solid var(--border); }
+.conn-row {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px; padding: 8px 12px 8px 14px;
+  border: 0; background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+  transition: background-color .15s ease;
+}
+.conn-row:hover { background: var(--field-hover); }
+.conn-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.conn-row .dir { flex: none; color: var(--quiet); }
+.conn-row .name { flex: none; max-width: 50%; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conn-row .why { flex: 1; min-width: 0; color: var(--quiet); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conn-row .name:last-of-type { flex: 1; max-width: none; }
+#wire-pop { width: min(620px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
+#wire-pop[open] { display: flex; flex-direction: column; }
+#wire-pop .pop-body { overflow-y: auto; padding: 18px 20px; }
+/* a chat's agents: one row in its details, with how many there are and how many
+   run now; the list opens in its pop-up */
 #drawer .agents-line {
-  display: flex; align-items: center; width: 100%; margin: 18px 0 14px; padding: 10px 14px;
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; margin: 18px 0 14px; padding: 0 14px 0 16px;
   border: 0; border-radius: 14px; background: var(--field); color: var(--text);
   font: inherit; font-size: 13px; font-weight: 600; text-align: left; cursor: pointer;
+  transition: background-color .15s ease;
 }
-#drawer .agents-line .muted { font-weight: 400; white-space: pre; }
-#drawer .agents-line::after { content: "›"; margin-left: auto; padding-left: 8px; color: var(--muted); font-size: 18px; line-height: 1; }
+#drawer .agents-line .agents-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+#drawer .agents-line .count {
+  min-width: 22px; padding: 1px 7px; border-radius: 999px; background: var(--field-hover); color: var(--quiet);
+  font-size: 12px; font-weight: 600; text-align: center; font-variant-numeric: tabular-nums;
+}
+#drawer .agents-line .running-now {
+  display: inline-flex; align-items: center; gap: 7px; color: var(--accent); font-size: 12px; font-weight: 500; white-space: nowrap;
+}
+.running-now i { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: sub-pulse 1.6s ease-in-out infinite; }
 #drawer .agents-line:hover { background: var(--field-hover); }
 #drawer .agents-line:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* The agents pop-up is a window of two panes, as a Mac's list and its inspector:
+   the agents on the left, the picked one's details on the right, each
+   scrolling on its own. A narrow window shows one pane at a time. */
+#agents-pop { width: min(980px, calc(100vw - 32px)); height: min(680px, calc(100vh - 48px)); max-height: none; overflow: hidden; }
+#agents-pop[open] { display: flex; }
 #agents-pop h2 { font-family: inherit; font-size: 12px; font-weight: 600; letter-spacing: 0; color: var(--muted); }
-#agents-pop .pop-note { margin: -4px 0 14px; padding-right: 44px; }
-/* an agent's details: back to the chat (in the panel) or to the list (in the pop-up) */
+.pop-side {
+  flex: 0 0 clamp(300px, 40%, 380px); min-width: 0; overflow: hidden auto; padding: 18px 12px 16px 16px;
+  border-right: 1px solid var(--border); background: rgb(var(--glass-rgb) / .3);
+}
+#agents-pop .pop-side h3 { padding-right: 0; }
+.pop-side .pop-note { margin: -4px 0 14px; }
+.pop-main { flex: 1; min-width: 0; overflow: hidden auto; padding: 18px 22px 22px 24px; }
+.pop-main h3 { overflow-wrap: anywhere; }
+.pop-side, .pop-main { scroll-padding: 12px; }
+/* nothing picked yet */
+.pop-empty { height: 100%; min-height: 200px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 0 24px; }
+.pop-empty p { margin: 2px 0; }
+.pop-empty .pop-empty-title { font-size: 15px; font-weight: 600; }
+/* an agent's details: back to the chat (in the panel), or to the list (in a pop-up too narrow for both) */
 :is(#drawer, #agents-pop) .btn.back {
   display: block; max-width: calc(100% - 48px); margin: 0 0 12px; padding: 5px 12px; font-size: 12.5px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#agents-pop .btn.back { display: none; }
+@media (max-width: 720px) {
+  #agents-pop .pop-side, #agents-pop .pop-main { flex: 1 1 100%; border-right: 0; }
+  #agents-pop:not([data-pane="detail"]) .pop-main, #agents-pop[data-pane="detail"] .pop-side { display: none; }
+  #agents-pop .pop-side h3 { padding-right: 44px; }
+  #agents-pop .btn.back { display: block; }
 }
 .note-card { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; background: var(--panel-2); }
 .note-card header { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; }
@@ -326,6 +405,18 @@ body.connecting .node:not(.ended) { cursor: copy; }
   border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; resize: vertical;
 }
 .rename-box:focus-visible { outline: 2px solid var(--accent); border-color: var(--accent); }
+/* The buttons in a chat's details sit in rows of equal ones, all one height:
+   each takes half a row, so two share one and a button that is alone takes the
+   whole line (no ragged pills); a long label wraps in its half. Blue is the
+   main action, grey the rest, red what can't be undone. The ultracode row is its own. */
+.drawer-actions:not(.ultracode) > .btn {
+  flex: 1 1 calc(50% - 4px); min-height: 34px; padding: 6px 14px; line-height: 1.3;
+  display: inline-flex; align-items: center; justify-content: center; text-align: center;
+}
+.drawer-actions > label.check { flex: 1 1 100%; display: flex; align-items: center; gap: 8px; margin: 2px 0 -2px 2px; color: var(--muted); }
+.drawer-actions > label.check input { margin: 0; accent-color: var(--accent); }
+/* what can be done with the card itself, apart from the rest of its details */
+.drawer-foot { margin-top: 20px; padding-top: 8px; border-top: 1px solid var(--border); }
 .chat { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
 .msg { display: flex; flex-direction: column; align-items: flex-start; max-width: 88%; }
 .msg.user { align-self: flex-end; align-items: flex-end; }
@@ -418,51 +509,87 @@ dialog textarea:focus-visible, dialog input:focus-visible { outline: 2px solid v
 }
 body.offline #world { opacity: .45; transition: opacity .3s; }
 
-/* agents in a chat (details panel) */
-details.run {
-  border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2);
-  margin: 0 0 8px; overflow: hidden;
-}
+/* agents in a chat (the pop-up): a workflow, or the chat's own subagents, is a
+   card: its name, how it stands, how far it got and what can be asked of it,
+   then its agents under quiet phase headers */
+details.run { margin: 0 0 10px; border-radius: 16px; background: var(--field); overflow: hidden; }
 details.run > summary {
-  display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px;
-  cursor: pointer; list-style: none;
+  flex-wrap: wrap; padding: 11px 12px 11px 18px; border-radius: 16px; transition: background-color .15s ease;
 }
-details.run > summary::-webkit-details-marker { display: none; }
-details.run > summary::after { content: "▸"; margin-left: auto; color: var(--muted); }
-details.run[open] > summary::after { content: "▾"; }
-details.run > summary .dot { margin-top: 5px; }
-.run-head { min-width: 0; flex: 1; }
-.run-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.phase-title {
-  font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
-  padding: 6px 10px 2px; border-top: 1px solid var(--border);
+details.run[open] > summary { border-radius: 16px 16px 0 0; }
+details.run > summary:focus-visible { outline-offset: -2px; }
+details.run > summary:hover { background: color-mix(in srgb, var(--field) 70%, transparent); }
+.run-name { flex: 1; min-width: 0; font-weight: 600; line-height: 26px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-action { flex: none; min-height: 26px; padding: 0 10px; font-size: 12px; }
+.run-status { flex: 0 0 100%; display: flex; flex-direction: column; gap: 8px; padding-left: 23px; }
+.run-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.run-time, .run-count { font-size: 11.5px; color: var(--quiet); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.run-count { margin-left: auto; }
+.run-status .bar { display: flex; height: 4px; border-radius: 2px; overflow: hidden; background: var(--field-hover); }
+.run-status .bar i { display: block; height: 100%; background: var(--ok); }
+.run-status .bar.running i { background: var(--accent); }
+.run-status .bar i.bad { background: var(--error); }
+.phase-title { display: flex; justify-content: space-between; gap: 8px; padding: 9px 16px 3px; font-size: 11.5px; font-weight: 600; color: var(--quiet); }
+.phase-title .phase-counts { font-weight: 400; }
+details.run > p { margin: 2px 14px 12px; }
+details.run > .note-card { margin: 0 10px 10px; background: var(--panel); border-color: transparent; }
+.agent-row {
+  display: flex; align-items: center; gap: 9px; width: 100%; min-height: 32px; padding: 5px 10px; border: 0; border-radius: 10px;
+  background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+  transition: background-color .15s ease, color .15s ease;
 }
-.agent-row { display: flex; gap: 8px; padding: 5px 10px; align-items: flex-start; }
-.agent-row .dot { margin-top: 5px; }
-.agent-main { min-width: 0; flex: 1; }
-.agent-label { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agent-meta { font-size: 11.5px; color: var(--muted); }
-.agent-last { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dot.a-running { background: var(--ok); box-shadow: 0 0 0 3px var(--accent-soft); }
-.dot.a-done, .dot.a-completed { background: var(--ended); }
-.dot.a-stopped, .dot.a-killed, .dot.a-failed { background: var(--error); }
-.dot.a-queued { background: var(--busy); }
-.dot.a-not-run, .dot.a-skipped, .dot.a-unknown { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ended); }
+details.run > .agent-row { width: calc(100% - 12px); margin: 0 6px; }
+details.run > .agent-row:last-child { margin-bottom: 6px; }
+.agent-row:hover { background: var(--field-hover); }
+.agent-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.agent-row[aria-current] { background: var(--accent); color: var(--on-accent); }
+.agent-row[aria-current]:focus-visible { outline-color: var(--on-accent); outline-offset: -4px; }
+.agent-row .agent-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-row .agent-time { flex: none; color: var(--quiet); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.agent-row[aria-current] .agent-time { color: inherit; opacity: .85; }
+/* a state, drawn the same in a row and in a badge: a turning ring while it runs,
+   a check, a cross, a stop square, a clock, or an empty ring */
+.state-icon { flex: none; width: 16px; height: 16px; }
+:is(.state-icon, .state-badge) { --ico: var(--muted); --ico-fg: var(--on-accent); }
+:is(.state-icon, .state-badge).running { --ico: var(--accent); }
+:is(.state-icon, .state-badge).done { --ico: var(--ok); }
+:is(.state-icon, .state-badge).failed { --ico: var(--error); }
+:is(.state-icon, .state-badge).stopped { --ico: var(--warn); }
+.state-icon .disc { fill: var(--ico); }
+.state-icon .glyph { fill: none; stroke: var(--ico-fg); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.state-icon .ring { fill: none; stroke: var(--ico); stroke-width: 1.8; stroke-linecap: round; }
+.state-icon .faint { opacity: .25; }
+.state-icon .dashed { stroke-dasharray: 2.2 2.4; }
+.state-icon .arc { transform-origin: 8px 8px; animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.agent-row[aria-current] .state-icon { --ico: var(--on-accent); --ico-fg: var(--accent); }
+.state-badge {
+  display: inline-flex; align-items: center; gap: 5px; padding: 1px 9px; border-radius: 999px; white-space: nowrap;
+  font-size: 11.5px; font-weight: 600; color: color-mix(in srgb, var(--ico) 70%, var(--text));
+  background: color-mix(in srgb, var(--ico) 14%, transparent);
+}
+.state-badge:has(.state-icon) { padding-left: 6px; }
+.state-badge .state-icon { width: 12px; height: 12px; }
+.dot.a-running { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 
 .badge.win { color: var(--accent); border-color: var(--accent); }
 
 /* New board: folder browser */
 .folder-row { display: flex; gap: 8px; }
 .folder-row input { flex: 1; }
-/* a folder box with its own drop-down (▾); the list opens in place, below the row */
+/* a folder box with its own drop-down (the chevron, turned up while open); the list opens in place, below the row */
 .combo { position: relative; flex: 1; min-width: 0; display: flex; }
 .combo input { padding-right: 36px; }
 .combo-toggle {
   position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
-  width: 30px; height: 30px; border: 0; border-radius: 8px; background: none;
-  color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer;
+  width: 30px; height: 30px; padding: 0; border: 0; border-radius: 8px; background: none; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
 }
-.combo-toggle:hover, .combo-toggle[aria-expanded="true"] { background: var(--field-hover); color: var(--text); }
+.combo-toggle::before {
+  content: ""; width: 12px; height: 12px; background: var(--chev) center / 12px no-repeat; transition: transform .15s ease;
+}
+.combo-toggle[aria-expanded="true"]::before { transform: rotate(180deg); }
+.combo-toggle:hover, .combo-toggle[aria-expanded="true"] { background: var(--field-hover); }
 .combo-list {
   list-style: none; margin: 6px 0 0; padding: 4px; max-height: 196px; overflow-y: auto;
   border-radius: 12px; background: var(--field); border: 1px solid var(--border);
@@ -484,7 +611,10 @@ details.run > summary .dot { margin-top: 5px; }
   font: inherit; font-size: 13px; text-align: left; padding: 5px 8px; border: 0; border-radius: 6px;
   background: none; color: var(--text); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.browse-item::before { content: "▸ "; color: var(--muted); }
+.browse-item::before {
+  content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -2px;
+  background: var(--chev) center / 12px no-repeat; transform: rotate(-90deg);
+}
 .browse-item:hover { background: var(--accent-soft); }
 
 .badge.model { color: var(--text); }
@@ -494,11 +624,7 @@ details.run > summary .dot { margin-top: 5px; }
 .node .meta.badges .badge.state { flex-shrink: 0; min-width: auto; }
 
 /* Activity: a fold-away section in the sidebar */
-#activity-box > summary { cursor: pointer; list-style: none; display: flex; align-items: center; }
-#activity-box > summary::-webkit-details-marker { display: none; }
 #activity-box > summary h2 { margin: 0; }
-#activity-box > summary::before { content: "▸"; color: var(--muted); margin-right: 6px; font-size: 11px; }
-#activity-box[open] > summary::before { content: "▾"; }
 #activity-box[open] > summary { margin-bottom: 8px; }
 #activity-count { font-weight: 400; text-transform: none; letter-spacing: 0; }
 
@@ -526,17 +652,9 @@ body:has(.resizer.active) { cursor: col-resize; user-select: none; }
   .resizer.edge::after { left: 2px; }
 }
 
-/* Activity toggle: a clear chevron, a hover highlight and a Show/Hide hint */
-#activity-box > summary {
-  padding: 6px 8px; margin: 0 -8px; border-radius: 7px; user-select: none;
-}
+/* Activity toggle: a hover highlight and a Show/Hide hint beside the chevron */
+#activity-box > summary { padding: 6px 8px; margin: 0 -8px; border-radius: 7px; }
 #activity-box > summary:hover { background: var(--panel-2); }
-#activity-box > summary::before {
-  content: ""; font-size: 0; width: 7px; height: 7px; margin: 0 12px 0 2px;
-  border-right: 2px solid var(--text); border-bottom: 2px solid var(--text);
-  transform: rotate(-45deg); transition: transform .15s ease;
-}
-#activity-box[open] > summary::before { content: ""; transform: rotate(45deg); }
 #activity-box > summary::after { content: "Show"; margin-left: auto; font-size: 12px; color: var(--accent); }
 #activity-box[open] > summary::after { content: "Hide"; }
 #activity-box > summary h2 { color: var(--text); }
@@ -551,10 +669,6 @@ dialog label.choice:hover { background: var(--panel-2); }
 dialog label.choice:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
 dialog label.choice strong { display: block; margin-bottom: 2px; }
 dialog input[type="radio"] { width: auto; flex: none; margin: 3px 0 0; accent-color: var(--accent); }
-dialog select {
-  font: inherit; color: var(--text); background: var(--panel-2);
-  border: 1px solid var(--border); border-radius: 8px; padding: 7px 8px;
-}
 .n-grid { display: grid; grid-template-columns: 110px 1fr; gap: 8px 12px; align-items: center; margin-top: 10px; }
 .n-grid label { margin: 0; }
 @media (max-width: 600px) {
@@ -565,7 +679,7 @@ dialog select {
 
 @media (prefers-reduced-motion: reduce) {
   .wire.sending { animation: none; }
-  #activity-box > summary::before, .btn, .icon-btn, .avail-row, .browse-item, .node, .resizer::after { transition: none; }
+  .btn, .icon-btn, .avail-row, .browse-item, .node, .resizer::after { transition: none; }
 }
 
 /* ------------------------------------------------------------ Liquid Glass
@@ -624,7 +738,11 @@ body:has(#drawer:not([hidden])) .topbar { right: calc(var(--drawer) + 24px); }
 .topbar .hint { gap: 5px; }  /* a flex row drops the spaces around the handle dot */
 .topbar .hint { pointer-events: none; }  /* only words: the board under it stays draggable */
 #drawer:focus { outline: none; }  /* focused as a whole when opened from the keyboard */
-.topbar .board-pick select { background: transparent; border: 0; font-weight: 600; padding: 4px 2px; }
+.topbar .board-pick select {
+  background-color: transparent; border: 0; font-weight: 600; padding: 4px 20px 4px 2px; background-position: right 2px center;
+}
+.topbar .board-pick { transition: background-color .15s ease; }
+.topbar .board-pick:hover { background: rgb(var(--glass-rgb) / calc(var(--ga) * .9)); }
 .topbar .btn.primary { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35), 0 6px 18px rgba(0, 102, 204, .28); }
 @media (max-width: 900px) { .topbar .hint { display: none; } }
 
@@ -669,11 +787,14 @@ dialog::backdrop { background: var(--scrim); }
 .sidebar .btn, #drawer .btn:not(.primary), dialog .btn:not(.primary) { background: var(--field); border-color: transparent; }
 .sidebar .btn:hover, #drawer .btn:not(.primary):hover, dialog .btn:not(.primary):hover,
 .avail-row:hover, #activity-box > summary:hover, dialog label.choice:hover { background: var(--field-hover); }
-dialog textarea, dialog input:not([type="checkbox"]):not([type="radio"]), dialog select, .rename-box {
+dialog textarea, dialog input:not([type="checkbox"]):not([type="radio"]), .rename-box {
   background: var(--field); border-color: transparent; border-radius: 12px;
 }
 dialog label.choice { background: var(--field); border-color: transparent; border-radius: 16px; }
 dialog label.choice:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+/* red text on a faint red: what can't be undone */
+:is(.sidebar, #drawer, dialog) .btn.danger { background: color-mix(in srgb, var(--error) 8%, var(--field)); }
+:is(.sidebar, #drawer, dialog) .btn.danger:hover { background: color-mix(in srgb, var(--error) 16%, var(--field)); }
 
 /* The Send box, as Messages on a Mac: one rounded field holds the images and
    the text, with a round Send on the right. A clearer fill than the panel
@@ -830,10 +951,7 @@ dialog h2 { font-size: 22px; font-weight: 700; letter-spacing: -.3px; }
 .tint-pick { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; }
 .tint-pick input { flex: 1; min-width: 0; accent-color: var(--accent); }
 .ide-pick { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 13px; }
-.ide-pick select {
-  flex: 1; min-width: 0; font: inherit; color: var(--text); background: var(--field);
-  border: 1px solid transparent; border-radius: 10px; padding: 4px 8px;
-}
+.ide-pick select { flex: 1; min-width: 0; border-radius: 10px; padding: 5px 30px 5px 10px; }
 .ide-pick + p { margin: 6px 0 0; }
 .board-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .board-actions .btn { padding: 4px 12px; font-size: 12px; }
@@ -886,19 +1004,37 @@ body { font-family: var(--font-ui); }
 .sub-wire { fill: none; stroke: var(--muted); stroke-width: 1.25; opacity: .7; }
 @keyframes sub-in { from { opacity: 0; transform: translateY(-4px); } }
 @keyframes sub-pulse { 50% { box-shadow: 0 0 0 5px var(--accent-soft); } }
-@media (prefers-reduced-motion: reduce) { .sub, .sub .dot { animation: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .sub, .sub .dot, .running-now i, .state-icon .arc, .sub-step.now.running::before { animation: none; }
+  select, details > summary::before, .agents-line::after, .combo-toggle::before, .agent-row, .conn-row, .chip.link, .topbar .board-pick { transition: none; }
+}
 .sub.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft), var(--card-shadow); }
-/* a subagent's details */
-.sub-state { display: flex; align-items: center; gap: 8px; margin: 2px 0 12px; font-size: 13px; color: var(--muted); }
-.sub-steps { display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; }
-.sub-step { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 4px 10px; font-size: 12px; }
-.sub-step .mono { min-width: 0; overflow-wrap: anywhere; }
-.sub-step .small { flex: none; }
-.sub-step.now { background: var(--field); border-radius: 10px; padding: 8px 10px; font-size: 12.5px; }
-.sub-step:not(.now) .mono { color: var(--muted); }
-.agent-row[role="button"] { cursor: pointer; border-radius: 8px; }
-.agent-row[role="button"]:hover { background: var(--field-hover); }
-.agent-row[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* a subagent's details: how it stands and what it ran on, as a short list of
+   facts; its recent steps as a timeline (a dot each, the newest first and in
+   blue while it runs, the time at the right); then what it said and was asked */
+.sub-state { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: -4px 0 16px; font-size: 13px; color: var(--muted); }
+:is(#drawer, #agents-pop) dl.facts { display: block; margin: 0 0 20px; padding: 2px 14px; border-radius: 14px; background: var(--field); }
+dl.facts > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 36px; padding: 6px 0; }
+dl.facts > div + div { border-top: 1px solid var(--border); }
+:is(#drawer, #agents-pop) dl.facts dt { color: var(--quiet); }
+dl.facts dd { min-width: 0; text-align: right; }
+.chip.link { max-width: 100%; border: 0; font: inherit; font-weight: 600; color: var(--accent); cursor: pointer; transition: background-color .15s ease; }
+.chip.link:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.chip.link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sub-steps { margin: 0 0 20px; }
+.bubble + h2, .fold + h2 { margin-top: 20px; }
+.sub-step { position: relative; display: flex; align-items: baseline; gap: 14px; padding: 6px 0 6px 22px; font-size: 12px; }
+.sub-step::before { content: ""; position: absolute; left: 1px; top: 11px; width: 8px; height: 8px; border-radius: 50%; background: var(--ended); }
+.sub-step::after { content: ""; position: absolute; left: 4.25px; top: 22px; bottom: -8px; width: 1.5px; background: var(--border); }
+.sub-step:last-child::after { display: none; }
+.sub-step.now::before { background: var(--muted); }
+.sub-step.now.running::before {
+  background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+  animation: sub-pulse 1.6s ease-in-out infinite;
+}
+.sub-step .mono { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--quiet); }
+.sub-step.now .mono { color: var(--text); }
+.sub-step .when { flex: none; font-size: 11.5px; color: var(--quiet); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* An arrow's conversation: its first chat on the left, the other on the
    right, the app's notes centred; messages from before the arrow faded. */
