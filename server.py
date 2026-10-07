@@ -324,22 +324,27 @@ def session_model(sid):
 
 
 def session_permission_mode(sid):
-    """The permission mode of the chat's latest prompt (Claude Code notes it
-    on each prompt in the transcript), or None."""
+    """The chat's permission mode now, as `--permission-mode` takes it, or
+    None. Claude Code notes it on each prompt and at the end of each turn;
+    the latest note wins, however far back (one long turn can fill MBs)."""
     session_title(sid)  # finds the transcript
     path = title_cache.get(sid, {}).get("path")
     if path is None:
         return None
     try:
         with path.open("rb") as f:
-            f.seek(max(0, f.seek(0, 2) - MODEL_TAIL))
-            tail = f.read().splitlines()
+            end = f.seek(0, 2)
+            while end > 0:
+                start = max(0, end - MODEL_TAIL)
+                f.seek(start)
+                # 64 bytes more: a note cut in two by the previous chunk's start
+                found = re.findall(rb'"permissionMode":"(\w+)"', f.read(end - start + 64))
+                if found:
+                    mode = found[-1].decode()
+                    return "manual" if mode == "default" else mode
+                end = start
     except OSError:
         return None
-    for raw in reversed(tail):
-        found = re.search(rb'"permissionMode":"(\w+)"', raw)
-        if found:
-            return found.group(1).decode()
     return None
 
 
@@ -2245,6 +2250,7 @@ def remove_node(bid, body):
 # ------------------------------------------------ managing agents from here
 
 PERMISSION_MODES = ("auto", "acceptEdits", "plan", "manual", "dontAsk")
+CLI_MODES = PERMISSION_MODES + ("bypassPermissions",)  # a handoff passes on the chat's, whichever
 JOB_RE = re.compile(r"[0-9a-f]{8}")
 BG_LINE = re.compile(r"^backgrounded · ([0-9a-f]{8})", re.M)
 COPY_LINE = re.compile(r"started a copy as ([0-9a-f]{8})")
@@ -2281,16 +2287,17 @@ def _agent_name(prompt, name):
     return "agent " + name if RELAY_RE.fullmatch(name) else name
 
 
-def start_background(bid, body, add_dirs=(), near=None):
+def start_background(bid, body, add_dirs=(), near=None, modes=PERMISSION_MODES):
     """New agent, in the background: the prompt is its first real prompt.
     add_dirs are folders it may use besides its own; its card goes beside
-    the card of the session near, if there is room."""
+    the card of the session near, if there is room. modes are the permission
+    modes it may get."""
     prompt = str(body.get("prompt") or "").strip()
     if not prompt:
         raise ValueError("A background agent needs a prompt to start with.")
     folder = normalize_folder(str(body.get("folder") or ""))
     mode = body.get("permissionMode") or "auto"
-    if mode not in PERMISSION_MODES:
+    if mode not in modes:
         raise ValueError(f"Unknown permission mode: {mode}")
     name = _agent_name(prompt, body.get("name"))
     args = ["--bg", "--name", name, "--permission-mode", mode]
@@ -2494,6 +2501,10 @@ def start_handoff(bid, body):
         raise ValueError("This chat goes on as a background agent; hand off that one.")
     if not has_transcript(sid):
         raise ValueError("This chat has no saved conversation yet, so there is nothing to hand off.")
+    mode = session_permission_mode(sid)  # the new agent gets the same, or there is no handoff
+    if mode not in CLI_MODES:
+        raise ValueError(f"Couldn't tell this chat's permission mode ({mode or 'none found'}), "
+                         "so it wasn't handed off.")
     with lock:
         if any(l.get("from") == sid and l["state"] in ("writing", "starting") for l in launches.values()):
             raise ValueError("This chat is already being handed off.")
@@ -2563,19 +2574,22 @@ def _hand_off(lid, s):
         return step("failed", f"{label(s)} wrote no handoff, so no new agent was started. "
                               f"{said[:300] or _cli_error(proc, cwd)}", "error")
     step("starting", f"{label(s)} wrote its handoff ({doc}). Starting the new agent…")
-    mode = session_permission_mode(sid)
-    mode = "manual" if mode == "default" else mode
+    mode = session_permission_mode(sid)  # now: the chat may have changed it meanwhile
+    if mode not in CLI_MODES:
+        return step("failed", f"The handoff is in {doc}, but {label(s)}'s permission mode can't be "
+                              f"told now ({mode or 'none found'}), so no new agent was started.", "error")
     try:
         new = start_background(job["board"], {
             "prompt": f"Read the handoff document {doc} first, then continue the work it describes. "
                       f"The chat @{s.get('name')} wrote it so that you can take over from it.",
             "folder": cwd, "name": _handoff_name(s.get("name") or "chat"), "model": model,
-            "permissionMode": mode if mode in PERMISSION_MODES else "auto", "openTerminal": True,
-        }, add_dirs=[HANDOFF_DIR], near=sid)
+            "permissionMode": mode, "openTerminal": True,
+        }, add_dirs=[HANDOFF_DIR], near=sid, modes=CLI_MODES)
     except (ValueError, OSError, subprocess.SubprocessError) as e:
         return step("failed", f"The handoff is in {doc}, but the new agent didn't start: {e}", "error")
     job.update(doc=str(doc), jobId=new["jobId"])
-    step("done", f"{label(s)} handed off to \"{new['name']}\", which starts by reading {doc}.", "ok")
+    step("done", f"{label(s)} handed off to \"{new['name']}\" ({mode} mode, as {label(s)}), "
+                 f"which starts by reading {doc}.", "ok")
 
 
 def message_note(text):

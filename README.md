@@ -166,7 +166,11 @@ installed inside WSL, where the server runs.
   writes a handoff with your `/handoff` skill, then a new background agent in
   the chat's folder, with its model and permissions, starts by reading it;
   its card appears beside the chat's and its terminal opens. The chat itself
-  is left as it is: end it, or let it go on. Works for ended chats too.
+  is left as it is: end it, or let it go on. Works for ended chats too. The
+  new agent gets exactly the chat's permission mode, as its transcript last
+  notes it; if that can't be read, nothing is handed off. (A bypass-mode
+  chat needs Claude Code's bypass warning accepted once: `claude
+  --dangerously-skip-permissions`.)
 - **Arrange:** drag cards and the background; the mouse wheel zooms (down to
   zoom out, up to zoom in) around the pointer; drag a panel's inner edge to
   resize it (a line shows there as you point at it; double-click resets; or
