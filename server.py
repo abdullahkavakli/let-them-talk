@@ -2341,6 +2341,7 @@ def connect(bid, body):
             "id": uuid.uuid4().hex[:10], "from": src["sessionId"], "to": dst["sessionId"],
             "reason": reason, "createdAt": time.time(),
             "status": "sending" if sides else "sent", "notes": notes,
+            **({"team": str(body["team"])} if body.get("team") else {}),  # a team's: see start_team
         }
         board["connections"].append(conn)
         add_activity(board, f"Connected {label(src, board)} → {label(dst, board)}")
@@ -2560,11 +2561,11 @@ def _agent_name(prompt, name):
     return "agent " + name if RELAY_RE.fullmatch(name) else name
 
 
-def start_background(bid, body, add_dirs=(), near=None, modes=PERMISSION_MODES):
+def start_background(bid, body, add_dirs=(), near=None, modes=PERMISSION_MODES, spot=None):
     """New agent, in the background: the prompt is its first real prompt.
-    add_dirs are folders it may use besides its own; its card goes beside
-    the card of the session near, if there is room. modes are the permission
-    modes it may get."""
+    add_dirs are folders it may use besides its own; its card goes at spot,
+    else beside the card of the session near, if there is room. modes are
+    the permission modes it may get."""
     prompt = str(body.get("prompt") or "").strip()
     images = _read_images(body.get("images") or [])
     if not prompt and not images:
@@ -2596,7 +2597,7 @@ def start_background(bid, body, add_dirs=(), near=None, modes=PERMISSION_MODES):
         board = load_board(bid)
         if board is not None:  # None: deleted meanwhile (a handoff takes minutes)
             board.setdefault("adopt", []).append(job)
-            spot = near in board["nodes"] and beside(board, board["nodes"][near])
+            spot = spot or (near in board["nodes"] and beside(board, board["nodes"][near]))
             if spot:
                 board.setdefault("spots", {})[job] = spot
             add_activity(board, f"Started background agent \"{name}\" in {folder}")
@@ -2902,6 +2903,214 @@ def _hand_off(lid, s):
     job.update(doc=str(doc), jobId=new["jobId"])
     step("done", f"{label(s)} handed off to \"{new['name']}\" ({mode} mode, as {label(s)}), "
                  f"which starts by reading {doc}.", "ok")
+
+
+# New workflow with agents: a master and its team, each a background agent on
+# Opus in the folder you pick. The agents start first and wait: a background
+# agent needs a first prompt, so each one's says who it is and that the master
+# will message it its task. The master starts once they run, so its messages
+# find them, with your prompt and the plan (each agent's name, role and the
+# prompt you wrote for it). Then an arrow each way links the master with each
+# agent. Their first prompts already introduce them, so the arrows send no
+# notes: a note would have an agent start talking before it has its task.
+TEAM_MAX = 8
+TEAM_MODEL = "opus"
+ROLE_MAX = 24   # a role is part of its agent's name, "<master> - <role>", which stays within 60
+TEAM_WAIT = 90  # seconds the team's agents, then its master, get to show up running
+
+
+def team_spots(board, n):
+    """Spots for a master's card and its n agents': the agents in a column
+    right of the master (wide apart, for the two labels of an arrow each way),
+    which sits level with the column's middle; the first such place, from
+    free_slot's pick rightwards, where none overlaps a card."""
+    x, y = free_slot(board)
+    while True:
+        spots = [[x, y + (n - 1) * 75]] + [[x + 360, y + i * 150] for i in range(n)]
+        if not any(overlaps(board, *p) for p in spots):
+            return spots
+        x += 270
+
+
+def _team_plan(body):
+    """The team asked for, checked before anything starts. Names: the master's
+    (yours, else the prompt's first words) and "<master> - <role>" for each
+    agent, none taken by a running chat (messages find chats by name): the
+    master's gets a number if one is."""
+    prompt = str(body.get("prompt") or "").strip()
+    if not prompt:
+        raise ValueError("Say what the master should do.")
+    agents = body.get("agents")
+    if not isinstance(agents, list) or not 1 <= len(agents) <= TEAM_MAX:
+        raise ValueError(f"A team has 1 to {TEAM_MAX} agents.")
+    team, roles = [], {}
+    for i, a in enumerate(agents, 1):
+        a = a if isinstance(a, dict) else {}
+        role, task = " ".join(str(a.get("role") or "").split()), str(a.get("prompt") or "").strip()
+        if not role:
+            raise ValueError(f"Agent {i} needs a role.")
+        if len(role) > ROLE_MAX:
+            raise ValueError(f"Agent {i}'s role is too long; keep it to {ROLE_MAX} characters.")
+        if not task:
+            raise ValueError(f"Agent {i} ({role}) needs a prompt.")
+        if role.lower() in roles:
+            raise ValueError(f"Agents {roles[role.lower()]} and {i} are both \"{role}\"; "
+                             "give each its own role, as it is part of its name.")
+        roles[role.lower()] = i
+        team.append({"role": role, "prompt": task})
+    folder = normalize_folder(str(body.get("folder") or ""))
+    mode = body.get("permissionMode") or "auto"
+    if mode not in PERMISSION_MODES:
+        raise ValueError(f"Unknown permission mode: {mode}")
+    images = body.get("images") or []
+    _read_images(images)  # the master takes them; checked now, before any agent starts
+    words = " ".join(re.sub(r"[^\w\s-]", "", prompt).split()[:3])
+    base = _agent_name(prompt, body.get("name") or words)[:30].strip()
+    taken = {s["name"] for s in live_sessions() if s.get("platform") == "wsl"}
+    master, n = base, 1
+    while master in taken or any(f"{master} - {a['role']}" in taken for a in team):
+        n += 1
+        master = f"{base} {n}"
+    for a in team:
+        a["name"] = f"{master} - {a['role']}"
+    return {"prompt": prompt, "master": master, "agents": team, "folder": folder, "mode": mode,
+            "images": images, "ultracode": body.get("ultracode") is True}
+
+
+# Names have spaces, so the prompts quote them and say what SendMessage's `to` takes.
+def _waiting_prompt(a, master):
+    return (f"[{APP_NAME}] You are the {a['role']} in a team of agents your user started from {APP_NAME}. "
+            f"Your name is \"{a['name']}\" and the team's master is \"{master}\". Don't start any work yet: "
+            f"the master will message you your task. When it does, do it, then report back with SendMessage "
+            f"(to: \"{master}\"): what you did and what you found. If anything about it is unclear, ask the "
+            f"master the same way. For now, only reply that you are ready.")
+
+
+def _master_prompt(team, running, missing):
+    lines = [team["prompt"], "", f"[{APP_NAME}] You are \"{team['master']}\", the master of a team of background "
+             "agents your user started for this. Each one runs in this folder and waits for its task from you:"]
+    lines += [f"- \"{a['name']}\", the {a['role']}: {a['prompt']}" for a in running]
+    if missing:
+        lines.append("These agents couldn't be started, so do their part yourself:")
+        lines += [f"- the {a['role']}: {a['prompt']}" for a in missing]
+    lines.append("Send each agent its task with SendMessage (to: its name, as above), with what it needs to "
+                 "know. They report back to you with SendMessage. Coordinate their work, check their reports, "
+                 "and tell your user the result once it is all done.")
+    return "\n".join(lines)
+
+
+def _running_jobs(jobs, until):
+    """{job: session} for the background agents jobs that run and can take
+    messages; waits for all of them until the time until."""
+    found = {}
+    while True:
+        for s in live_sessions():
+            if s.get("jobId") in jobs and s.get("running") and not s.get("messageBlock"):
+                found[s["jobId"]] = s
+        if len(found) == len(jobs) or time.time() >= until:
+            return found
+        time.sleep(1.5)
+
+
+def start_team(bid, body):
+    team = _team_plan(body)
+    lid = uuid.uuid4().hex[:10]
+    launches[lid] = {"id": lid, "board": bid, "at": time.time(), "kind": "team", "state": "starting",
+                     "detail": f"Starting team \"{team['master']}\": its {len(team['agents'])} agents, then "
+                               "the master. They will appear on this board in a moment."}
+    threading.Thread(target=_run_team, args=(lid, team), daemon=True).start()
+    return {"launchId": lid, "name": team["master"], "agents": [a["name"] for a in team["agents"]]}
+
+
+def _run_team(lid, team):
+    try:
+        _start_team(lid, team)
+    except Exception as e:  # or it says "starting" for good
+        traceback.print_exc()
+        launches[lid].update(state="failed", detail=f"Starting the team stopped on an error: {e}", at=time.time())
+
+
+def _start_team(lid, team):
+    job, master = launches[lid], team["master"]
+    bid = job["board"]
+    said = lambda why: why.strip().rstrip(".") + "."  # Claude Code's words, as a sentence
+
+    def step(state, detail, level=None):
+        job.update(state=state, detail=detail, at=time.time())
+        if level:
+            with lock:
+                board = load_board(bid)
+                if board is not None:
+                    add_activity(board, detail, level)
+                    save_board(board)
+
+    with lock:
+        board = load_board(bid)
+        spots = team_spots(board, len(team["agents"])) if board else [None] * (len(team["agents"]) + 1)
+    common = {"folder": team["folder"], "model": TEAM_MODEL, "permissionMode": team["mode"],
+              "ultracode": team["ultracode"]}
+    failed = []  # (agent, why), in the master's plan as missing
+    for a, spot in zip(team["agents"], spots[1:]):
+        try:
+            a["jobId"] = start_background(bid, {**common, "name": a["name"], "prompt": _waiting_prompt(a, master)},
+                                          spot=spot)["jobId"]
+        except (ValueError, OSError, subprocess.SubprocessError) as e:
+            failed.append((a, str(e)))
+    started = [a for a in team["agents"] if a.get("jobId")]
+    if started:
+        step("starting", f"Team \"{master}\": waiting for its agents to start…")
+        found = _running_jobs({a["jobId"] for a in started}, time.time() + TEAM_WAIT)
+        for a in started:
+            if a["jobId"] in found:
+                a["session"] = found[a["jobId"]]
+            else:
+                failed.append((a, f"it wasn't running after {TEAM_WAIT} seconds"))
+    running = [a for a in team["agents"] if a.get("session")]
+    if not running:
+        return step("failed", f"No agent of team \"{master}\" started, so the master wasn't started either. "
+                              f"\"{failed[0][0]['name']}\": {said(failed[0][1])}", "error")
+    step("starting", f"Team \"{master}\": {len(running)} agents wait; starting the master…")
+    try:
+        new = start_background(bid, {**common, "name": master, "images": team["images"],
+                                     "prompt": _master_prompt(team, running, [a for a, _ in failed])},
+                               spot=spots[0])
+    except (ValueError, OSError, subprocess.SubprocessError) as e:
+        return step("failed", f"The master of team \"{master}\" didn't start: {said(str(e))} Its {len(running)} agents "
+                              "are running and wait for it; delete them if you don't need them.", "error")
+    found = _running_jobs({new["jobId"]}, time.time() + TEAM_WAIT)
+    if new["jobId"] not in found:
+        return step("failed", f"The master \"{master}\" started, but didn't show up running within {TEAM_WAIT} "
+                              "seconds, so it isn't linked with its agents; it still has their names.", "error")
+    msid = found[new["jobId"]]["sessionId"]
+    live = live_sessions()
+    with lock:  # their cards, at the spots kept for them, before the arrows
+        board = load_board(bid)
+        if board is not None and sync_board(board, live):
+            save_board(board)
+    unlinked = []
+    for a in running:
+        sid, made = a["session"]["sessionId"], []
+        try:
+            for src, dst, why in ((msid, sid, "task"), (sid, msid, "report")):
+                made.append(connect(bid, {"from": src, "to": dst, "reason": why, "team": master,
+                                          "notifyFrom": False, "notifyTo": False})["id"])
+        except ValueError as e:  # an arrow each way or none
+            if made:
+                with lock:
+                    board = load_board(bid)
+                    board["connections"] = [c for c in board["connections"] if c["id"] not in made]
+                    save_board(board)
+            unlinked.append((a, str(e)))
+    roles = ", ".join(a["role"] for a in running)
+    if not failed and not unlinked:
+        return step("done", f"Team \"{master}\" is running: the master and its {len(running)} agents ({roles}), "
+                            "linked both ways. The master hands out the tasks.", "ok")
+    parts = [f"Team \"{master}\" is running with {len(running)} of {len(team['agents'])} agents."]
+    parts += [f"\"{a['name']}\" didn't start: {said(why)}" for a, why in failed]
+    if failed:
+        parts.append(f"The master does {'its' if len(failed) == 1 else 'their'} part itself.")
+    parts += [f"\"{a['name']}\" isn't linked with the master: {said(why)}" for a, why in unlinked]
+    step("failed", " ".join(parts), "error")
 
 
 def message_note(text):
@@ -3854,8 +4063,8 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             length = -1
         # a Send, and a new agent's first prompt, may carry images
-        if not 0 <= length <= (SEND_BODY if parts[-1:] in (["send"], ["launch-background"], ["launch-editor"])
-                               else MAX_BODY):
+        if not 0 <= length <= (SEND_BODY if parts[-1:] in (["send"], ["launch-background"], ["launch-editor"],
+                                                           ["launch-team"]) else MAX_BODY):
             return self._send(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "request too large"})
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
@@ -3881,6 +4090,7 @@ class Handler(BaseHTTPRequestHandler):
                     "resend": lambda: resend(bid, body.get("id")),
                     "start": lambda: start_conversation(bid, body.get("id")),
                     "launch-background": lambda: start_background(bid, body),
+                    "launch-team": lambda: start_team(bid, body),
                     "launch-editor": lambda: start_editor_chat(bid, body),
                     "handoff": lambda: start_handoff(bid, body),
                     "send": lambda: send_to_session(bid, body),

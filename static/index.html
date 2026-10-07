@@ -193,7 +193,7 @@
         </select>
         <label for="n-agents" id="n-agents-label" hidden>Agents</label>
         <select id="n-agents" hidden></select>
-        <label for="n-model">Model</label>
+        <label for="n-model" id="n-model-label">Model</label>
         <select id="n-model">
           <option value="" selected>Default (your Claude Code setting)</option>
           <option value="fable">Fable</option>
@@ -207,6 +207,19 @@
         <label class="check" id="n-ultra-row"><input type="checkbox" id="n-ultra"> Ultracode: a workflow for every bigger task</label>
       </div>
     </div>
+    <section id="n-team" aria-labelledby="n-team-title" hidden>
+      <h3 id="n-team-title">Team</h3>
+      <div class="n-team-count">
+        <label for="n-team-count">How many agents?</label>
+        <div class="stepper">
+          <button type="button" class="step-btn" id="n-team-less" aria-label="One agent fewer">−</button>
+          <input id="n-team-count" type="number" min="0" max="8" value="0" inputmode="numeric">
+          <button type="button" class="step-btn" id="n-team-more" aria-label="One agent more">+</button>
+        </div>
+      </div>
+      <p id="n-team-note" class="muted small"></p>
+      <div id="n-team-list"></div>
+    </section>
     <p id="n-note" class="muted small"></p>
     <p id="n-error" class="error" role="alert" hidden></p>
     <div class="actions">

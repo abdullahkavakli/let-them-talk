@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Checks parts of server.py without a server: where new cards go, New
-agent → Chat in IDE in a folder, renaming a card, images sent with a prompt and switching
-ultracode or looking it up. Every program launch, session list and message is faked, so nothing opens and
+agent → Chat in IDE in a folder, renaming a card, images sent with a prompt, switching
+ultracode or looking it up, and New workflow's teams. Every program launch, session list and message is faked, so nothing opens and
 nothing is sent. Needs only Python.
 
 Run:  python3 tests/check_server.py      Exit 0: all passed. 1: a check failed.
@@ -568,6 +568,148 @@ check("new agent: an IDE chat gets the image in the message with its prompt, onc
       and Path(named.group(1)).read_bytes() == PNG, job["detail"])
 sessions.pop()
 S.shutil.rmtree(S.CLAUDE_TMP.parent)
+
+# ------------------------- New workflow with agents: a master and its team (faked)
+
+team_runs = []
+
+
+def team_claude(fails=lambda name: False, hidden=lambda name: False):
+    """claude --bg: a new job, whose session shows up running unless hidden(name)."""
+    def run(args, **kw):
+        team_runs.append(args)
+        name = args[args.index("--name") + 1]
+        if fails(name):
+            return types.SimpleNamespace(stdout="", stderr="boom: it broke", returncode=1)
+        job = f"{len(team_runs):08x}"
+        if not hidden(name):
+            sessions.append({"sessionId": f"s-{job}", "name": name, "jobId": job, "running": True,
+                             "messageBlock": None, "platform": "wsl", "cwd": folder, "winCwd": None,
+                             "title": None, "model": None, "editor": None, "ambiguous": False, "background": True})
+        return types.SimpleNamespace(stdout=f"backgrounded · {job} · {name}\n", stderr="", returncode=0)
+    return run
+
+
+TEAM = [{"role": "tester", "prompt": "Test the login page"}, {"role": "writer", "prompt": "Write its help page"}]
+
+
+def start_team(body=None, **fake):
+    """A team started on a fresh board; returns (launch, the --bg runs, the board)."""
+    global board
+    board = {"folder": folder, "nodes": {}, "connections": [], "activity": [], "hidden": []}
+    team_runs.clear()
+    S.run_claude = team_claude(**fake)
+    r = S.start_team("b", body or {"prompt": "Fix the login, with tests and docs", "folder": folder,
+                                   "permissionMode": "acceptEdits", "agents": TEAM})
+    end = time.time() + 10
+    while time.time() < end and S.launches[r["launchId"]]["state"] == "starting":
+        real_sleep(0.02)
+    return S.launches[r["launchId"]], list(team_runs), board
+
+
+bg_name = lambda args: args[args.index("--name") + 1]
+arrows = lambda b: {(b["nodes"][c["from"]]["name"], b["nodes"][c["to"]]["name"]) for c in b["connections"]}
+sessions[:] = []
+job, runs, b = start_team()
+names = [bg_name(a) for a in runs]
+check("team: the agents start first, then the master, each in the background on Opus with the permissions picked",
+      names == ["Fix the login - tester", "Fix the login - writer", "Fix the login"]
+      and all(a[:1] == ["--bg"] and a[a.index("--model") + 1] == "opus"
+              and a[a.index("--permission-mode") + 1] == "acceptEdits" for a in runs), names)
+waits = [a[-1] for a in runs[:2]]
+check("team: each agent's first prompt names it, its role and the master, and says to wait for its task",
+      all(f'"Fix the login - {r}"' in w and f"the {r} in a team" in w and '(to: "Fix the login")' in w
+          and "Don't start any work yet" in w and t["prompt"] not in w for w, r, t in zip(waits, ("tester", "writer"), TEAM)),
+      waits)
+plan = runs[2][-1]
+check("team: the master's first prompt is your prompt, then the plan: each agent's name, role and prompt",
+      plan.startswith("Fix the login, with tests and docs\n\n")
+      and '- "Fix the login - tester", the tester: Test the login page' in plan
+      and '- "Fix the login - writer", the writer: Write its help page' in plan and "couldn't be started" not in plan, plan)
+check("team: an arrow each way between the master and each agent, none between agents, no notes sent",
+      arrows(b) == {("Fix the login", "Fix the login - tester"), ("Fix the login - tester", "Fix the login"),
+                    ("Fix the login", "Fix the login - writer"), ("Fix the login - writer", "Fix the login")}
+      and all(c["team"] == "Fix the login" and c["status"] == "sent"
+              and not any(n["enabled"] for n in c["notes"].values()) for c in b["connections"]), b["connections"])
+spots = {n["name"]: (n["x"], n["y"]) for n in b["nodes"].values()}
+mx, my = spots["Fix the login"]
+check("team: the agents' cards in a column right of the master's, which sits level with its middle",
+      spots["Fix the login - tester"] == (mx + 360, my - 75) and spots["Fix the login - writer"] == (mx + 360, my + 75), spots)
+check("team: done, and Activity says so", job["state"] == "done" and "linked both ways" in job["detail"]
+      and b["activity"][-1] == job["detail"], job["detail"])
+
+for body, why, says in (
+        ({"agents": TEAM}, "no prompt for the master", "master"),
+        ({"prompt": "x", "agents": []}, "no agents", "1 to 8"),
+        ({"prompt": "x", "agents": TEAM * 5}, "more than 8 agents", "1 to 8"),
+        ({"prompt": "x", "agents": [TEAM[0], {"role": " ", "prompt": "y"}]}, "an agent without a role", "Agent 2 needs a role"),
+        ({"prompt": "x", "agents": [{"role": "tester", "prompt": ""}]}, "an agent without a prompt", "Agent 1 (tester) needs a prompt"),
+        ({"prompt": "x", "agents": [TEAM[0], {"role": "Tester", "prompt": "y"}]}, "two agents with one role", "both"),
+        ({"prompt": "x", "agents": [{"role": "r" * 25, "prompt": "y"}]}, "a role too long for a name", "too long"),
+        ({"prompt": "x", "agents": TEAM, "permissionMode": "yolo"}, "an unknown permission mode", "Unknown")):
+    team_runs.clear()
+    try:
+        S.start_team("b", {"folder": folder, **body})
+        check(f"team: refused before anything starts: {why}", False)
+    except ValueError as e:
+        check(f"team: refused before anything starts: {why}", says in str(e) and not team_runs, str(e))
+
+sessions[:] = [{"sessionId": "x", "name": "Fix the login", "platform": "wsl", "running": True, "cwd": elsewhere}]
+job, runs, b = start_team()
+check("team: names no running chat has: the master's gets a number, its agents follow",
+      [bg_name(a) for a in runs] == ["Fix the login 2 - tester", "Fix the login 2 - writer", "Fix the login 2"], runs)
+sessions[:] = []
+job, runs, b = start_team({"prompt": "x", "name": "Login crew", "folder": folder, "agents": TEAM})
+check("team: the name you give is the master's", bg_name(runs[-1]) == "Login crew" and job["state"] == "done")
+
+sessions[:] = []
+job, runs, b = start_team(fails=lambda name: name.endswith("writer"))
+plan = runs[-1][-1]
+check("team: an agent that doesn't start is named with why, and the master does its part",
+      job["state"] == "failed" and '"Fix the login - writer" didn\'t start: boom: it broke.' in job["detail"]
+      and "running with 1 of 2 agents" in job["detail"]
+      and "couldn't be started, so do their part yourself:\n- the writer: Write its help page" in plan
+      and '"Fix the login - writer"' not in plan, job["detail"])
+check("team: arrows only for the agents that run", arrows(b) == {("Fix the login", "Fix the login - tester"),
+                                                                ("Fix the login - tester", "Fix the login")}, arrows(b))
+
+sessions[:] = []
+S.TEAM_WAIT, team_wait = 0.3, S.TEAM_WAIT
+job, runs, b = start_team(hidden=lambda name: name.endswith("tester"))
+check("team: an agent that never shows up running is named too, and gets no arrows",
+      job["state"] == "failed" and '"Fix the login - tester" didn\'t start: it wasn\'t running after' in job["detail"]
+      and arrows(b) == {("Fix the login", "Fix the login - writer"), ("Fix the login - writer", "Fix the login")},
+      job["detail"])
+sessions[:] = []
+job, runs, b = start_team(fails=lambda name: " - " in name)
+check("team: with no agent running, the master isn't started", job["state"] == "failed"
+      and [bg_name(a) for a in runs] == ["Fix the login - tester", "Fix the login - writer"]
+      and "the master wasn't started" in job["detail"] and not b["connections"], job["detail"])
+sessions[:] = []
+job, runs, b = start_team(fails=lambda name: name == "Fix the login")
+check("team: a master that doesn't start is reported; its agents wait, with no arrows",
+      job["state"] == "failed" and "didn't start: boom: it broke." in job["detail"] and "wait for it" in job["detail"]
+      and not b["connections"], job["detail"])
+S.TEAM_WAIT = team_wait
+
+sessions[:] = []
+real_connect = S.connect
+
+
+def one_way_only(bid, body):  # the writer's arrow back to the master can't be made
+    if next(s["name"] for s in sessions if s["sessionId"] == body["from"]).endswith("writer"):
+        raise ValueError("two running sessions are named that")
+    return real_connect(bid, body)
+
+
+S.connect = one_way_only
+job, runs, b = start_team()
+S.connect = real_connect
+check("team: an agent whose arrow back can't be made keeps no half pair, and the notice says why",
+      job["state"] == "failed" and arrows(b) == {("Fix the login", "Fix the login - tester"),
+                                                 ("Fix the login - tester", "Fix the login")}
+      and "\"Fix the login - writer\" isn't linked with the master: two running sessions" in job["detail"],
+      (arrows(b), job["detail"]))
 
 failed = [r for r in results if not r[1]]
 for name, ok, detail in results:

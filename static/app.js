@@ -423,6 +423,23 @@ function midpoint(a, b) {
   return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 + 0.75 * bend(a, b) };
 }
 
+// An arrow each way between two cards (a team's master and an agent): the two
+// run side by side between the cards' facing edges, the one from the card on
+// the left above, each with its label, instead of one looping round the cards.
+const PAIR_GAP = 10;
+function pairWire(a, b) {
+  const back = nodePos(a).x > nodePos(b).x || (nodePos(a).x === nodePos(b).x && a.sessionId > b.sessionId);
+  const dy = back ? PAIR_GAP : -PAIR_GAP, at = (pt) => ({ x: pt.x, y: pt.y + dy });
+  if (!back) {
+    const p = at(anchor(a, "out")), q = at(anchor(b, "in")), mid = midpoint(p, q);
+    return { p, q, d: curve(p, q), mid: { x: mid.x, y: mid.y - 6 } };
+  }
+  const p = at(anchor(a, "in")), q = at(anchor(b, "out"));
+  const dx = Math.max(20, Math.abs(p.x - q.x) / 2), down = -bend(p, q);
+  return { p, q, d: `M${p.x} ${p.y} C${p.x - dx} ${p.y + down}, ${q.x + dx} ${q.y + down}, ${q.x} ${q.y}`,
+    mid: { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 + 0.75 * down + 6 } };
+}
+
 function renderWires() {
   const layer = $("#wire-layer");
   const labels = $("#labels");
@@ -430,11 +447,13 @@ function renderWires() {
   const focused = labels.contains(document.activeElement) ? document.activeElement.dataset.id : null;
   layer.replaceChildren();
   labels.replaceChildren();
+  const arrows = new Set(state.view.board.connections.map((c) => `${c.from}>${c.to}`));
   for (const c of state.view.board.connections) {
     const a = nodeById(c.from), b = nodeById(c.to);
     if (!a || !b) continue;
-    const p = anchor(a, "out"), q = anchor(b, "in");
-    const d = curve(p, q);
+    const pair = arrows.has(`${c.to}>${c.from}`) && pairWire(a, b);
+    const p = pair ? pair.p : anchor(a, "out"), q = pair ? pair.q : anchor(b, "in");
+    const d = pair ? pair.d : curve(p, q);
     const selected = state.selected?.type === "wire" && state.selected.id === c.id;
     const ended = !a.live || !b.live;
     const cls = ["wire", c.status, ended ? "ended" : "", selected ? "selected" : ""].join(" ");
@@ -453,7 +472,7 @@ function renderWires() {
       "aria-label": `${display(a)} to ${display(b)}${reason ? `: ${reason}` : ""}${c.status === "failed" ? " (not delivered)" : ""}`,
       onpointerdown: (e) => { e.stopPropagation(); select(); },
     });
-    const mid = midpoint(p, q);
+    const mid = pair ? pair.mid : midpoint(p, q);
     label.style.left = `${mid.x}px`;
     label.style.top = `${mid.y}px`;
     labels.append(label);
@@ -977,10 +996,12 @@ function wireDetails(c, close = closeDrawer) {
       el("dt", { text: "Connected" }), el("dd", { text: new Date(c.createdAt * 1000).toLocaleString() }),
       el("dt", { text: "Status" }), el("dd", { text: c.status })),
     ...talkSection(c),
-    group(`notes:${c.id}`, failed, [el("span", { class: "run-name", text: "Notes sent when connected" })], notes),
+    // a team's arrow (New workflow with agents) sends no notes: its ends know each other from their first prompts
+    c.team ? el("p", { class: "muted small", text: `No notes: both know each other from their first prompts, as team "${c.team}".` })
+      : group(`notes:${c.id}`, failed, [el("span", { class: "run-name", text: "Notes sent when connected" })], notes),
     el("div", { class: "drawer-actions" },
       failed && el("button", { class: "btn", text: "Resend failed notes", onclick: () => act("resend", { id: c.id }) }),
-      !c.notes.from.enabled && a?.live && el("button", {
+      !c.team && !c.notes.from.enabled && a?.live && el("button", {
         class: "btn primary", text: `Ask ${display(a)} to start the conversation`,
         title: "It wasn't told about this arrow, so nobody went first",
         onclick: () => act("start", { id: c.id }),
@@ -2145,6 +2166,7 @@ const nd = {
   folder: $("#n-folder"), name: $("#n-name"), mode: $("#n-mode"), model: $("#n-model"),
   agents: $("#n-agents"), terminal: $("#n-terminal"), ultra: $("#n-ultra"), note: $("#n-note"), error: $("#n-error"),
   submit: $("#n-submit"), workflow: false,
+  team: $("#n-team"), count: $("#n-team-count"), teamList: $("#n-team-list"), sections: [],
 };
 const whereTo = () => nd.workflow ? "background"
   : document.querySelector('input[name="n-where"]:checked').value;
@@ -2159,26 +2181,66 @@ const workflowPrompt = ({ task, agents, model }) => [`Use a workflow to do this:
 const workflowName = (task) =>
   ["workflow", ...task.replace(/[^\p{L}\p{N}\s_-]/gu, "").split(/\s+/).filter(Boolean).slice(0, 5)].join(" ").slice(0, 50);
 
+// With agents, New workflow starts a team instead (start_team in server.py):
+// a master that runs your prompt, and agents that wait for the task it sends
+// each one. Each agent is a section that folds, with its role and prompt; one
+// a lower count takes off is kept, so a higher count brings back its text.
+const TEAM_MAX = 8, ROLE_MAX = 24;
+const teamSize = () => nd.workflow ? Math.max(0, Math.min(TEAM_MAX, parseInt(nd.count.value, 10) || 0)) : 0;
+
+function agentSection(i) {
+  // its title says its role; folded, the start of its prompt too
+  const head = el("span"), peek = el("span", { class: "n-agent-peek muted" });
+  const role = el("input", { id: `n-role-${i}`, class: "n-role", maxlength: ROLE_MAX, autocomplete: "off",
+    placeholder: "e.g. tester", oninput: () => { head.textContent = role.value.trim() && ` · ${role.value.trim()}`; } });
+  return el("details", { class: "n-agent", open: true },
+    el("summary", {}, el("strong", { text: `Agent ${i + 1}` }), head, peek),
+    el("div", { class: "n-agent-body" },
+      el("label", { for: role.id, text: "Role" }), role,
+      el("label", { for: `n-task-${i}`, text: "Prompt" }),
+      el("textarea", { id: `n-task-${i}`, class: "n-task", rows: 3,
+        placeholder: "Its part of the work; the master sends it this as its task",
+        oninput: (e) => { peek.textContent = e.target.value.trim().split("\n")[0]; } })));
+}
+
+function renderTeam() {
+  const n = teamSize();
+  while (nd.sections.length < n) nd.sections.push(agentSection(nd.sections.length));
+  nd.sections.forEach((s, i) => { if (i >= n) s.remove(); else if (!s.isConnected) nd.teamList.append(s); });
+  $("#n-team-less").disabled = n === 0;
+  $("#n-team-more").disabled = n === TEAM_MAX;
+  $("#n-team-note").textContent = n
+    ? "Each one starts in the background and waits; the master sends it the prompt you write here as its task, and it reports back."
+    : "With none, one agent runs your task as a workflow. Add agents to have a master hand each one its part.";
+}
+
 function refreshAgentDialog() {
-  const bg = whereTo() === "background", wf = nd.workflow;
+  const bg = whereTo() === "background", wf = nd.workflow, team = teamSize() > 0;
+  renderTeam();
   $("#n-title").textContent = wf ? "New workflow" : "New agent";
-  $("#n-prompt-label").textContent = wf ? "What should the workflow do?" : "What should it do?";
-  nd.prompt.placeholder = wf ? "e.g. Review every file in src/ for bugs and fix them"
-    : "e.g. Run the test suite and fix whatever fails";
+  $("#n-prompt-label").textContent = team ? "What should the master do?" : wf ? "What should the workflow do?" : "What should it do?";
+  nd.prompt.placeholder = team ? "e.g. Build the sign-up page: split the work among your agents and check what they send back"
+    : wf ? "e.g. Review every file in src/ for bugs and fix them" : "e.g. Run the test suite and fix whatever fails";
   $("#n-where-box").hidden = wf;
-  nd.name.placeholder = wf ? "optional; \"workflow\" and the task's first words" : "optional; taken from the prompt";
-  $("#n-agents-label").hidden = nd.agents.hidden = !wf;
+  nd.name.placeholder = team ? "optional; the master's, taken from the prompt"
+    : wf ? "optional; \"workflow\" and the task's first words" : "optional; taken from the prompt";
+  $("#n-agents-label").hidden = nd.agents.hidden = !wf || team;
+  $("#n-model-label").hidden = nd.model.hidden = team;  // a team runs on Opus
+  nd.team.hidden = !wf;
   $("#n-editor-box").hidden = bg;
   // A Chat in IDE takes a name (its card's, on this board) and a model (the
   // mod runs it on that), not permissions: an editor link can't carry them.
   $("#n-bg-box").hidden = false;
   for (const id of ["#n-mode-label", "#n-mode", "#n-terminal-gap", "#n-terminal-row", "#n-ultra-gap", "#n-ultra-row"]) $(id).hidden = !bg;
+  if (team) $("#n-terminal-gap").hidden = $("#n-terminal-row").hidden = true;  // a team starts in the background only
   if (!bg) nd.name.placeholder = "optional; its card's name on this board";
-  nd.submit.textContent = wf ? "Start workflow" : bg ? "Start agent" : `Open in ${nd.editor.value}`;
+  nd.submit.textContent = team ? "Start team" : wf ? "Start workflow" : bg ? "Start agent" : `Open in ${nd.editor.value}`;
   nd.note.textContent = [
-    wf && "A new background agent starts in this folder and runs your task as a Claude Code workflow; " +
+    team ? "The master and its agents start in the background in this folder, all on Opus and with the settings above; " +
+      "each agent is named after the master and its role, and an arrow each way links it with the master."
+      : wf && "A new background agent starts in this folder and runs your task as a Claude Code workflow; " +
       "the model you pick runs it and its agents, which show under Subagents.",
-    bg && /haiku/i.test(nd.model.value) && nd.mode.value === "auto"
+    bg && !team && /haiku/i.test(nd.model.value) && nd.mode.value === "auto"
       ? "With Haiku, auto mode may not be available; the agent then asks before it acts."
       : bg && "Claude Code must already trust the folder (run claude there once and accept).",
     !bg && `${nd.editor.value} must trust the folder: in Restricted Mode, Claude Code is off there and no chat opens.`,
@@ -2267,9 +2329,16 @@ nd.dialog.addEventListener("drop", (e) => {
   addImages(NEW_AGENT, [...e.dataTransfer.files], renderAgentImages);
 });
 
-for (const e of [nd.editor, nd.mode, nd.model, ...document.querySelectorAll('input[name="n-where"]')]) {
+for (const e of [nd.editor, nd.mode, nd.model, nd.count, ...document.querySelectorAll('input[name="n-where"]')]) {
   e.addEventListener("change", refreshAgentDialog);
   e.addEventListener("input", refreshAgentDialog);
+}
+nd.count.addEventListener("change", () => { nd.count.value = teamSize(); });  // 12 reads 8, "" reads 0
+for (const [id, by] of [["#n-team-less", -1], ["#n-team-more", 1]]) {
+  $(id).addEventListener("click", () => {
+    nd.count.value = Math.max(0, Math.min(TEAM_MAX, teamSize() + by));
+    refreshAgentDialog();
+  });
 }
 
 $("#chat-form").addEventListener("submit", async (evt) => {
@@ -2280,7 +2349,26 @@ $("#chat-form").addEventListener("submit", async (evt) => {
   const fail = (msg) => { nd.error.textContent = msg; nd.error.hidden = false; nd.submit.disabled = false; };
   nd.submit.disabled = true;
   try {
-    if (whereTo() === "background") {
+    if (teamSize()) {
+      const agents = nd.sections.slice(0, teamSize()).map((s) =>
+        ({ role: s.querySelector(".n-role").value.trim(), prompt: s.querySelector(".n-task").value.trim() }));
+      if (!prompt) return fail("Say what the master should do.");
+      const i = agents.findIndex((a) => !a.role || !a.prompt);
+      if (i >= 0) {  // the server checks it all again; this shows where
+        nd.sections[i].open = true;
+        nd.sections[i].querySelector(agents[i].role ? ".n-task" : ".n-role").focus();
+        return fail(`Agent ${i + 1} needs ${agents[i].role ? "a prompt" : "a role"}.`);
+      }
+      // it starts in the server's own time; its notices say how it goes (see renderLaunches)
+      await api(`/api/board/${state.boardId}/launch-team`, {
+        prompt, images, agents, folder: nd.folder.value.trim(), name: nd.name.value.trim(),
+        permissionMode: nd.mode.value, ultracode: nd.ultra.checked,
+      });
+      nd.ultra.checked = false;
+      nd.count.value = 0;
+      nd.sections = [];
+      nd.teamList.replaceChildren();
+    } else if (whereTo() === "background") {
       const wf = nd.workflow;
       if (wf ? !prompt : !prompt && !images.length) {
         return fail(wf ? "Say what the workflow should do." : "A background agent needs a prompt to start with.");
@@ -2329,7 +2417,7 @@ function toast(text, level = "info", ms = level === "error" ? 0 : 5000) {
 }
 
 // Editor chats started from here: show how handing over the prompt went.
-// Handoffs report each step the same way. The server lists them for 10
+// Handoffs and teams report each step the same way. The server lists them for 10
 // minutes, so each step's notice is remembered across reloads too: a reload
 // doesn't show it again, except a failed one you haven't closed yet.
 const LAUNCH_LISTED = 600;  // seconds the server lists a launch

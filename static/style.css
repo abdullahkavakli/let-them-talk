@@ -704,6 +704,39 @@ dialog label.choice:has(input:checked) { border-color: var(--accent); background
   width: fit-content; margin: 0 auto; padding: 10px 18px; border-radius: 999px; text-align: center;
   background: var(--accent); color: var(--on-accent); font-weight: 600; box-shadow: 0 6px 18px rgb(0 0 0 / .18);
 }
+/* New workflow's agents: how many (a stepper), then a section for each that folds */
+#n-team { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+#n-team h3 { margin: 0 0 8px; font: 700 17px/1.25 var(--font-display); letter-spacing: -.2px; }
+.n-team-count { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.n-team-count label { margin: 0; }
+.stepper { display: inline-flex; align-items: center; gap: 2px; padding: 3px; border-radius: 999px; background: var(--field); }
+.step-btn {
+  width: 30px; height: 30px; border: 0; border-radius: 50%; background: var(--panel); color: var(--text);
+  font: 600 17px/1 var(--font-ui); cursor: pointer; box-shadow: 0 1px 2px rgb(0 0 0 / .14);
+}
+.step-btn:disabled { background: none; color: var(--muted); box-shadow: none; cursor: default; }
+.step-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#n-team-count {
+  width: 40px; padding: 4px 0; border: 0; background: none; text-align: center; font-weight: 600;
+  -moz-appearance: textfield; appearance: textfield;
+}
+#n-team-count::-webkit-inner-spin-button, #n-team-count::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+#n-team-note { margin: 6px 0 0; }
+details.n-agent { margin-top: 10px; border: 1px solid var(--border); border-radius: 16px; }
+details.n-agent > summary {
+  position: relative; padding: 10px 34px 10px 14px; border-radius: 15px; cursor: pointer; list-style: none;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+details.n-agent > summary::-webkit-details-marker { display: none; }
+details.n-agent > summary::after { content: "▸"; position: absolute; right: 14px; color: var(--muted); }
+details.n-agent[open] > summary::after { content: "▾"; }
+details.n-agent > summary:hover { background: var(--field); }
+details.n-agent > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.n-agent-peek { margin-left: 8px; font-size: 12.5px; }
+details.n-agent[open] .n-agent-peek { display: none; }
+.n-agent-body { padding: 0 14px 14px; }
+.n-agent-body label:first-child { margin-top: 2px; }
+
 /* New agent: images dropped on the dialog go with its prompt */
 #chat-dialog.dropping #n-prompt { border-color: var(--accent); background: var(--accent-soft); }
 #n-images { padding: 8px 0 0; }

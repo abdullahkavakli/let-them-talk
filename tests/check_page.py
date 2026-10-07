@@ -83,6 +83,7 @@ class FakeAPI:
         self.ultracode = None   # what the server reads off a running background agent
         self.checking = False   # it is looking in that agent's /effort panel
         self.suggest = None     # alpha's suggested reply
+        self.arrows = []        # more arrows on the project board
 
     def chat(self, sid):
         self.asked += 1
@@ -119,6 +120,7 @@ class FakeAPI:
                 return self.held.append((route, view(q["board"])))
             else:
                 data = view(q["board"])
+                data["board"]["connections"] += self.arrows if q["board"] == "b1" else []
         elif path == "/api/chat":
             data = self.chat(q.get("session"))
         elif path == "/api/agents":
@@ -558,6 +560,103 @@ def checks_wide(browser):
         ide = [b for p, b in page.api.posts if p.endswith("/launch-editor")]
         check(name, taken and two and still and cleared and bg and bg[-1].get("images") == [{"data": PNG_1PX}]
               and ide and ide[-1].get("images") == [{"data": PNG_1PX}], (taken, two, still, cleared))
+
+    sections = lambda: page.locator("#n-team-list details.n-agent")
+    team_posts = lambda: [b for p, b in page.api.posts if p.endswith("/launch-team")]
+
+    name = "new workflow: the number shows that many agent sections, open, and each folds; New agent has none"
+    with step(page, name):
+        page.locator("#new-chat").click()
+        plain = not is_open(page, "#n-team")
+        page.evaluate("document.querySelector('#chat-dialog').close()")
+        page.locator("#new-workflow").click()
+        none = sections().count() == 0 and is_open(page, "#n-agents") and is_open(page, "#n-model")
+        for _ in range(3):
+            page.locator("#n-team-more").click()
+        three = sections().count() == 3 and page.evaluate("[...document.querySelectorAll('.n-agent')].every(d => d.open)")
+        team_only = (not is_open(page, "#n-agents") and not is_open(page, "#n-model") and not is_open(page, "#n-terminal")
+                     and page.inner_text("#n-submit") == "Start team")
+        page.locator("#n-team-count").fill("5")
+        five = sections().count() == 5
+        page.locator("details.n-agent summary").nth(1).click()
+        folded = page.evaluate("document.querySelectorAll('.n-agent')[1].open") is False
+        page.locator("details.n-agent summary").nth(1).click()
+        check(name, plain and none and three and team_only and five and folded
+              and page.evaluate("document.querySelectorAll('.n-agent')[1].open"), (plain, none, three, team_only, five, folded))
+
+    name = "new workflow: what you type in a section stays when the number changes; its title shows the role"
+    with step(page, name):
+        page.locator("#new-workflow").click()
+        page.locator("#n-team-count").fill("3")
+        page.locator("#n-role-0").fill("tester")
+        page.locator("#n-task-0").fill("Test the login page")
+        page.locator("#n-role-1").fill("writer")
+        page.locator("#n-team-count").fill("1")
+        one = sections().count() == 1 and page.input_value("#n-task-0") == "Test the login page"
+        page.locator("#n-team-less").click()
+        page.locator("#n-team-more").click()
+        page.locator("#n-team-more").click()
+        check(name, one and sections().count() == 2 and page.input_value("#n-role-0") == "tester"
+              and page.input_value("#n-role-1") == "writer"
+              and page.inner_text("details.n-agent summary >> nth=0").startswith("Agent 1 · tester"), one)
+
+    name = "new workflow: with no agents it starts one workflow agent, as before"
+    with step(page, name):
+        page.api.post_result = {"jobId": "abcdef12", "name": "x"}
+        page.locator("#new-workflow").click()
+        page.locator("#n-team-count").fill("0")
+        page.locator("#n-prompt").fill("Review src")
+        page.locator("#n-submit").click()
+        page.wait_for_timeout(300)
+        sent = [b for p, b in page.api.posts if p.endswith("/launch-background")]
+        check(name, sent and sent[-1]["prompt"].startswith("Use a workflow to do this: Review src") and not team_posts(), sent)
+
+    name = "new workflow: with agents it sends the team (your prompt, each role and prompt), then starts clean"
+    with step(page, name):
+        page.api.post_result = {"launchId": "t1", "name": "Fix the login", "agents": []}
+        page.locator("#new-workflow").click()
+        page.locator("#n-prompt").fill("Fix the login")
+        page.locator("#n-team-count").fill("2")
+        for i, (role, task) in enumerate((("tester", "Test it"), ("writer", "Document it"))):
+            page.locator(f"#n-role-{i}").fill(f" {role} ")
+            page.locator(f"#n-task-{i}").fill(task)
+        page.locator("#n-submit").click()
+        page.wait_for_timeout(300)
+        closed = not page.evaluate("document.querySelector('#chat-dialog').open")
+        page.locator("#new-workflow").click()
+        check(name, team_posts() == [{"prompt": "Fix the login", "images": [], "folder": FOLDER, "name": "",
+                                      "permissionMode": "auto", "ultracode": False,
+                                      "agents": [{"role": "tester", "prompt": "Test it"},
+                                                 {"role": "writer", "prompt": "Document it"}]}]
+              and closed and page.input_value("#n-team-count") == "0" and sections().count() == 0, team_posts())
+
+    name = "new workflow: an agent without a role isn't sent; its section opens there"
+    with step(page, name):
+        page.locator("#new-workflow").click()
+        page.locator("#n-prompt").fill("Fix the login")
+        page.locator("#n-team-count").fill("2")
+        page.locator("#n-role-0").fill("tester")
+        page.locator("#n-task-0").fill("Test it")
+        page.locator("details.n-agent summary").nth(1).click()  # folded
+        page.locator("#n-submit").click()
+        page.wait_for_timeout(200)
+        check(name, not team_posts() and page.inner_text("#n-error") == "Agent 2 needs a role."
+              and page.evaluate("document.activeElement.id") == "n-role-1", page.inner_text("#n-error"))
+
+    name = "arrows: an arrow each way runs side by side between the two cards, each label clear of the other"
+    with step(page, name):
+        page.api.arrows = [{"id": "c2", "from": B, "to": A, "reason": "report", "status": "sent", "createdAt": 2,
+                            "team": "alpha", "notes": {"from": {**NOTE, "enabled": False, "state": "skipped"},
+                                                       "to": {**NOTE, "enabled": False, "state": "skipped"}}}]
+        poll(page)
+        spans = page.evaluate("[...document.querySelectorAll('#wire-layer .wire')].map(p => { const b = p.getBBox(); return [b.x, b.x + b.width]; })")
+        boxes = [page.locator(f'.wire-label[data-id="{c}"]').bounding_box() for c in ("c1", "c2")]
+        apart = boxes[0]["y"] + boxes[0]["height"] <= boxes[1]["y"] or boxes[1]["y"] + boxes[1]["height"] <= boxes[0]["y"]
+        page.locator('.wire-label[data-id="c2"]').click()
+        page.wait_for_function("!document.querySelector('#drawer').hidden")
+        body = page.inner_text("#drawer-body")
+        check(name, len(spans) == 2 and all(560 - 5 <= x0 and x1 <= 640 + 5 for x0, x1 in spans) and apart
+              and "No notes" in body and "start the conversation" not in body, (spans, boxes))
 
     name = "offline: a banner while the server doesn't answer, gone when it does"
     with step(page, name):
