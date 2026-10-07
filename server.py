@@ -855,6 +855,13 @@ def subagent_info(path):
     return info
 
 
+def _answers(rec):
+    """The tool calls a transcript record gives results for (none for a prompt)."""
+    content = (rec.get("message") or {}).get("content")
+    return {b.get("tool_use_id") for b in content if isinstance(b, dict)
+            and b.get("type") == "tool_result"} if isinstance(content, list) else set()
+
+
 def _read_subagent(path):
     with path.open("rb") as f:
         first = f.readline()
@@ -867,7 +874,7 @@ def _read_subagent(path):
         info["startedAt"] = _ms(json.loads(first).get("timestamp"))
     except ValueError:
         pass
-    resumed = False
+    later = []  # input after the last reply: tool results, prompts, messages read mid-turn
     for raw in reversed(tail):
         try:
             rec = json.loads(raw)
@@ -875,8 +882,9 @@ def _read_subagent(path):
             continue  # the partial first line of the tail, or a line being written
         if info["lastAt"] is None:
             info["lastAt"] = _ms(rec.get("timestamp"))
-        if rec.get("type") == "user":
-            resumed = True  # input after the last reply: a tool result or a new prompt
+        if rec.get("type") == "user" or (rec.get("type") == "attachment" and
+                                         (rec.get("attachment") or {}).get("type") == "queued_command"):
+            later.append(rec)
         if rec.get("type") != "assistant":
             continue
         msg = rec.get("message") or {}
@@ -885,8 +893,12 @@ def _read_subagent(path):
         info["tokens"] = sum(usage.get(k) or 0 for k in (
             "input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens",
             "output_tokens")) or None
-        info["finished"] = msg.get("stop_reason") == "end_turn" and not resumed
         tools = [c for c in msg.get("content") or [] if c.get("type") == "tool_use"]
+        # A subagent that hands its report back (SubagentHandback) ends with
+        # that call, so only the call's own result follows its last reply.
+        handback = {t.get("id") for t in tools if t.get("name") == "SubagentHandback"}
+        handed_back = bool(handback) and all(_answers(r) and _answers(r) <= handback for r in later)
+        info["finished"] = (msg.get("stop_reason") == "end_turn" and not later) or handed_back
         if tools:
             info["lastTool"] = _tool_summary(tools[-1])
         break
