@@ -1520,7 +1520,9 @@ function folderCombo(ui) {
       close();
     }
   });
-  document.addEventListener("pointerdown", (e) => {
+  // Closed by a click elsewhere once that click is done: closed on the press,
+  // the list's room would go and the button under the pointer move away.
+  document.addEventListener("click", (e) => {
     if (!list.hidden && !input.parentElement.contains(e.target) && !list.contains(e.target)) close();
   });
 }

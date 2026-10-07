@@ -55,16 +55,18 @@ installed inside WSL, where the server runs.
     default), each end that is still running gets a note from
     `@let-them-talk` saying the connection was removed and to stop
     messaging for it.
-- **New agent:** type a prompt, then either open it as a new chat tab
-  (**Chat in IDE**) in the editor window you used last (Cursor, VS Code …,
-  picked under **Editor**, in that window's folder)
-  or start a **Terminal/background agent** in a folder Claude Code already
-  trusts, with its permissions and model (its terminal opens unless you
-  untick that). The folder box's ▾ lists the folders you're working in (the
-  board's, the sidebar's and those of the board's running chats; typing
-  narrows the list), leaving out other chats' worktrees
-  (`.claude/worktrees/…`); typing a path, **Browse…** and the place buttons
-  still reach any folder.
+- **New agent:** type a prompt and pick a folder (the board's to start
+  with), then either open it as a new chat tab (**Chat in IDE**) in Cursor,
+  VS Code … (picked under **Editor**), whose command-line tool (`cursor`,
+  `code` …) opens that folder, or brings up the window that has it, before
+  the chat opens there, or start a **Terminal/background agent** there (a
+  folder Claude Code already trusts), with its permissions and model (its
+  terminal opens unless you untick that). With the folder box empty, the
+  chat opens in the editor window you used last. The folder box's ▾ lists
+  the folders you're working in (the board's, the sidebar's and those of
+  the board's running chats; typing narrows the list), leaving out other
+  chats' worktrees (`.claude/worktrees/…`); typing a path, **Browse…** and
+  the place buttons still reach any folder.
   The editor chat gets your prompt as a message from Let Them Talk; a
   notice says whether it arrived (with **Copy prompt** if not). A new agent
   goes on the board you started it from.
