@@ -2547,25 +2547,10 @@ function sendSection(n) {
       }, sent);
     },
   }, sendIcon());
-  const pick = el("input", {
-    type: "file", accept: IMAGE_TYPES.join(","), multiple: true, hidden: true,
-    onchange: (e) => { addImages(sid, [...e.target.files]); e.target.value = ""; },
-  });
-  // Messages-style: the images over the text, + on the left, the round Send on the right.
+  // Messages-style: the images over the text, the round Send on the right.
+  // Images come in by paste, or dropped anywhere on the details (see below).
   const composer = el("div", {
     class: `composer${box.value.trim() || images.length ? " ready" : ""}${asking ? " asking" : ""}`,
-    ondragover: (e) => {
-      if (!e.dataTransfer.types.includes("Files")) return;
-      e.preventDefault();
-      composer.classList.add("dropping");
-    },
-    ondragleave: (e) => { if (!composer.contains(e.relatedTarget)) composer.classList.remove("dropping"); },
-    ondrop: (e) => {
-      if (!e.dataTransfer.files.length) return;
-      e.preventDefault();
-      composer.classList.remove("dropping");
-      addImages(sid, [...e.dataTransfer.files]);
-    },
   },
   images.length > 0 && el("div", { class: "composer-images" }, ...images.map((img, i) => el("div", { class: "thumb" },
     el("img", { src: img.url, alt: `Image ${i + 1}` }),
@@ -2575,10 +2560,7 @@ function sendSection(n) {
         state.images[sid] = state.images[sid].filter((x) => x !== img);
         renderDrawer();
       } })))),
-  el("div", { class: "composer-row" },
-    el("button", { class: "composer-add", "aria-label": "Add images", title: "Add images (or paste or drop them here)",
-      onclick: () => pick.click() }, plusIcon()),
-    box, button, pick));
+  el("div", { class: "composer-row" }, box, button));
   return [
     el("h2", { text: asPrompt ? "Send a prompt" : "Send a message" }),
     composer,
@@ -2598,8 +2580,8 @@ function sendIcon() {
   return icon;
 }
 
-// Adds images (pasted, dropped or picked) to what goes with a chat's next
-// text, with a thumbnail each; others are refused with a notice.
+// Adds images (pasted or dropped) to what goes with a chat's next text, with a
+// thumbnail each; others are refused with a notice.
 async function addImages(sid, files) {
   const take = [], refused = new Set();
   for (const f of files) {
@@ -2624,6 +2606,39 @@ async function addImages(sid, files) {
     toast(`An image couldn't be read: ${e?.message || e}`, "error");
   }
   renderDrawer();
+}
+
+// Images dropped anywhere on a chat's details go into its Send box, so they
+// needn't hit the box itself. The cue is a class on the drawer, which the
+// polls don't redraw (they redraw what is in it).
+const draggingFiles = (e) => !!e.dataTransfer?.types.includes("Files");
+const dropsInto = () => state.selected?.type === "node" && $("#drawer-body #send-box") ? state.selected.id : null;
+$("#drawer").addEventListener("dragover", (e) => {
+  if (!draggingFiles(e) || !dropsInto()) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "copy";
+  $("#drawer").classList.add("dropping");
+});
+$("#drawer").addEventListener("dragleave", (e) => {
+  if (!$("#drawer").contains(e.relatedTarget)) $("#drawer").classList.remove("dropping");
+});
+$("#drawer").addEventListener("drop", (e) => {
+  $("#drawer").classList.remove("dropping");
+  const sid = dropsInto();
+  if (!sid || !e.dataTransfer.files.length) return;
+  e.preventDefault();
+  addImages(sid, [...e.dataTransfer.files]);
+});
+// A file dropped anywhere else is turned away: the browser would open it in
+// place of the app. Only file drags: other drags are left alone. The cue goes
+// too, should the details have missed the drag leaving them.
+for (const type of ["dragover", "drop"]) {
+  window.addEventListener(type, (e) => {
+    if (!draggingFiles(e) || e.defaultPrevented) return;
+    $("#drawer").classList.remove("dropping");
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "none";
+  });
 }
 
 // Sends text (and images) to a chat, shown in it at once as your bubble, like

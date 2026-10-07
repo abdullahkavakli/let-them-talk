@@ -135,12 +135,12 @@ installed inside WSL, where the server runs.
     and shows it (if you have unsent text in that terminal, or it is asking
     you something there, nothing is typed); one whose process has ended is
     woken with it. Images go with it as in Claude Code: paste a screenshot
-    (Ctrl+V), drop image files on the box or pick them with **+**; each
-    shows as a thumbnail, × takes it out (PNG, JPEG, GIF or WebP, up to 5 at
-    a time, 10 MB each; images can go without text). If sending fails, the
-    text and images go back into the box. When the chat waits for you, the
-    box shows a likely reply in grey; press Tab (or →) to use it. Enter
-    sends, Shift+Enter adds a line.
+    (Ctrl+V) or drop image files anywhere on the chat's details (the panel
+    shows where they go); each shows as a thumbnail, × takes it out (PNG,
+    JPEG, GIF or WebP, up to 5 at a time, 10 MB each; images can go without
+    text). If sending fails, the text and images go back into the box. When
+    the chat waits for you, the box shows a likely reply in grey; press Tab
+    (or →) to use it. Enter sends, Shift+Enter adds a line.
   - **Agents in this chat (N)** is one line, with how many are running;
     click it to open the workflows and subagents the chat started in a
     pop-up over the board, with their state, model, time and tokens, and a

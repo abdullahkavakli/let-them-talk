@@ -186,13 +186,15 @@ PNG_1PX = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwACh
 
 
 def paste(page, sel, kind, how="paste"):
-    """A file pasted (Ctrl+V) into, or dropped on, what sel finds: a 1-pixel PNG, or text."""
-    page.evaluate("""([sel, b64, kind, how]) => {
+    """A file pasted (Ctrl+V) into, or dragged over (how="dragover") or dropped
+    on (how="drop"), what sel finds: a 1-pixel PNG, or text. True if the page
+    took it (the browser's own handling was prevented)."""
+    return page.evaluate("""([sel, b64, kind, how]) => {
         const bytes = kind.startsWith('image/') ? Uint8Array.from(atob(b64), c => c.charCodeAt(0)) : ['notes'];
         const dt = new DataTransfer(); dt.items.add(new File([bytes], 'file', { type: kind }));
         const init = { bubbles: true, cancelable: true };
-        document.querySelector(sel).dispatchEvent(how === 'paste'
-            ? new ClipboardEvent('paste', { ...init, clipboardData: dt }) : new DragEvent('drop', { ...init, dataTransfer: dt })); }""",
+        return !document.querySelector(sel).dispatchEvent(how === 'paste'
+            ? new ClipboardEvent('paste', { ...init, clipboardData: dt }) : new DragEvent(how, { ...init, dataTransfer: dt })); }""",
         [sel, PNG_1PX, kind, how])
 
 
@@ -337,6 +339,33 @@ def checks_wide(browser):
         sent = [b for p, b in page.api.posts if p.endswith("/send")]
         check(name, one and refused and len(sent) == 1 and sent[0]["text"] == "" and len(sent[0]["images"]) == 1)
         page.evaluate("state.outbox = {}")
+
+    name = "send box: no +; an image dropped anywhere on the details lands in the box, with a cue while dragged"
+    with step(page, name):
+        open_card(page, B)
+        page.evaluate("state.images = {}")
+        plain = (page.locator("#drawer-body .composer button").count() == 1
+                 and page.locator("#drawer-body input[type=file]").count() == 0)
+        dropping = "document.querySelector('#drawer').classList.contains('dropping')"
+        taken = paste(page, "#drawer-body h3", "image/png", "dragover")
+        cue = page.evaluate(dropping)
+        paste(page, "#drawer-body h3", "image/png", "drop")
+        page.wait_for_selector("#drawer-body .composer .thumb img")
+        check(name, plain and taken and cue and not page.evaluate(dropping)
+              and page.locator("#drawer-body .thumb").count() == 1, f"{plain} {taken} {cue}")
+        page.evaluate("state.images = {}")
+
+    name = "page: a file dropped off the details doesn't open in place of the app; other drags are left alone"
+    with step(page, name):
+        board = paste(page, "#canvas", "image/png", "dragover") and paste(page, "#canvas", "image/png", "drop")
+        page.locator(".wire-label").first.click()  # an arrow's details: no Send box
+        page.wait_for_function("!document.querySelector('#drawer').hidden")
+        wire = (paste(page, "#drawer-body", "image/png", "dragover") and paste(page, "#drawer-body", "image/png", "drop")
+                and not page.evaluate("document.querySelector('#drawer').classList.contains('dropping')"))
+        text = page.evaluate("""() => { const dt = new DataTransfer(); dt.setData('text/plain', 'hi');
+            return document.querySelector('#canvas').dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt })); }""")
+        check(name, board and wire and text and not page.evaluate("Object.values(state.images).flat().length"),
+              f"{board} {wire} {text}")
 
     name = "send box: a suggested reply says Tab or → takes it, and → does"
     with step(page, name):
