@@ -218,6 +218,7 @@ function fillBoardSelect(boards) {
 
 function selectBoard(id) {
   state.boardId = id;
+  state.view = null;  // the old board's; drawn now, it would use up the new one's re-centre and save its pan
   state.selected = null;
   state.localPos = {};
   state.pan = store(`ltt.pan.${id}`) || { x: 0, y: 0 };
@@ -233,7 +234,12 @@ async function poll() {
   clearTimeout(state.pollTimer);
   if (state.boardId) {
     try {
-      state.view = await api(`/api/state?board=${encodeURIComponent(state.boardId)}${state.showSubs ? "&subagents=1" : ""}`);
+      // A reply that comes after you switched boards is for the old one: dropped
+      // (the switch started its own poll).
+      const id = state.boardId;
+      const view = await api(`/api/state?board=${encodeURIComponent(id)}${state.showSubs ? "&subagents=1" : ""}`);
+      if (state.boardId !== id) return;
+      state.view = view;
       render();
       if (state.selected?.type === "node") loadDetails(state.selected.id);
       else if (state.selected?.type === "sub") loadSub(state.selected);
@@ -283,6 +289,7 @@ function render() {
   renderAvailable();
   renderActivity();
   renderLaunches();
+  placeHint();
   if (state.selected) renderDrawer();
 }
 
@@ -565,10 +572,21 @@ function openSub(parent, id, label) {
   select_({ type: "sub", parent, id, label });
 }
 
+// Details are asked for on every poll, and replies can come back out of order:
+// one older than what is already shown is dropped.
+let asked = 0;
+const shown = {};  // what -> number of the newest request shown
+function newest(what) {
+  const n = ++asked;
+  return () => n > (shown[what] || 0) && (shown[what] = n);
+}
+
 async function loadSub(sel) {
+  const key = `${sel.parent}:${sel.id}`, current = newest(`sub:${key}`);
   const data = await api(`/api/subagent?session=${encodeURIComponent(sel.parent)}&agent=${encodeURIComponent(sel.id)}`)
     .catch((e) => ({ error: e.message }));
-  state.subInfo[`${sel.parent}:${sel.id}`] = data;
+  if (!current()) return;
+  state.subInfo[key] = data;
   if (state.selected?.type === "sub" && state.selected.id === sel.id) renderDrawer();
 }
 
@@ -628,7 +646,8 @@ function renderAvailable() {
     ...groups[cwd].map((s) => el("div", { class: "avail-row" },
       el("span", { class: `dot ${s.status}`, title: s.status, role: "img", "aria-label": s.status }),
       el("span", { class: "name", text: display(s), title: [s.name && `@${s.name}`, onWindows(s) ? "Windows" : "WSL", opener(s), s.status].filter(Boolean).join(" · ") }),
-      el("button", { class: "btn", text: "Add", onclick: () => addNode(s.sessionId) }))))));
+      el("button", { class: "btn", text: "Add", "aria-label": `Add ${display(s)} to this board`,
+        onclick: () => addNode(s.sessionId) }))))));
 }
 
 function renderActivity() {
@@ -647,6 +666,8 @@ $("#activity-box").addEventListener("toggle", () => store("ltt.activityOpen", $(
 
 function select_(sel) {
   if (!(sel.type === "node" && sel.id === state.renaming)) state.renaming = null;
+  // What focus goes back to when the details close (one opened from inside them keeps the first).
+  if (!$("#drawer").contains(document.activeElement)) state.opener = { el: document.activeElement, sel };
   state.selected = sel;
   render();
   renderDrawer();
@@ -672,8 +693,11 @@ async function loadTalk(id) {
 
 async function loadDetails(sid) {
   const get = (path, more = "") => api(`${path}?session=${encodeURIComponent(sid)}${more}`).catch((e) => ({ error: e.message }));
+  const current = newest(`node:${sid}`);
   // watch=1: this drawer is open, so the chat's mod may make it a suggestion
-  [state.agents[sid], state.chat[sid]] = await Promise.all([get("/api/agents"), get("/api/chat", "&watch=1")]);
+  const [agents, chat] = await Promise.all([get("/api/agents"), get("/api/chat", "&watch=1")]);
+  if (!current()) return;
+  [state.agents[sid], state.chat[sid]] = [agents, chat];
   settleOutbox(sid);
   if (state.selected?.type === "node" && state.selected.id === sid) renderDrawer();
 }
@@ -694,10 +718,21 @@ function settleOutbox(sid) {
 }
 
 function closeDrawer() {
+  // Focus in the details goes back to what opened them, not to the page.
+  const back = $("#drawer").contains(document.activeElement) && state.opener;
   state.selected = null;
   state.renaming = null;
   $("#drawer").hidden = true;
   if (state.view) render();
+  if (back) returnFocus(back);
+}
+
+function returnFocus({ el, sel }) {
+  const target = el?.isConnected && el !== document.body ? el
+    : sel.type === "node" ? $(`#nodes [data-id="${sel.id}"]`)
+    : sel.type === "wire" ? $(`#labels [data-id="${sel.id}"]`)
+    : $(`#subagents [data-agent="${sel.id}"]`);
+  (target || $("#canvas")).focus({ preventScroll: true });
 }
 
 function renderDrawer() {
@@ -819,6 +854,11 @@ function wireDetails(c, close = closeDrawer) {
 
 function nodeDetails(n) {
   const conns = state.view.board.connections.filter((c) => c.from === n.sessionId || c.to === n.sessionId);
+  // In the card's words (a background agent's own state: working, needs you, done …).
+  const status = n.live ? cardStatus(n).text : "session ended";
+  // A background agent that can't go on without you (asking you, or needing a
+  // restart) shows that first, above its messages.
+  const stuck = n.background && (n.resumable === false || n.agentState === "blocked");
   return [
     ...nameHeading(n),
     // The facts fold into one line; the choice is remembered.
@@ -826,12 +866,12 @@ function nodeDetails(n) {
       class: "info", open: store("ltt.infoOpen") === true,
       ontoggle: (e) => store("ltt.infoOpen", e.target.open),
     }, el("summary", { class: "muted small",
-      text: [n.live ? n.status : "session ended", n.model && modelName(n.model), n.live && opener(n)]
+      text: [status, n.model && modelName(n.model), n.live && opener(n)]
         .filter(Boolean).join(" · ") }),
     el("dl", {},
       n.alias && n.title && [el("dt", { text: "Title" }), el("dd", { text: n.title })],
       el("dt", { text: "Address" }), el("dd", { class: "mono small", text: `@${n.name}` }),
-      el("dt", { text: "Status" }), el("dd", { text: n.live ? n.status : "session ended" }),
+      el("dt", { text: "Status" }), el("dd", { text: n.waitingFor ? `${status} (waiting for: ${n.waitingFor})` : status }),
       el("dt", { text: "Runs on" }), el("dd", { text: onWindows(n) ? "Windows" : hostLabel() }),
       el("dt", { text: "Folder" }), el("dd", { class: "small path" }, pathNodes(where(n))),
       n.messageBlock && [el("dt", { text: "Notes" }), el("dd", { class: "small", text: `Can't receive notes. ${n.messageBlock}` })],
@@ -843,9 +883,10 @@ function nodeDetails(n) {
       title: `Shows this chat in ${n.editor}`,
       onclick: () => { window.location.href = editorLink(n.editor, { session: n.sessionId }); },
     })),
+    ...(stuck ? backgroundSection(n) : []),
     ...chatSection(n),
     ...sendSection(n),
-    ...(n.background ? backgroundSection(n) : []),
+    ...(n.background && !stuck ? backgroundSection(n) : []),
     ...agentsSection(n),
     // Its arrows fold away (the choice is remembered); one opens in a pop-up.
     ...(conns.length ? [el("details", {
@@ -1125,7 +1166,7 @@ async function act(action, body) {
 
 function addNode(sessionId) {
   const r = $("#canvas").getBoundingClientRect();
-  const count = state.view.nodes.length;
+  const count = state.view?.nodes.length || 0;
   act("add", {
     sessionId,
     x: Math.round((r.width / 2 - state.pan.x) / state.zoom - NODE_W / 2 + (count % 5) * 18),
@@ -1272,6 +1313,7 @@ canvas.addEventListener("pointerup", async (evt) => {
 
 document.addEventListener("keydown", (evt) => {
   if (evt.key !== "Escape") return;
+  if (document.querySelector(":popover-open")) return;  // this Esc closes the popover (Appearance) only
   if (state.connecting) stopConnecting();
   else if (state.selected && !document.querySelector("dialog[open]")) closeDrawer();
 });
@@ -1291,8 +1333,11 @@ for (const layer of [$("#nodes"), $("#subagents"), $("#labels")]) {
     const sub = evt.target.closest(".sub");
     if (!node && !label && !sub) return;
     evt.preventDefault();
+    const before = state.selected;
     if (sub) openSubCard(sub);
     else select_(node ? { type: "node", id: node.dataset.id } : { type: "wire", id: label.dataset.id });
+    // Opened from the keyboard: focus moves into the details (Tab goes on from there).
+    if (state.selected && state.selected !== before) $("#drawer").focus({ preventScroll: true });
   });
   layer.addEventListener("focusin", (evt) => revealFocused(evt.target));
 }
@@ -1623,13 +1668,17 @@ $("#show-subagents").addEventListener("click", async () => {
   }
 });
 
-// The connect hint stays on the top bar's first row: where it would wrap
-// onto a second one (a narrow window, the details panel open), it hides.
+// The connect hint sits on the top bar's first row where it fits. Where it
+// would wrap onto a second one (a narrower window), it shows there only while
+// the board has no arrows yet, so a first-timer still learns how; with the
+// details panel open it hides.
 const hint = $(".topbar .hint");
-new ResizeObserver(() => {
+function placeHint() {
   hint.style.display = "";
-  if (hint.offsetTop > $(".topbar .board-pick").offsetTop + 10) hint.style.display = "none";
-}).observe($(".topbar"));
+  const wraps = hint.offsetTop > $(".topbar .board-pick").offsetTop + 10;
+  if (wraps && (state.view?.board.connections.length || !$("#drawer").hidden)) hint.style.display = "none";
+}
+new ResizeObserver(placeHint).observe($(".topbar"));
 
 // Delete the board on screen, then show another (or ask for a new one).
 $("#delete-board").addEventListener("click", async () => {
@@ -2208,8 +2257,10 @@ function sendSection(n) {
   box.value = state.drafts[n.sessionId] || "";
   // The drawer is redrawn every poll, so "sending" lives in state, not on this button.
   const sending = state.sending.has(n.sessionId);
+  // Asking you something in its terminal: nothing can be typed there until you answer.
+  const asking = n.background && n.running && n.agentState === "blocked";
   const button = el("button", {
-    class: "btn primary", disabled: sending,
+    class: asking ? "btn" : "btn primary", disabled: sending,
     text: sending ? "Sending…" : asPrompt ? "Send prompt" : "Send message",
     onclick: () => {
       const sid = n.sessionId, text = box.value.trim();
@@ -2222,8 +2273,9 @@ function sendSection(n) {
   return [
     el("h2", { text: asPrompt ? "Send a prompt" : "Send a message" }),
     box,
-    el("p", { class: "muted small", text: (asPrompt
-      ? "It wakes up with this as your next prompt, as if you had typed it."
+    el("p", { class: "muted small", text: (asking
+      ? "It's asking you something in its terminal, so a prompt can't be typed there until you answer it."
+      : asPrompt ? "It wakes up with this as your next prompt, as if you had typed it."
       : "It arrives as a message from Let Them Talk and is read between its steps.") +
       " Enter sends; Shift+Enter adds a line." }),
     el("div", { class: "drawer-actions" }, button),

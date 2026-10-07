@@ -163,8 +163,10 @@ installed inside WSL, where the server runs.
   resize it (double-click resets). **Fit view** brings every card into sight.
   Esc cancels an arrow; Esc or a click on the empty board closes the details.
 - **Keyboard:** Tab reaches cards, arrow labels and subagent cards (the board
-  moves to show the one in focus); Enter or Space opens it, F2 renames a
-  card.
+  moves to show the one in focus); Enter or Space opens it, with focus in its
+  details (Tab goes on from there), and F2 renames a card. When the details
+  close, focus goes back to the card or arrow they were opened from. Esc in
+  **Appearance** closes only that.
 - **Activity** (bottom of the sidebar, folded until you open it): the latest
   30 things that happened on this board, newest first, with the time: arrows
   connected and removed, notes and messages sent or failed, prompts sent,

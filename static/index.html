@@ -20,7 +20,7 @@
       title="Show the subagents each chat is running, linked to it">Subagents</button>
   </div>
   <span class="spacer"></span>
-  <span class="hint">Drag an agent's <span class="hint-port"></span> handle onto another agent to connect them.</span>
+  <span class="hint">Drag a card's <span class="hint-port"></span> onto another card to connect them.</span>
 </header>
 
 <div id="offline" role="status" hidden></div>
@@ -96,10 +96,10 @@
     </div>
   </main>
 
-  <aside id="drawer" hidden>
+  <aside id="drawer" hidden tabindex="-1" aria-label="Details">
     <div id="drawer-resizer" class="resizer edge" role="separator" aria-orientation="vertical"
       title="Drag to resize · double-click to reset"></div>
-    <button class="icon-btn close" id="drawer-close" aria-label="Close">&times;</button>
+    <button class="icon-btn close" id="drawer-close" aria-label="Close details">&times;</button>
     <div id="drawer-body"></div>
   </aside>
 </div>
