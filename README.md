@@ -116,8 +116,7 @@ installed inside WSL, where the server runs.
     A workflow has **Ask it to stop this workflow** while it runs and **Ask
     it to resume this workflow** once it stopped or failed; each sends the
     chat a message asking for that.
-  - **Connections** lists its arrows (click one to open it); **Connect to**
-    has a button for each running card it has no arrow to yet.
+  - **Connections** lists its arrows (click one to open it).
   - **Open in Cursor** (or your editor) shows the chat there (**Reopen in
     Cursor** once it has ended).
 - **Background agents:** **Open in terminal** (`claude attach <id>` in a new

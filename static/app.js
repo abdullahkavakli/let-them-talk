@@ -744,10 +744,6 @@ function wireDetails(c) {
 
 function nodeDetails(n) {
   const conns = state.view.board.connections.filter((c) => c.from === n.sessionId || c.to === n.sessionId);
-  // Agents this one can still be connected to, for connecting without dragging.
-  const targets = n.live && !n.messageBlock ? state.view.nodes.filter((o) =>
-    o.sessionId !== n.sessionId && o.live && !o.messageBlock &&
-    !conns.some((c) => c.from === n.sessionId && c.to === o.sessionId)) : [];
   return [
     ...nameHeading(n),
     // The facts fold into one line; the choice is remembered.
@@ -786,14 +782,7 @@ function nodeDetails(n) {
       }));
     })) : el("p", { class: "muted small", text: n.messageBlock
       ? "None. This session can't be connected until it can receive notes."
-      : targets.length ? "None. Drag the blue handle onto another agent, or pick one below."
       : "None. Drag the blue handle onto another agent to connect them." }),
-    targets.length > 0 && el("div", { class: "drawer-actions connect-to" },
-      el("span", { class: "small muted", text: "Connect to" }),
-      ...targets.map((o) => el("button", {
-        class: "btn", id: `connect-${o.sessionId}`, text: display(o),
-        onclick: () => openConnectDialog(n.sessionId, o.sessionId),
-      }))),
     handoffable(n) && el("div", { class: "drawer-actions" }, handoffButton(n)),
     handoffNote(n),
     endControls(n),

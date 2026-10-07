@@ -276,8 +276,6 @@ body.connecting .node:not(.ended) { cursor: copy; }
 .state-sending, .state-skipped { color: var(--muted); }
 .drawer-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .drawer-actions + h2 { margin-top: 18px; }
-.connect-to { align-items: center; }
-.connect-to .btn { font-size: 12px; padding: 3px 10px; }
 .logs {
   margin: 10px 0 18px; padding: 8px 10px; font-size: 11.5px; line-height: 1.45;
   white-space: pre-wrap; overflow-wrap: anywhere;
