@@ -40,7 +40,7 @@ check("cards: an empty board starts at the top left", S.free_slot({"nodes": {}})
 
 launched, sent, sessions = [], [], []
 S.subprocess.Popen = lambda args, **kw: launched.append(list(args)) or types.SimpleNamespace(wait=lambda timeout=None: 0)
-S.shutil.which = lambda name: {"code": "/bin/code", "cursor": "/bin/cursor", "explorer.exe": "/win/explorer.exe",
+S.shutil.which = lambda name: {"code": "/bin/code", "cursor": "/bin/cursor", "rundll32.exe": "/win/rundll32.exe",
                                "cmd.exe": "/win/cmd.exe", "xdg-open": "/bin/xdg-open"}.get(name)
 S.relay_send = lambda items: (sent.append(items) or [{"state": "sent", "detail": ""}], None)
 S.load_board = lambda bid: {"nodes": {}, "activity": []}
@@ -103,6 +103,11 @@ launched.clear()
 check("open_in_editor: a Windows folder cmd would split (&) isn't run", not S.open_in_editor("VS Code", "C:\\R&D")["opened"])
 S.open_editor_link("VS Code", session="a b&c")
 check("open_editor_link: values encoded twice, like the page", launched and launched[-1][-1].endswith("?session=a%2520b%2526c"))
+S.ON_WSL, on_wsl = True, S.ON_WSL
+S.open_editor_link("Cursor", session="x")
+S.ON_WSL = on_wsl
+check("open_editor_link: from WSL through Windows' link handler, which keeps ?session= (explorer.exe drops it)",
+      launched[-1] == ["/win/rundll32.exe", "url.dll,FileProtocolHandler", "cursor://anthropic.claude-code/open?session=x"])
 
 failed = [r for r in results if not r[1]]
 for name, ok, detail in results:

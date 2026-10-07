@@ -2532,8 +2532,10 @@ def open_editor_link(editor, **params):
     reads it). Returns whether it could."""
     query = "&".join(f"{k}={quote(quote(str(v), safe=''), safe='')}" for k, v in params.items() if v)
     url = f"{EDITOR_SCHEMES.get(editor, 'vscode')}://anthropic.claude-code/open" + (f"?{query}" if query else "")
-    # explorer.exe takes the link as it is (cmd's start would split it at &)
-    opener = ([shutil.which("explorer.exe") or "/mnt/c/Windows/explorer.exe"] if ON_WSL
+    # Windows' own link handler takes it whole; explorer.exe drops a link with a
+    # query (?session=) without a word, and cmd's start would split it at &
+    opener = ([shutil.which("rundll32.exe") or "/mnt/c/Windows/System32/rundll32.exe",
+               "url.dll,FileProtocolHandler"] if ON_WSL
               else ["open"] if HOST_LABEL == "macOS" else [shutil.which("xdg-open") or "xdg-open"])
     try:
         subprocess.Popen(opener + [url], cwd="/mnt/c" if ON_WSL else None, stdin=subprocess.DEVNULL,
