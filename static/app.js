@@ -279,6 +279,7 @@ function render() {
   const folderEl = $("#board-folder");
   if (folderEl.textContent !== v.board.folder) folderEl.replaceChildren(...pathNodes(v.board.folder));
   folderEl.title = v.board.folder;
+  renderBoardFolderButton();
   applyView();
   $("#empty").hidden = v.nodes.length > 0;
   renderNodes();
@@ -965,11 +966,11 @@ function nodeDetails(n) {
       n.live && [el("dt", { text: "Opened in" }), el("dd", { text: opener(n) || "?" })],
       n.model && [el("dt", { text: "Model" }), el("dd", { text: modelName(n.model) })],
       el("dt", { text: "Session" }), el("dd", { class: "mono small", text: n.sessionId }))),
-    (n.editor || where(n)) && el("div", { class: "drawer-actions" }, n.editor && el("button", {
+    (n.editor || continuable(n)) && el("div", { class: "drawer-actions" }, n.editor && el("button", {
       class: "btn primary", text: n.live ? `Open in ${n.editor}` : `Reopen in ${n.editor}`,
       title: `Shows this chat in ${n.editor}`,
       onclick: () => { window.location.href = editorLink(n.editor, { session: n.sessionId }); },
-    }), editorButtons(n)),
+    }), continuable(n) && conversationButton(n, "Continue in", "btn primary")),
     ...(stuck ? backgroundSection(n) : []),
     ...chatSection(n),
     ...sendSection(n),
@@ -997,46 +998,56 @@ function nodeDetails(n) {
   ];
 }
 
-// Open folder: an editor window on the card's folder (the one already there
-// comes forward). Continue: a chat that isn't running and has no editor of
-// its own goes on in the editor's Claude panel. The panel finds a conversation
-// only in a window on its folder, and the link goes to the editor window in
-// front, so the server opens the folder first and the link a moment later.
-// Never for a running chat: two Claude Codes on one conversation would get in
-// each other's way.
-const editorBusy = {};  // sessionId -> its folder is being opened (kept across redraws)
+// A chat's conversation in the editor's Claude panel. The panel finds a
+// conversation only in a window on its folder, and the link goes to the
+// editor window in front, so the server opens the folder first (or brings its
+// window forward) and the link a moment later. A chat that isn't running and
+// has no editor of its own gets "Continue in" at the top of its details; a
+// background agent gets "Open in" in its own section, even while it runs
+// (then both write to the same conversation; the user chose that).
+const editorBusy = {};  // sessionId, or "board" -> a folder is being opened (kept across redraws)
+const trustNote = (editor) =>
+  `If ${editor} asks whether you trust the folder, say yes: in Restricted Mode, Claude Code is off there.`;
 
-function editorButtons(n) {
-  if (!where(n)) return [];
-  const editor = n.editor || defaultEditor();
-  const busy = editorBusy[n.sessionId];
-  const running = n.live && n.running !== false;
-  const trust = `If ${editor} asks whether you trust the folder, say yes: in Restricted Mode, Claude Code is off there.`;
-  const go = (what) => async () => {
-    editorBusy[n.sessionId] = what;
-    renderDrawer();
-    try {
-      await api(`/api/board/${state.boardId}/open-folder`, { sessionId: n.sessionId, editor, continue: what === "continue" });
-    } catch (e) {
-      toast(failText(e), "error");
-    } finally {
-      delete editorBusy[n.sessionId];
-      renderDrawer();
-    }
-  };
-  return [
-    !n.editor && !running && n.resumable !== false && el("button", {
-      class: "btn primary", text: busy === "continue" ? "Opening…" : `Continue in ${editor}`, disabled: !!busy,
-      title: `Opens its folder in ${editor}, then this conversation in ${editor}'s Claude panel there. ${trust}`,
-      onclick: go("continue"),
-    }),
-    el("button", {
-      class: "btn", text: busy === "folder" ? "Opening…" : `Open folder in ${editor}`, disabled: !!busy,
-      title: `Opens a ${editor} window on ${where(n)}, or brings forward the one already there. ${trust}`,
-      onclick: go("folder"),
-    }),
-  ];
+async function openInEditor(key, body) {
+  editorBusy[key] = true;
+  if (state.view) render();
+  try {
+    await api(`/api/board/${state.boardId}/open-folder`, body);
+  } catch (e) {
+    toast(failText(e), "error");
+  } finally {
+    delete editorBusy[key];
+    if (state.view) render();
+  }
 }
+
+const continuable = (n) => !n.background && !n.editor && where(n) && !(n.live && n.running !== false) &&
+  n.resumable !== false;
+
+function conversationButton(n, verb, cls) {
+  const editor = n.editor || defaultEditor(), busy = editorBusy[n.sessionId];
+  const both = n.background && n.running ? " It keeps running here too, so both write to the same conversation." : "";
+  return el("button", {
+    class: cls, text: busy ? "Opening…" : `${verb} ${editor}`, disabled: !!busy,
+    title: `Opens its folder in ${editor}, then this conversation in ${editor}'s Claude panel there.${both} ` +
+      trustNote(editor),
+    onclick: () => openInEditor(n.sessionId, { sessionId: n.sessionId, editor, continue: true }),
+  });
+}
+
+// The board's own folder in an editor window (the sidebar's Board folder).
+function renderBoardFolderButton() {
+  const btn = $("#open-board-folder"), editor = defaultEditor();
+  const text = editorBusy.board ? "Opening…" : `Open in ${editor}`;
+  if (btn.textContent !== text) btn.textContent = text;
+  btn.disabled = !!editorBusy.board || !state.view;
+  btn.title = `Opens a ${editor} window on this board's folder, or brings forward the one already there. ` +
+    trustNote(editor);
+}
+$("#open-board-folder").addEventListener("click", () => {
+  if (state.view && !editorBusy.board) openInEditor("board", { board: true, editor: defaultEditor() });
+});
 
 // Rename: a name of your own for a card, kept with the board. The chat keeps
 // its title and its address, so notes and messages still find it.
@@ -2467,6 +2478,7 @@ function backgroundSection(n) {
         onclick: () => agentAction(n, "agent-attach", (r) => r.opened
           ? toast(restart ? `Opened a terminal that restarts it (${r.command}).` : "Opened a terminal window attached to it.", "ok")
           : toast(`Run this in a terminal: ${r.command}`, "info", 0)) }),
+      !restart && where(n) && conversationButton(n, "Open in", "btn"),
       !restart && el("button", { class: "btn",
         text: state.logs[n.sessionId] ? "Hide its screen" : blocked ? "What is it asking?" : "Show its screen",
         onclick: () => state.logs[n.sessionId]

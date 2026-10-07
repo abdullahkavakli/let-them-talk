@@ -3100,21 +3100,27 @@ def attach_background(bid, body):
 
 
 def open_folder(bid, body):
-    """Open an editor window on a card's folder, or bring forward the one
-    already there: the folder it runs in, the C:\\ one for a Windows chat.
-    With "continue", the conversation then opens in the editor's Claude panel
-    there: the panel finds a conversation only in a window on its folder, and
-    the link goes to the window in front, so the folder's window comes first."""
+    """Open an editor window on a folder, or bring forward the one already
+    there: with "board", the board's own folder; else a card's, the one it runs
+    in (the C:\\ one for a Windows chat). With "continue", the card's
+    conversation then opens in the editor's Claude panel there: the panel finds
+    a conversation only in a window on its folder, and the link goes to the
+    window in front, so the folder's window comes first."""
     sid = str(body.get("sessionId") or "")
     with lock:
-        node = load_board(bid)["nodes"].get(sid)
-    if node is None:
-        raise ValueError("That chat isn't on this board.")
-    folder = node.get("winCwd") if node.get("platform") == "windows" else node.get("cwd")
+        board = load_board(bid)
+    if body.get("board"):
+        node, folder, local = {}, board["folder"], board["folder"]
+    else:
+        node = board["nodes"].get(sid)
+        if node is None:
+            raise ValueError("That chat isn't on this board.")
+        folder = node.get("winCwd") if node.get("platform") == "windows" else node.get("cwd")
+        local = node.get("cwd")
     if not folder:
         raise ValueError("Its folder isn't known.")
-    if node.get("cwd") and not os.path.isdir(node["cwd"]):
-        raise ValueError(f"Its folder {folder} isn't there any more.")
+    if local and not os.path.isdir(local):
+        raise ValueError(f"The folder {folder} isn't there any more.")
     editor = str(body.get("editor") or node.get("editor") or "")
     opened = open_in_editor(editor, folder)
     if not opened["opened"]:
