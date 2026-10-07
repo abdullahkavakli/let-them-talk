@@ -595,10 +595,38 @@ async function loadSub(sel) {
 
 const ago = (ms) => ms ? `${fmtDur(Math.max(0, Date.now() - ms))} ago` : null;
 
+// Claude writes Markdown; a bubble shows it lightly: **bold**, `code` and code
+// blocks, headings as bold lines, list items with •, a table as rows of cells
+// (its |---| line goes), [links](…) as their words. Built from text nodes,
+// never HTML, and all inline, so a folded bubble still cuts off by lines.
+function richText(text) {
+  const out = [];
+  const line = (...nodes) => { if (out.length) out.push("\n"); out.push(...nodes); };
+  let fence = false;
+  for (const raw of String(text).split("\n")) {
+    if (/^\s*```/.test(raw)) { fence = !fence; continue; }
+    if (fence) { line(el("code", { text: raw })); continue; }
+    if (/^\s*\|?(\s*:?-{3,}:?\s*\|)+\s*(:?-{3,}:?)?\s*$/.test(raw) || /^\s*([-*_])(\s*\1){2,}\s*$/.test(raw)) continue;
+    const head = raw.match(/^\s*#{1,6}\s+(.*)$/), row = raw.match(/^\s*\|(.*)\|\s*$/);
+    if (head) line(el("strong", {}, inlineMd(head[1])));
+    else if (row) line(...inlineMd(row[1].split("|").map((cell) => cell.trim()).join("  ·  ")));
+    else line(...inlineMd(raw.replace(/^(\s*)[-*+]\s+/, "$1• ")));
+  }
+  return out;
+}
+
+function inlineMd(s) {
+  return s.split(/(`[^`]+`)/).flatMap((part) => /^`[^`]+`$/.test(part)
+    ? [el("code", { text: part.slice(1, -1) })]
+    : part.replace(/\[([^\]]+)\]\([^)\s]+\)/g, "$1").split(/(\*\*[^*]+\*\*|__[^_]+__)/)
+      .map((b) => /^(\*\*|__).+\1$/.test(b) ? el("strong", { text: b.slice(2, -2) }) : b))
+    .filter((x) => x !== "");
+}
+
 function foldBubble(key, text) {
   const open = !!state.chatOpen[key];
   const long = text.length > FOLD_CHARS || text.split("\n").length > FOLD_LINES;
-  return [el("div", { class: "bubble" + (long && !open ? " folded" : ""), text }),
+  return [el("div", { class: "bubble" + (long && !open ? " folded" : "") }, richText(text)),
     long && el("button", { class: "fold", text: open ? "Show less" : "Show all",
       onclick: () => { state.chatOpen[key] = !open; renderDrawer(); } })];
 }
@@ -686,6 +714,9 @@ function select_(sel) {
   state.selected = sel;
   render();
   renderDrawer();
+  // The details may open over the card: the board moves it out from under them.
+  const card = sel.type === "node" && $(`#nodes [data-id="${sel.id}"]`);
+  if (card && !$("#drawer").hidden) reveal(card);
   if (sel.type === "node") loadDetails(sel.id);
   else if (sel.type === "sub") loadSub(sel);
   else if (sel.type === "wire") loadTalk(sel.id);
@@ -1001,6 +1032,7 @@ function nodeDetails(n) {
     handoffable(n) && el("div", { class: "drawer-actions" }, handoffButton(n)),
     handoffNote(n),
     endControls(n),
+    n.background && deleteControls(n),
     removeControls(n, conns),
   ];
 }
@@ -1511,7 +1543,12 @@ for (const layer of [$("#nodes"), $("#subagents"), $("#labels")]) {
 // glass panels. (The canvas clips instead of scrolling, so the browser can't
 // scroll it there itself.)
 function revealFocused(target) {
-  if (!target.matches(":focus-visible")) return;
+  if (target.matches(":focus-visible")) reveal(target);
+}
+
+// Pan the board just enough to bring an element fully into the part the
+// panels leave uncovered (e.g. a card the details just opened over).
+function reveal(target) {
   const c = canvas.getBoundingClientRect(), v = viewBox(), b = target.getBoundingClientRect();
   const r = { left: c.left + v.left, right: c.left + v.right, top: c.top + v.top, bottom: c.top + v.bottom };
   const dx = b.left < r.left ? r.left - b.left + 40 : b.right > r.right ? r.right - b.right - 40 : 0;
@@ -2350,7 +2387,7 @@ function talkMessage(m, c) {
     : `${name(m.from)} · ${when(m.at)}${TALK_STATE[m.state] ? ` · ${TALK_STATE[m.state]}` : ""}`;
   return el("div", { class: `msg ${side}${m.before ? " before" : ""}` },
     el("div", { class: "msg-meta", text: meta }),
-    el("div", { class: "bubble" + (long && !open ? " folded" : ""), text: m.text }),
+    el("div", { class: "bubble" + (long && !open ? " folded" : "") }, richText(m.text)),
     long && el("button", { class: "fold", text: open ? "Show less" : "Show all",
       onclick: () => { state.chatOpen[m.id] = !open; renderDrawer(); } }));
 }
@@ -2385,7 +2422,7 @@ function chatMessage(m, activity) {
   return el("div", { class: `msg ${m.role}` },
     el("div", { class: "msg-meta",
       text: [peer ? `@${m.from || "another session"}` : "Claude", clock(m.at), note].filter(Boolean).join(" · ") }),
-    el("div", { class: "bubble" + (done ? "" : " typing"), text }),
+    el("div", { class: "bubble" + (done ? "" : " typing") }, richText(text)),
     fold && toggle(fold));
 }
 
@@ -2502,10 +2539,16 @@ function backgroundSection(n) {
       n.running && n.status !== "idle" && el("button", { class: "btn", text: "Stop",
         onclick: () => confirm(`Stop ${display(n)}? It stops whatever it is doing now, as Esc does ` +
           "in its terminal. It keeps running, and its terminal stays open.")
-          && agentAction(n, "agent-stop", () => toast(`Stopped ${display(n)}. It's waiting for you.`, "ok")) }),
-      el("button", { class: "btn danger", text: "Delete agent",
-        onclick: () => confirm(`Delete the background agent ${display(n)}? Its conversation stays on disk.`)
-          && agentAction(n, "agent-delete", () => { toast(`Deleted ${display(n)}.`, "ok"); closeDrawer(); }) })),
+          && agentAction(n, "agent-stop", () => toast(`Stopped ${display(n)}. It's waiting for you.`, "ok")) })),
     state.logs[n.sessionId] && el("pre", { class: "logs mono", text: state.logs[n.sessionId] }),
   ];
+}
+
+// Deleting a background agent can't be undone, so it sits at the bottom with
+// the other ways a card goes, not beside Open in terminal and Stop.
+function deleteControls(n) {
+  return el("div", { class: "drawer-actions" }, el("button", { class: "btn danger", text: "Delete agent",
+    title: "claude rm: removes it from Claude Code's list (its conversation stays on disk)",
+    onclick: () => confirm(`Delete the background agent ${display(n)}? Its conversation stays on disk.`)
+      && agentAction(n, "agent-delete", () => { toast(`Deleted ${display(n)}.`, "ok"); closeDrawer(); }) }));
 }

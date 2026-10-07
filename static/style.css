@@ -338,6 +338,10 @@ body.connecting .node:not(.ended) { cursor: copy; }
 .bubble.asking ul { margin: 4px 0 0; padding-left: 18px; white-space: normal; }
 .bubble.asking .plan { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
 .bubble.asking .plan-text { font-size: 12px; }
+.bubble code {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: .9em;
+  background: var(--field); border-radius: 4px; padding: 0 3px;
+}
 .bubble.folded { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 8; overflow: hidden; }
 .fold {
   border: 0; background: none; padding: 4px 6px; min-height: 24px; font: inherit; font-size: 11.5px;
@@ -346,6 +350,11 @@ body.connecting .node:not(.ended) { cursor: copy; }
 .fold:hover { text-decoration: underline; }
 
 /* toasts */
+/* With the details open, notices sit left of them, off their buttons (a
+   narrow window's details cover the board, so there they stay on top). */
+@media (min-width: 901px) {
+  body:has(#drawer:not([hidden])) #toasts { right: calc(var(--drawer) + 24px); }
+}
 #toasts {
   position: fixed; right: 16px; bottom: 16px; z-index: 20;
   display: flex; flex-direction: column; gap: 8px; max-width: min(380px, calc(100vw - 32px));

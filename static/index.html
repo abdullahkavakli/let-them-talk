@@ -115,9 +115,9 @@
   <div class="pop-body" id="agents-pop-body"></div>
 </dialog>
 
-<dialog id="connect-dialog">
+<dialog id="connect-dialog" aria-labelledby="c-title">
   <form method="dialog" id="connect-form">
-    <h2>Connect agents</h2>
+    <h2 id="c-title">Connect agents</h2>
     <p class="pair"><span id="c-from" class="chip"></span><span class="arrow-glyph">&rarr;</span><span id="c-to" class="chip"></span></p>
     <label for="c-reason">Why are you connecting them? <span class="muted">(optional)</span></label>
     <textarea id="c-reason" rows="3" placeholder="e.g. api-worker finishes the migration; tell reviewer which files changed"></textarea>
@@ -132,7 +132,7 @@
       </div>
     </div>
     <p class="muted small">The notes arrive from <strong>@let-them-talk</strong> as messages from another session, so they cannot approve permissions or change settings. Each delivered note starts a turn in an idle agent.</p>
-    <p id="c-error" class="error" hidden></p>
+    <p id="c-error" class="error" role="alert" hidden></p>
     <div class="actions">
       <button type="button" class="btn" data-close>Cancel</button>
       <button id="c-submit" value="ok" class="btn primary">Connect</button>
@@ -140,7 +140,7 @@
   </form>
 </dialog>
 
-<dialog id="chat-dialog">
+<dialog id="chat-dialog" aria-labelledby="n-title">
   <form method="dialog" id="chat-form">
     <h2 id="n-title">New agent</h2>
     <label for="n-prompt" id="n-prompt-label">What should it do?</label>
@@ -202,7 +202,7 @@
       </div>
     </div>
     <p id="n-note" class="muted small"></p>
-    <p id="n-error" class="error" hidden></p>
+    <p id="n-error" class="error" role="alert" hidden></p>
     <div class="actions">
       <button type="button" class="btn" data-close>Cancel</button>
       <button id="n-submit" value="ok" class="btn primary">Start agent</button>
@@ -210,7 +210,7 @@
   </form>
 </dialog>
 
-<dialog id="board-dialog">
+<dialog id="board-dialog" aria-labelledby="b-title">
   <form method="dialog" id="board-form">
     <h2 id="b-title">New board</h2>
     <p id="b-note" class="muted small">A board belongs to a folder. Sessions running in that folder (or below it) join the board automatically; you can add sessions from other folders by hand.</p>
@@ -230,7 +230,7 @@
     <div id="b-places"></div>
     <div id="b-browser" hidden></div>
     <div id="b-suggest"></div>
-    <p id="b-error" class="error" hidden></p>
+    <p id="b-error" class="error" role="alert" hidden></p>
     <div class="actions">
       <button type="button" class="btn" data-close>Cancel</button>
       <button id="b-submit" value="ok" class="btn primary">Create</button>

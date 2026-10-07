@@ -1742,7 +1742,18 @@ def overlaps(board, x, y):
 
 
 def free_slot(board):
-    """The first grid spot that no card (moved or not) overlaps."""
+    """A spot for a new card that joins the others: of the free spots beside a
+    card (right, below, left, above), the one nearest the middle of all the
+    cards. An empty board (or one with no room beside any card) takes the
+    first free spot of a grid from the top left."""
+    nodes = list(board["nodes"].values())
+    if nodes:
+        mx, my = sum(n["x"] for n in nodes) / len(nodes), sum(n["y"] for n in nodes) / len(nodes)
+        spots = [(n["x"] + dx, n["y"] + dy) for n in nodes
+                 for dx, dy in ((270, 0), (0, 150), (-270, 0), (0, -150))]
+        free = [(x, y) for x, y in spots if not overlaps(board, x, y)]
+        if free:
+            return min(free, key=lambda p: (p[0] - mx) ** 2 + (p[1] - my) ** 2)
     i = 0
     while True:
         x, y = 40 + (i % 4) * 270, 40 + (i // 4) * 150
