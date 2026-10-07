@@ -1590,16 +1590,49 @@ def list_dirs(raw):
             "dirs": names[:DIR_LIMIT], "truncated": len(names) > DIR_LIMIT}
 
 
+def board_for_folder(folder):
+    """The board that uses this folder, if any (one board per folder)."""
+    return next((b for b in list_boards() if b["folder"] == folder), None)
+
+
 def create_board(folder):
     folder = folder.rstrip("/") or "/"
-    bid = board_id_for(folder)
     with lock:
-        if load_board(bid) is None:
-            save_board({
-                "id": bid, "title": Path(folder).name or folder, "folder": folder,
-                "nodes": {}, "hidden": [], "connections": [], "activity": [],
-            })
+        have = board_for_folder(folder)
+        if have:
+            return have["id"]
+        # A board keeps its id when its folder changes, so the id this folder
+        # would get may belong to a board that has moved elsewhere.
+        bid, n = board_id_for(folder), 1
+        while board_path(bid).exists():
+            n += 1
+            bid = f"{board_id_for(folder)}-{n}"
+        save_board({
+            "id": bid, "title": Path(folder).name or folder, "folder": folder,
+            "nodes": {}, "hidden": [], "connections": [], "activity": [],
+        })
     return bid
+
+
+def change_folder(bid, body):
+    """Point a board at another folder. Its cards and arrows stay; chats in
+    the new folder join it from now on. A board named after its old folder
+    takes the new folder's name."""
+    folder = normalize_folder(str(body.get("folder") or "")).rstrip("/") or "/"
+    with lock:
+        board = load_board(bid)
+        old = board["folder"]
+        if folder == old:
+            return {"folder": folder}
+        other = board_for_folder(folder)
+        if other:
+            raise ValueError(f"The board \"{other['title']}\" already uses {folder}.")
+        if board["title"] == (Path(old).name or old):
+            board["title"] = Path(folder).name or folder
+        board["folder"] = folder
+        add_activity(board, f"Changed the board folder from {old} to {folder}")
+        save_board(board)
+    return {"folder": folder}
 
 
 def add_activity(board, text, level="info"):
@@ -3071,6 +3104,7 @@ class Handler(BaseHTTPRequestHandler):
                     "remove": lambda: remove_node(bid, body),
                     "rename": lambda: rename_node(bid, body),
                     "delete": lambda: delete_board(bid),
+                    "folder": lambda: change_folder(bid, body),
                 }
                 if action in handlers:
                     result = handlers[action]()

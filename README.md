@@ -24,7 +24,9 @@ installed inside WSL, where the server runs.
   any existing folder (`C:\...`, `/mnt/c/...`, `~/...`), typed or picked with
   **Browse…**, and suggests folders with running sessions that have no board
   yet. A folder has one board, so **New board** on a folder that has one
-  opens it. Switch boards with **Board** in the top bar. **Delete this
+  opens it. Switch boards with **Board** in the top bar. **Change folder**
+  (under *Board folder*) points the board at another folder: sessions there
+  join it, and the cards and arrows already on it stay. **Delete this
   board** (under *Board folder*) removes the board with its cards and
   arrows, after asking; the sessions keep running and no agent is told.
 - **Connect:** drag the blue handle on a card onto another card (or click

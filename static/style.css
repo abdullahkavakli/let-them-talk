@@ -666,7 +666,8 @@ dialog h2 { font-size: 22px; font-weight: 700; letter-spacing: -.3px; }
 .theme-pick label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
 .tint-pick { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; }
 .tint-pick input { flex: 1; min-width: 0; accent-color: var(--accent); }
-#delete-board { margin-top: 8px; padding: 4px 12px; font-size: 12px; }
+.board-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.board-actions .btn { padding: 4px 12px; font-size: 12px; }
 
 /* Paths read as text, not code: the UI font, wrapping only between folder
    names (each is a span from app.js), inside one only if it is too long. */

@@ -51,7 +51,10 @@
     <section>
       <h2>Board folder</h2>
       <p id="board-folder" class="mono muted">—</p>
-      <button id="delete-board" class="btn danger">Delete this board</button>
+      <div class="board-actions">
+        <button id="change-folder" class="btn" title="Point this board at another folder">Change folder</button>
+        <button id="delete-board" class="btn danger">Delete this board</button>
+      </div>
     </section>
     <section>
       <h2>Add agents</h2>
@@ -191,8 +194,8 @@
 
 <dialog id="board-dialog">
   <form method="dialog" id="board-form">
-    <h2>New board</h2>
-    <p class="muted small">A board belongs to a folder. Sessions running in that folder (or below it) join the board automatically; you can add sessions from other folders by hand.</p>
+    <h2 id="b-title">New board</h2>
+    <p id="b-note" class="muted small">A board belongs to a folder. Sessions running in that folder (or below it) join the board automatically; you can add sessions from other folders by hand.</p>
     <label for="b-folder">Folder</label>
     <div class="folder-row">
       <input id="b-folder" list="b-folders" class="mono" autocomplete="off"

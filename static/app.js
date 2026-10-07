@@ -1356,7 +1356,19 @@ const placeButtons = (places, ui) => places.map((pl) => el("button", {
   type: "button", class: "btn place", text: pl.label, title: pl.path, onclick: () => browse(pl.path, ui),
 }));
 
-function openBoardDialog(folders, boards, places = []) {
+// New board, or with a board: Change folder, which points that board at
+// another folder (its cards and arrows stay).
+let movingBoard = null;
+
+function openBoardDialog(folders, boards, places = [], board = null) {
+  movingBoard = board;
+  $("#b-title").textContent = board ? "Change board folder" : "New board";
+  $("#b-note").textContent = board
+    ? "Sessions running in the new folder (or below it) join the board automatically. " +
+      "Cards already on the board stay, with their arrows."
+    : "A board belongs to a folder. Sessions running in that folder (or below it) join the board " +
+      "automatically; you can add sessions from other folders by hand.";
+  $("#b-submit").textContent = board ? "Change" : "Create";
   const have = new Set(boards.map((b) => b.folder));
   const free = folders.filter((f) => !have.has(f));
   $("#b-folders").replaceChildren(...folders.map((f) => el("option", { value: f })));
@@ -1367,7 +1379,7 @@ function openBoardDialog(folders, boards, places = []) {
       type: "button", class: "btn mono", text: f,
       onclick: () => { $("#b-folder").value = f; $("#b-browser").hidden = true; },
     })));
-  $("#b-folder").value = "";
+  $("#b-folder").value = board?.folder || "";
   $("#b-browser").hidden = true;
   $("#b-error").hidden = true;
   $("#board-dialog").showModal();
@@ -1410,11 +1422,30 @@ $("#new-board").addEventListener("click", async () => {
   }
 });
 
+$("#change-folder").addEventListener("click", async () => {
+  const board = state.view?.board;
+  if (!board) return;
+  try {
+    const data = await api("/api/state");
+    openBoardDialog(data.folders, data.boards, data.places, board);
+  } catch (e) {
+    toast(failText(e), "error");
+  }
+});
+
 $("#board-form").addEventListener("submit", async (evt) => {
   if (evt.submitter?.value !== "ok") return;
   evt.preventDefault();
+  const folder = $("#b-folder").value.trim();
   try {
-    const res = await api("/api/boards", { folder: $("#b-folder").value.trim() });
+    if (movingBoard) {
+      const res = await api(`/api/board/${movingBoard.id}/folder`, { folder });
+      $("#board-dialog").close();
+      if (res.result.folder !== movingBoard.folder) toast(`This board now uses ${res.result.folder}.`, "ok");
+      poll();
+      return;
+    }
+    const res = await api("/api/boards", { folder });
     $("#board-dialog").close();
     selectBoard(res.id);
   } catch (e) {
