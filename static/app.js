@@ -2503,7 +2503,7 @@ function sendSection(n) {
   const ready = () => !!(box.value.trim() || (state.images[sid] || []).length);
   const box = el("textarea", {
     id: "send-box", rows: 1, class: "send-box",
-    placeholder: suggest ? `${suggest}  (Tab to use)` : sg?.pending ? "Suggesting a reply…"
+    placeholder: suggest ? `${suggest}  (Tab or →)` : sg?.pending ? "Suggesting a reply…"
       : asPrompt ? "Its next prompt" : "Your message",
     oninput: (e) => { state.drafts[sid] = e.target.value; composer.classList.toggle("ready", ready()); },
     // A screenshot pasted (Ctrl+V) goes in as an image; copied text pastes as text.

@@ -81,13 +81,15 @@ class FakeAPI:
         self.posts = []
         self.asked = 0
         self.ultracode = None   # what the server reads off a running background agent
+        self.suggest = None     # alpha's suggested reply
 
     def chat(self, sid):
         self.asked += 1
         msgs = [{"id": "u1", "role": "user", "at": 1, "text": "Fix the tests", "done": True},
                 {"id": "r1", "role": "claude", "at": 2, "done": True,
                  "text": "## Done\n- **All green** now\n- ran `npm test`\n\n| a | b |\n|---|---|\n| 1 | 2 |"}]
-        return {"sessionId": sid, "messages": msgs, "asking": None, "plan": None, "queued": [], "suggest": None,
+        return {"sessionId": sid, "messages": msgs, "asking": None, "plan": None, "queued": [],
+                "suggest": {"text": self.suggest} if self.suggest and sid == A else None,
                 "working": self.vary and sid == A, "doing": f"Step {self.asked}" if self.vary else None,
                 "ultracode": self.ultracode if sid == B else None}
 
@@ -335,6 +337,15 @@ def checks_wide(browser):
         sent = [b for p, b in page.api.posts if p.endswith("/send")]
         check(name, one and refused and len(sent) == 1 and sent[0]["text"] == "" and len(sent[0]["images"]) == 1)
         page.evaluate("state.outbox = {}")
+
+    name = "send box: a suggested reply says Tab or → takes it, and → does"
+    with step(page, name):
+        page.api.suggest = "Run the tests"
+        open_card(page, A)
+        hint = page.get_attribute("#send-box", "placeholder")
+        page.locator("#send-box").press("ArrowRight")
+        check(name, hint == "Run the tests  (Tab or →)" and page.input_value("#send-box") == "Run the tests", hint)
+        page.evaluate("state.drafts = {}")
 
     name = "ultracode: a running agent shows its state with the one button that changes it, and asks the server"
     with step(page, name):
