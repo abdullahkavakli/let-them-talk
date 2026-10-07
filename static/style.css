@@ -163,6 +163,7 @@ h2 { font-size: 12px; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
 .avail-row:hover { background: var(--panel-2); }
 .avail-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .avail-row .btn { padding: 3px 10px; font-size: 12px; }
+.avail-row .btn.add { flex: none; width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 #activity { list-style: none; padding: 0; margin: 0; font-size: 12px; }
 #activity li { padding: 5px 0; border-bottom: 1px solid var(--border); }
 #activity li time { color: var(--muted); margin-right: 6px; }

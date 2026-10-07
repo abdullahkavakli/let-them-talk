@@ -19,7 +19,7 @@ installed inside WSL, where the server runs.
 
 - **Boards belong to folders.** Sessions running in the board's folder (or
   below it) appear on their own; ones from other folders are listed under
-  *Add agents*, where **Add** puts one on the board and **+ New agent** next
+  *Add agents*, where a row's **+** puts it on the board and **+ New agent** next
   to a folder starts a terminal/background agent there. **New board** takes
   any existing folder (`C:\...`, `/mnt/c/...`, `~/...`), typed or picked with
   **Browse…**, or picked from its ▾ list of folders with running sessions,

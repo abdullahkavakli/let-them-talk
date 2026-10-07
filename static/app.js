@@ -637,6 +637,13 @@ function subDetails(sel, back, toChat) {
   ];
 }
 
+// A drawn "+", so it sits in the middle of its round button whatever the font.
+function plusIcon() {
+  const icon = svg("svg", { width: 12, height: 12, viewBox: "0 0 12 12", "aria-hidden": "true" });
+  icon.append(svg("path", { d: "M6 1.5v9M1.5 6h9", stroke: "currentColor", "stroke-width": 1.6, "stroke-linecap": "round" }));
+  return icon;
+}
+
 function renderAvailable() {
   const box = $("#available");
   const groups = {};
@@ -654,8 +661,8 @@ function renderAvailable() {
     ...groups[cwd].map((s) => el("div", { class: "avail-row" },
       el("span", { class: `dot ${s.status}`, title: s.status, role: "img", "aria-label": s.status }),
       el("span", { class: "name", text: display(s), title: [s.name && `@${s.name}`, onWindows(s) ? "Windows" : "WSL", opener(s), s.status].filter(Boolean).join(" · ") }),
-      el("button", { class: "btn", text: "Add", "aria-label": `Add ${display(s)} to this board`,
-        onclick: () => addNode(s.sessionId) }))))));
+      el("button", { class: "btn add", title: "Add to this board", "aria-label": `Add ${display(s)} to this board`,
+        onclick: () => addNode(s.sessionId) }, plusIcon()))))));
 }
 
 function renderActivity() {
