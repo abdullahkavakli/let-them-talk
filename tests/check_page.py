@@ -81,6 +81,7 @@ class FakeAPI:
         self.posts = []
         self.asked = 0
         self.ultracode = None   # what the server reads off a running background agent
+        self.checking = False   # it is looking in that agent's /effort panel
         self.suggest = None     # alpha's suggested reply
 
     def chat(self, sid):
@@ -91,7 +92,7 @@ class FakeAPI:
         return {"sessionId": sid, "messages": msgs, "asking": None, "plan": None, "queued": [],
                 "suggest": {"text": self.suggest} if self.suggest and sid == A else None,
                 "working": self.vary and sid == A, "doing": f"Step {self.asked}" if self.vary else None,
-                "ultracode": self.ultracode if sid == B else None}
+                "ultracode": self.ultracode if sid == B else None, "ultracodeChecking": self.checking and sid == B}
 
     def reply(self, route, request):
         url = urlparse(request.url)
@@ -396,6 +397,19 @@ def checks_wide(browser):
         open_card(page, C)
         check(name, both == ["Turn on", "Turn off"] and page.locator("#drawer-body .ultracode").count() == 0
               and "while it runs" in page.inner_text("#drawer-body"), both)
+
+    name = "ultracode: while the app looks in its /effort panel, the line says checking and the buttons wait"
+    with step(page, name):
+        page.api.checking = True
+        open_card(page, B)
+        row = page.locator("#drawer-body .ultracode")
+        shown, waiting = row.inner_text(), row.locator("button:disabled").count()
+        said = "opens /effort in it and closes it again" in page.inner_text("#drawer-body")
+        page.api.checking, page.api.ultracode = False, True
+        poll(page)
+        check(name, "Ultracode: checking…" in shown and waiting == 2 and said
+              and row.inner_text().startswith("Ultracode is on") and row.locator("button:enabled").all_inner_texts() == ["Turn off"],
+              (shown, waiting, said, row.inner_text()))
 
     name = "ultracode: New agent can start a background agent with it, not a Chat in IDE"
     with step(page, name):

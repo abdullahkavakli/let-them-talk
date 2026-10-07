@@ -195,8 +195,15 @@ installed inside WSL, where the server runs.
   (or why it can't: workflows off under `/config`, a model without
   ultracode). It lasts until the agent ends; one started with **Ultracode**
   ticked in **New agent** starts with it again when woken. After a restart
-  it says *Ultracode: unknown* until its next prompt, with both buttons. In any
-  other chat, type `/effort ultracode on` (or `off`) yourself.
+  its conversation doesn't tell yet, so while its details are open the app
+  finds out, once, when it is idle (if it is working, as soon as it
+  stops): it types `/effort` into its prompt box, reads *Ultracode
+  on* (or *off*) in the effort panel that opens, and closes the panel with
+  Esc, changing nothing. Meanwhile the line says *Ultracode: checking…*.
+  Claude Code notes the cancelled `/effort` in the conversation; the board
+  doesn't show it. If the panel has no Ultracode line (a model without it),
+  it says *Ultracode: unknown* until its next prompt, with both buttons. In
+  any other chat, type `/effort ultracode on` (or `off`) yourself.
 - A chat you send to the background keeps its card: the card, with its
   arrows, moves to the background agent that goes on with it.
 - **Remove from board:** in a card's details; its arrows go too (the button

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Checks parts of server.py without a server: where new cards go, New
 agent → Chat in IDE in a folder, renaming a card, images sent with a prompt and switching
-ultracode. Every program launch, session list and message is faked, so nothing opens and
+ultracode or looking it up. Every program launch, session list and message is faked, so nothing opens and
 nothing is sent. Needs only Python.
 
 Run:  python3 tests/check_server.py      Exit 0: all passed. 1: a check failed.
@@ -42,6 +42,7 @@ check("cards: an empty board starts at the top left", S.free_slot({"nodes": {}})
 # --------------------------------------------- Chat in IDE in a folder (faked)
 
 launched, sent, sessions = [], [], []
+real_popen = S.subprocess.Popen
 S.subprocess.Popen = lambda args, **kw: launched.append(list(args)) or types.SimpleNamespace(wait=lambda timeout=None: 0)
 S.shutil.which = lambda name: {"code": "/bin/code", "cursor": "/bin/cursor", "rundll32.exe": "/win/rundll32.exe",
                                "cmd.exe": "/win/cmd.exe", "xdg-open": "/bin/xdg-open"}.get(name)
@@ -127,7 +128,7 @@ def press(job, keys, check=None):  # Claude Code takes the new name, in a fresh 
     sessions[0] = {**agent, "name": typed[-1].removeprefix("/rename ").rstrip("\r")}
 
 
-S._press_keys = press
+real_press_keys, S._press_keys = S._press_keys, press
 sessions[:] = [agent,
                {"sessionId": "ide", "name": "ide-1", "platform": "wsl", "background": False, "running": True},
                {"sessionId": "nap", "name": "nap", "platform": "wsl", "background": True, "running": False},
@@ -239,6 +240,181 @@ try:
     check("ultracode: an asleep agent isn't typed into", False)
 except ValueError:
     check("ultracode: an asleep agent isn't typed into", True)
+
+# ------------- Ultracode unknown: the app looks in its /effort panel (screen faked)
+
+box = lambda text: f"{rules}\r\n❯ {text}\r\n{rules}\r\n  ⏵⏵ auto mode on\r\n"
+panel = lambda line: ("▔" * 40 + "\r\n   Effort\r\n\r\n      Faster          Smarter\r\n"
+                      f"      ──────▲─────      {line}\r\n      low  high  xhigh  max      Tab to toggle\r\n"
+                      "      Ultracode: dynamic workflows on every task\r\n\r\n"
+                      "   ←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel\r\n")
+tui = {"panel": panel("Ultracode  on"), "typing": True, "hold": None}
+pressed, started = [], {}
+
+
+def press_look(job, keys, check=None):
+    """`claude attach`, faked: the box shows what is typed, Enter on /effort opens
+    the panel, and Esc closes it with "Cancelled" noted, as Claude Code does when idle."""
+    screen, text = box(""), ""
+    if check:
+        check(screen)
+    if tui["hold"]:
+        tui["hold"].wait(5)
+    pressed.append([])
+    keys = list(keys)
+    while keys:
+        key = keys.pop(0)
+        if callable(key):
+            keys[:0] = key(screen)
+            continue
+        key = key[0]
+        pressed[-1] += [key] if key else []
+        if key == "\r" and text == "/effort" and tui["panel"]:
+            screen = tui["panel"]
+        elif key == "\x1b" and screen == tui["panel"]:
+            screen, text = box(""), ""
+            for rec in ("<command-name>/effort</command-name>\n<command-args></command-args>",
+                        "<local-command-stdout>Cancelled</local-command-stdout>"):
+                prompt(rec, time.time())
+        elif key not in ("", "\r") and tui["typing"]:
+            text += key
+            screen = box(text)
+    return screen
+
+
+def look(run, status="idle", details=True, listed=None):
+    """The drawer's poll for a woken agent (process run) whose registry says status
+    (`claude agents`: listed, else the same), and what the look then pressed."""
+    pressed.clear()
+    s = {**uc, "pid": run, "startedAt": started.setdefault(run, time.time() * 1000), "status": status}
+    sessions[:] = [s]
+    S.background_rows = lambda fresh=False: [{"id": uc["jobId"], "sessionId": UC, "pid": run,
+                                              "status": listed or status}]
+    first = S.session_chat(UC, look=details)
+    end = time.time() + 5
+    while (S.ultra_peeks.get(UC) or (0, 0, 0))[2] is None and time.time() < end:
+        real_sleep(0.02)
+    return first, pressed[-1] if pressed else None, S.session_chat(UC, look=details)
+
+
+# the real _press_keys, a function among its keys, on a tiny `claude attach` in a terminal
+attach = Path(tempfile.mkdtemp()) / "claude"
+attach.write_text(f"#!{sys.executable}\n" + r'''
+import os, tty
+from pathlib import Path
+tty.setraw(0)
+rules, typed, panel, got = "─" * 40, "", False, Path(__file__).with_suffix(".keys")
+show = lambda *rows: os.write(1, ("\x1b[2J\x1b[H" + "\r\n".join(rows) + "\r\n").encode())
+show(rules, "❯ ", rules)
+while True:
+    keys = os.read(0, 1024).decode()
+    with got.open("a") as f:
+        f.write(keys)
+    for k in keys:
+        if panel and k == "\x1b":
+            panel, typed = False, ""
+            show(rules, "❯ ", rules)
+        elif not panel and k == "\r" and typed == "/effort":
+            panel = True
+            show("▔" * 40, "   Effort", "   ───▲───      Ultracode  off", "   Esc to cancel")
+        elif not panel and k != "\r":
+            typed += k
+            show(rules, "❯ " + typed, rules)
+''')
+attach.chmod(0o700)
+fake_popen, real_claude = S.subprocess.Popen, S.CLAUDE_BIN
+S.subprocess.Popen, S.CLAUDE_BIN, S.PEEK_CLOSE = real_popen, str(attach), 0.1
+began, found = time.time(), {}
+drawn = S.render_screen(real_press_keys("abcdef12", S._effort_keys(found)))
+took = time.time() - began
+S.subprocess.Popen, S.CLAUDE_BIN = fake_popen, real_claude
+got = attach.with_suffix(".keys").read_bytes()
+S.shutil.rmtree(attach.parent)
+check("ultracode look: in a real terminal, /effort opens the panel, its line is read, and Esc closes it",
+      found.get("on") is False and got == b"/effort\r\x1b" and "❯" in drawn and "Effort" not in drawn
+      and took < 3, (found, got, drawn, took))
+
+S._press_keys, S.PEEK_OPEN = press_look, 0.1
+S.screen_question = lambda job: None  # what one shows when its status says waiting
+real_sleep(0.01)  # the transcript's last record is older than the next process
+first, keys, then = look(101)
+check("ultracode look: unknown after a restart, the open details' poll says checking and starts a look",
+      first["ultracode"] is None and first["ultracodeChecking"] is True, first)
+check("ultracode look: /effort typed, Enter once the box holds it, Esc once the panel is open, nothing else",
+      keys == ["/effort", "\r", "\x1b"], keys)
+check("ultracode look: its Ultracode line is read, and its cancelled /effort isn't taken for a switch",
+      then["ultracode"] is True and not then["ultracodeChecking"], then)
+S.session_chat(UC, look=True)
+check("ultracode look: a known state is never looked up again", len(pressed) == 1, pressed)
+tui["panel"] = panel("Ultracode  off")
+check("ultracode look: off reads off", look(102)[2]["ultracode"] is False)
+tui["panel"] = panel("")
+_, keys, then = look(103)
+again = look(103)
+check("ultracode look: a panel without the line (a model without it) is closed, stays unknown, and isn't opened again",
+      keys == ["/effort", "\r", "\x1b"] and then["ultracode"] is None and not then["ultracodeChecking"]
+      and again[1] is None and not again[0]["ultracodeChecking"], (keys, then, again))
+tui["panel"] = panel("Ultracode  on")
+check("ultracode look: a new process is looked at again", look(104)[2]["ultracode"] is True)
+tui["panel"] = None
+_, keys, then = look(105)
+check("ultracode look: no Esc when the panel doesn't open (Esc could stop its work), and no retry",
+      keys == ["/effort", "\r"] and then["ultracode"] is None and look(105)[1] is None, keys)
+tui.update(panel=panel("Ultracode  on"), typing=False)
+_, keys, _ = look(106)
+check("ultracode look: no Enter when the box doesn't show /effort (something else took the keys)", keys == ["/effort"], keys)
+tui["typing"] = True
+for run, why, kw in ((107, "while it works", {"status": "busy"}), (108, "while it shows a question", {"status": "waiting"}),
+                     (109, "when its details aren't open", {"details": False})):
+    first, keys, _ = look(run, **kw)
+    check(f"ultracode look: nothing typed, and no checking, {why}",
+          keys is None and first["ultracode"] is None and not first["ultracodeChecking"], (first, keys))
+check("ultracode look: once a working one is idle, the next poll looks at once", look(107)[2]["ultracode"] is True)
+first, keys, _ = look(113, listed="busy")
+check("ultracode look: nothing typed when Claude Code's own fresh list says it works",
+      keys is None and first["ultracodeChecking"], (first, keys))
+
+
+def refuse(screen):
+    raise ValueError("Its terminal has unsent text in its prompt box")
+
+
+S._box_check = lambda job: refuse
+first, keys, _ = look(110)
+retry = look(110)[1]
+check("ultracode look: nothing typed when its box isn't ready, and no new try right away",
+      keys is None and retry is None and S.ultra_peeks[UC][2] is False, (keys, retry))
+S._box_check = lambda job: None
+S.ultra_peeks[UC] = (S.ultra_peeks[UC][0], time.time() - S.PEEK_RETRY - 1, False)
+check("ultracode look: a minute later it tries again", look(110)[2]["ultracode"] is True)
+sessions[:] = [{**uc, "pid": 111, "startedAt": time.time() * 1000, "running": False}]
+check("ultracode look: an asleep agent isn't looked at",
+      S.session_chat(UC, look=True)["ultracodeChecking"] is False and S.ultra_peeks[UC][0][0] == 110)
+tui["hold"] = threading.Event()  # the look's attach waits until this check lets it go on
+sessions[:] = [{**uc, "pid": 112, "startedAt": time.time() * 1000, "status": "idle"}]
+S.background_rows = lambda fresh=False: [{"id": uc["jobId"], "sessionId": UC, "pid": 112, "status": "idle"}]
+began = time.time()
+first, second = S.session_chat(UC, look=True), S.session_chat(UC, look=True)
+took = time.time() - began
+tui["hold"].set()
+end = time.time() + 5
+while S.ultra_peeks[UC][2] is None and time.time() < end:
+    real_sleep(0.02)
+check("ultracode look: the poll never waits for the look, and says checking until it is done",
+      first["ultracodeChecking"] and second["ultracodeChecking"] and took < 1
+      and S.session_chat(UC, look=True)["ultracode"] is True, (first, second, took))
+tui["hold"] = None
+pressed.clear()
+sessions[:] = [{**uc, "pid": 114, "startedAt": time.time() * 1000, "status": "idle"}]
+S.background_rows = lambda fresh=False: [{"id": uc["jobId"], "sessionId": UC, "pid": 114, "status": "idle"}]
+with S.type_lock:  # the look waits for the typing lock while a prompt is typed and tells it
+    first = S.session_chat(UC, look=True)
+    prompt("go on", time.time() + 0.01); remind("exit", time.time() + 0.01)
+end = time.time() + 5
+while S.ultra_peeks[UC][2] is None and time.time() < end:
+    real_sleep(0.02)
+check("ultracode look: known by the time it has the typing lock, nothing is typed (no stray /effort)",
+      first["ultracodeChecking"] and not pressed and S.session_chat(UC, look=True)["ultracode"] is False, pressed)
 
 ran = []
 S.run_claude = lambda args, **kw: ran.append(args) or types.SimpleNamespace(

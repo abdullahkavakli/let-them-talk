@@ -389,8 +389,9 @@ def _ultra_record(c, line):
 def ultracode_state(s):
     """Whether ultracode is on in a running chat: True, False, or None when
     unknown, because the process running now has had no prompt and no switch
-    yet (it started as its flags say). Only bytes appended since the last
-    call are read."""
+    yet (it started as its flags say) and the app hasn't seen its Effort
+    panel (see look_up_ultracode). Only bytes appended since the last call
+    are read."""
     session_title(s["sessionId"])  # finds the transcript
     path = title_cache.get(s["sessionId"], {}).get("path")
     if path is None:
@@ -422,7 +423,8 @@ def ultracode_state(s):
             pass
         reminder, switch = c["reminder"], c["switch"]
         prompt = max(c["prompt"], reminder[1] if reminder else 0)
-    # a switch from here while it worked is in no transcript (see set_ultracode)
+    # a switch from here while it worked is in no transcript (see set_ultracode),
+    # nor is what its Effort panel showed (see look_up_ultracode)
     switch = max(filter(None, (switch, ultra_switched.get(s["sessionId"]))), key=lambda n: n[1], default=None)
     started = (s.get("startedAt") or 0) / 1000
     if prompt >= started:
@@ -897,9 +899,10 @@ def _suggestion(sid, msgs):
     return None
 
 
-def session_chat(sid):
+def session_chat(sid, look=False):
     """The last CHAT_LAST messages of a session, read from the end of its
-    transcript, with a TL;DR for each finished reply long enough to need one."""
+    transcript, with a TL;DR for each finished reply long enough to need one.
+    look: its details are open, so the app may look up what it can't read."""
     if not SID_RE.fullmatch(sid or ""):
         raise ValueError("bad session id")
     session_title(sid)  # finds the transcript
@@ -945,14 +948,17 @@ def session_chat(sid):
                 questions = [on_screen]
                 plan = on_screen.pop("plan", None) or plan
     plan_text = _read_plan(plan) if working and plan else None
+    # only a running background agent can be switched from here (see set_ultracode)
+    ultra = checking = None
+    if running and running.get("background") and running.get("running"):
+        ultra = ultracode_state(running)
+        checking = ultra is None and look and look_up_ultracode(running)
     return {"sessionId": sid, "messages": msgs, "working": working,
             "asking": questions or None, "doing": working and doing or None,
             "plan": plan_text and {"path": plan, "text": plan_text},
             "queued": queued if working else [],
             "suggest": _suggestion(sid, msgs) if waiting else None,
-            # only a running background agent can be switched from here (see set_ultracode)
-            "ultracode": ultracode_state(running) if running and running.get("background")
-            and running.get("running") else None}
+            "ultracode": ultra, "ultracodeChecking": bool(checking)}
 
 
 # ------------------------------------------------------ agents in a session
@@ -3164,6 +3170,8 @@ def _press_keys(job, keys, check=None):
     press keys (pairs of text and seconds to wait after it) once its prompt
     box is drawn, and leave as a closed window would; the agent runs on.
     check(screen) sees the drawn screen first and raises to press nothing.
+    A key may also be a function of the screen so far that returns the keys
+    to press next (none: stop there).
     Returns everything it drew (render_screen() shows it as the screen)."""
     master, slave = os.openpty()
     try:
@@ -3202,9 +3210,14 @@ def _press_keys(job, keys, check=None):
                 if len(seen) == before:
                     break
             check(seen.decode("utf-8", "replace"))
-        for key, wait in keys:
-            os.write(master, key.encode())
-            drain(wait)
+        keys = list(keys)
+        while keys:
+            key = keys.pop(0)
+            if callable(key):
+                keys[:0] = key(seen.decode("utf-8", "replace"))
+                continue
+            os.write(master, key[0].encode())
+            drain(key[1])
         return seen.decode("utf-8", "replace")
     finally:
         proc.send_signal(signal.SIGHUP)
@@ -3270,7 +3283,7 @@ ULTRA_SHOWN = 2  # seconds its answer gets to show on its screen
 ULTRA_WAIT = 10  # seconds a background agent gets to answer /effort
 COMMAND_OUT = re.compile(r"^<local-command-stdout>(.*?)</local-command-stdout>", re.S)
 ULTRA_ANSWER = re.compile(r"Ultracode (?:on|off)\b.*|Ultracode needs .*|Ultracode isn't available .*")
-ultra_switched = {}  # sessionId -> (on, at): switched from here (see ultracode_state)
+ultra_switched = {}  # sessionId -> (on, at): switched or seen from here (see ultracode_state)
 
 
 def _command_output_since(sid, since):
@@ -3322,8 +3335,8 @@ def set_ultracode(bid, body):
         raise ValueError("Only a running background agent can be switched from here. "
                          "In another chat, type /effort ultracode on (or off) yourself.")
     word = "on" if on else "off"
-    since = time.time()
     with type_lock:
+        since = time.time()  # after a look at its Effort panel, whose "Cancelled" isn't this answer
         keys = [(key, 0.02) for key in _typed_keys(f"/effort ultracode {word}")]
         screen = _press_keys(s["jobId"], keys + [("", 0.4), ("\r", ULTRA_SHOWN)], _box_check(s["jobId"]))
     deadline = time.time() + ULTRA_WAIT
@@ -3340,6 +3353,80 @@ def set_ultracode(bid, body):
         add_activity(board, f"Ultracode {word} for {label(s, board)}", "ok")
         save_board(board)
     return {"ultracode": on, "said": said}
+
+
+# A process with no prompt and no switch yet (woken, restarted) leaves its
+# conversation silent about ultracode, so while its details are open the app
+# looks, once per process: /effort opens Claude Code's Effort panel (a slider
+# and "Ultracode on|off"), and Esc closes it with nothing changed. Only while
+# it is idle: then Claude Code notes the cancelled /effort in its
+# conversation ("Cancelled", no switch). While it works the panel opens too,
+# but a permission prompt could take the keys meanwhile.
+PEEK_OPEN = 3      # seconds the Effort panel gets to open
+PEEK_CLOSE = 1.5   # seconds after Esc: the "/effort" Claude Code notes then is older than
+                   # the second of slack _prompted_since gives a prompt typed next
+PEEK_RETRY = 60    # seconds before looking again at one that wasn't ready
+ULTRA_TOGGLE = re.compile(r"\bUltracode +(on|off)\b")  # the panel's line, not "Ultracode: …" under it
+ultra_peeks = {}  # sessionId -> (process, when, done): done is None while looking
+
+
+def look_up_ultracode(s):
+    """Find out in the background whether ultracode is on in a running
+    background agent whose conversation doesn't tell (see ultracode_state),
+    so the poll that asks never waits. Returns whether a look is under way."""
+    sid, run = s["sessionId"], (s.get("pid"), s.get("startedAt"))
+    with ultra_lock:
+        last = ultra_peeks.get(sid)
+        if last and last[0] == run and (last[2] is not False or time.time() - last[1] < PEEK_RETRY):
+            return last[2] is None
+        if s.get("status") != "idle":
+            return False  # working or asking: it is looked at once idle
+        ultra_peeks[sid] = (run, time.time(), None)
+    threading.Thread(target=_look_up_ultracode, args=(s, run), daemon=True).start()
+    return True
+
+
+def _look_up_ultracode(s, run):
+    found = {}
+    try:
+        with type_lock:
+            row = next((r for r in background_rows(fresh=True) if r["id"] == s["jobId"]), None)
+            # still unknown: a prompt or a switch while it waited may have told
+            if (row and row.get("pid") == s.get("pid") and row.get("status") == "idle"
+                    and ultracode_state(s) is None):
+                _press_keys(s["jobId"], _effort_keys(found), _box_check(s["jobId"]))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass  # not now: its prompt box wasn't ready
+    finally:
+        if found.get("on") is not None:
+            ultra_switched[s["sessionId"]] = (found["on"], found["at"])
+        with ultra_lock:
+            # once /effort ran, no more looks at this process: one whose panel
+            # has no Ultracode line (a model without it) stays unknown
+            ultra_peeks[s["sessionId"]] = (run, time.time(), bool(found.get("sent")))
+
+
+def _effort_keys(found):
+    """Keys for _press_keys that open the Effort panel, put what its
+    Ultracode line says in found["on"] (None: it has none) and close it with
+    Esc. Each step waits for the screen to show the one before worked: Enter
+    only while the prompt box holds /effort, Esc only once the panel is open
+    (anywhere else Esc could stop the agent's work)."""
+    def typed(screen):
+        if _prompt_box(screen) != "/effort":
+            return []  # something else took the keys: press nothing more
+        found.update(sent=True, until=time.time() + PEEK_OPEN)
+        return [("\r", 0.3), opened]
+
+    def opened(screen):
+        lines = render_screen(screen).splitlines()
+        top = max((i for i, l in enumerate(lines) if l.strip() == "Effort"), default=None)
+        if top is None or not any("Esc to cancel" in l for l in lines[top:]):
+            return [("", 0.2), opened] if time.time() < found["until"] else []
+        said = ULTRA_TOGGLE.search("\n".join(lines[top:]))
+        found.update(on=said and said.group(1) == "on", at=time.time())
+        return [("\x1b", PEEK_CLOSE)]
+    return [(key, 0.02) for key in _typed_keys("/effort")] + [("", 0.4), typed]
 
 
 def _job_of(body):
@@ -3714,13 +3801,14 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 query = parse_qs(url.query)
                 sid = query.get("session", [""])[0]
-                if SID_RE.fullmatch(sid) and query.get("watch") == ["1"]:
+                look = query.get("watch") == ["1"]
+                if SID_RE.fullmatch(sid) and look:
                     # only the page's drawer poll counts: a watched chat can cost a fork
                     now = time.time()
                     if now - watched.get(sid, 0) >= WATCH_WINDOW:
                         watch_started[sid] = now
                     watched[sid] = now
-                return self._send(HTTPStatus.OK, session_chat(sid))
+                return self._send(HTTPStatus.OK, session_chat(sid, look))
             except ValueError as e:
                 return self._send(HTTPStatus.BAD_REQUEST, {"error": str(e)})
         if url.path == "/api/talk":  # an arrow's conversation
