@@ -686,31 +686,35 @@ function foldBubble(key, text) {
 }
 
 // An agent's details: its name and state, a short list of facts, its steps as
-// a timeline, what it said and the task it was given. back: {text, label, go}
-// for the button at the top (in the panel: back to the chat that started it;
-// in a pop-up too narrow for the list beside it: back to the list); toChat:
-// what clicking that chat's name does.
+// a timeline, what it said and the task it was given. What its row in the
+// chat's list knows (state, model, time, tokens, tool calls, workflow) shows at
+// once, the rest when its details come. back: {text, label, go} for the
+// button at the top (in the panel: back to the chat that started it; in a
+// pop-up too narrow for the list beside it: back to the list); toChat: what
+// clicking that chat's name does.
 function subDetails(sel, back, toChat) {
   const key = `${sel.parent}:${sel.id}`, d = state.subInfo[key], n = nodeById(sel.parent);
   toChat ||= () => select_({ type: "node", id: n.sessionId });
-  back ||= n && { text: `← ${display(n)}`, label: `Back to ${display(n)}`, go: toChat };
-  const head = [back && el("button", { class: "btn back", text: back.text, title: back.label,
-    "aria-label": back.label, onclick: back.go }), el("h3", { text: d?.label || sel.label || "Subagent" })];
-  if (!d) return [...head, el("p", { class: "muted small", text: "Loading…" })];
-  if (d.error) return [...head, el("p", { class: "error small", text: d.error })];
-  const running = d.state === "running", steps = [...d.steps].reverse();
-  const calls = listedAgent(sel.parent, sel.id)?.toolCalls;  // only the list has them
+  back ||= n && { text: display(n), label: `Back to ${display(n)}`, go: toChat };
+  const known = d && !d.error ? Object.fromEntries(Object.entries(d).filter(([, v]) => v != null)) : {};
+  const a = { ...listedAgent(sel.parent, sel.id), ...known };
+  const head = [back && el("button", { class: "btn back", title: back.label, "aria-label": back.label, onclick: back.go },
+    el("span", { class: "back-text", text: back.text })),
+  el("h3", { text: a.label || sel.label || "Subagent" }), a.state && el("p", { class: "sub-state" }, stateBadge(a.state))];
+  if (d?.error) return [...head, el("p", { class: "error small", text: d.error })];
   const fact = (name, value, cls) => value ? el("div", {}, el("dt", { text: name }), el("dd", { class: cls }, value)) : null;
+  const facts = el("dl", { class: "facts" }, ...[
+    fact("Model", modelName(a.model)), fact("Duration", fmtDur(a.durationMs), "tick"),
+    a.tokens != null && fact("Tokens", fmtCount(a.tokens)), a.toolCalls != null && fact("Tool calls", String(a.toolCalls)),
+    fact("Started by", n ? el("button", { class: "chip-link", type: "button", title: `Show ${display(n)}`, onclick: toChat },
+      el("span", { class: `dot ${cardStatus(n).dot}` }), el("span", { text: display(n) })) : "a chat that isn't on this board"),
+    fact("Workflow", a.workflow && [a.workflow, a.phase].filter(Boolean).join(" · ")),
+    fact("Type", !a.workflow && a.kind)].filter(Boolean));
+  if (!d) return [...head, facts, el("p", { class: "muted small", text: "Loading…" })];
+  const running = d.state === "running", steps = [...d.steps].reverse();
   return [
     ...head,
-    el("p", { class: "sub-state" }, stateBadge(d.state)),
-    el("dl", { class: "facts" }, ...[
-      fact("Model", modelName(d.model)), fact("Duration", fmtDur(d.durationMs), "tick"),
-      d.tokens != null && fact("Tokens", fmtCount(d.tokens)), calls != null && fact("Tool calls", String(calls)),
-      fact("Started by", n ? el("button", { class: "chip link", type: "button", text: display(n),
-        title: `Show ${display(n)}`, onclick: toChat }) : "a chat that isn't on this board"),
-      fact("Workflow", d.workflow && [d.workflow, d.phase].filter(Boolean).join(" · ")),
-      fact("Type", !d.workflow && d.kind)].filter(Boolean)),
+    facts,
     ...subActions(sel, d, n),
     el("h2", { text: running ? "Doing now" : "Recent steps" }),
     steps.length ? el("div", { class: "sub-steps" }, ...steps.map((s, i) => el("div", { class: `sub-step${i ? "" : " now"}${running ? " running" : ""}` },
@@ -990,9 +994,15 @@ function renderAgentsPop() {
   }
   const n = state.selected?.type === "node" && state.selected.id === p.sid && nodeById(p.sid);
   if (!n) return closeAgentsPop();
+  const data = state.agents[n.sessionId];
+  const { count, running } = data && !data.error ? agentCounts(data) : {};
+  // the title above the list stays; under it the chat, how many agents and how many run
+  const note = [display(n), count != null && `${count} agent${count === 1 ? "" : "s"}`, running && `${running} running`]
+    .filter(Boolean).join(" · ");
+  if ($("#agents-pop-note").textContent !== note) $("#agents-pop-note").textContent = note;
   $("#agents-pop").dataset.pane = p.pane;
   swapChildren($("#agents-pop-list"), agentsPopList(n).filter(Boolean));
-  swapChildren($("#agents-pop-detail"), agentsPopDetail().filter(Boolean));
+  swapChildren($("#agents-pop-detail"), agentsPopDetail(data).filter(Boolean));
 }
 
 function closeAgentsPop() {
@@ -1001,28 +1011,31 @@ function closeAgentsPop() {
 }
 
 function agentsPopList(n) {
-  const data = state.agents[n.sessionId];
-  const { count, running } = data && !data.error ? agentCounts(data) : {};
   const cards = agentsList(n, openPopSub);
   // One row in view is in the tab order, the picked one (else the first):
   // Tab enters the list there and the arrows go on.
   const shown = cards.flatMap((c) => [...c.querySelectorAll(".agent-row")]).filter((r) => !r.closest("details:not([open])"));
   const stop = shown.find((r) => r.hasAttribute("aria-current")) || shown[0];
   if (stop) stop.tabIndex = 0;
-  return [
-    el("h3", { text: "Agents in this chat" }),
-    el("p", { class: "muted small pop-note", text: [display(n), count != null && `${count} agent${count === 1 ? "" : "s"}`,
-      running && `${running} running`].filter(Boolean).join(" · ") }),
-    ...cards,
-  ];
+  return cards;
 }
 
-function agentsPopDetail() {
+function agentsPopDetail(data) {
   const p = state.popAgents;
-  if (!p.sub) return [el("div", { class: "pop-empty" }, el("p", { class: "pop-empty-title", text: "Pick an agent" }),
-    el("p", { class: "muted small", text: "Pick one in the list to see what it is doing, its steps and its task." }))];
-  return subDetails({ parent: p.sid, ...p.sub }, { text: "← All agents", label: "Back to all agents", go: backToAgents },
+  if (!p.sub) return popNothingPicked(data);
+  return subDetails({ parent: p.sid, ...p.sub }, { text: "All agents", label: "Back to all agents", go: backToAgents },
     closeAgentsPop);
+}
+
+// The right pane before an agent is picked.
+function popNothingPicked(data) {
+  const none = !data || data.error || !agentCounts(data).count;
+  const icon = svg("svg", { class: "empty-icon", width: 44, height: 44, viewBox: "0 0 44 44", "aria-hidden": "true" });
+  icon.append(svg("rect", { x: 5, y: 8, width: 34, height: 28, rx: 6 }), svg("path", { d: "M17 8v28M9.5 15h4M9.5 20h4M9.5 25h4" }));
+  return [el("div", { class: "pop-empty" }, icon,
+    el("p", { class: "pop-empty-title", text: none ? "No agents to show" : "No agent picked" }),
+    !none && el("p", { class: "muted small", text: "Pick one on the left to see its steps, its latest message and its task. " +
+      "↑ and ↓ move between agents." }))];
 }
 
 // Picks an agent: its details show on the right, the list stays as it is. A
@@ -1404,8 +1417,8 @@ function removeControls(n, conns) {
   const notify = el("input", { type: "checkbox", id: "r-notify", checked: liveEnds > 0 && !state.removeNotifyOff[n.sessionId],
     onchange: (e) => { state.removeNotifyOff[n.sessionId] = !e.target.checked; } });
   const arrows = conns.length === 1 ? "its arrow" : `its ${conns.length} arrows`;
-  return el("div", { class: "drawer-actions" },
-    liveEnds > 0 && el("label", { class: "small check" }, notify, " Tell connected agents"),
+  // the button on a line of its own, the choice that goes with it right under it
+  return [el("div", { class: "drawer-actions" },
     el("button", {
       class: "btn danger",
       text: conns.length ? `Remove from board with ${arrows}` : "Remove from board",
@@ -1413,7 +1426,8 @@ function removeControls(n, conns) {
         if (conns.length && !confirm(`Remove ${display(n)} and ${arrows} from the board?`)) return;
         if (await act("remove", { sessionId: n.sessionId, notify: liveEnds > 0 && notify.checked })) closeDrawer();
       },
-    }));
+    })),
+  liveEnds > 0 && el("label", { class: "small check" }, notify, " Tell connected agents")];
 }
 
 // ------------------------------------------------------ agents in a chat
@@ -1469,8 +1483,8 @@ function stateIcon(state) {
   return icon;
 }
 
-const stateBadge = (state, icon = true) =>
-  el("span", { class: `state-badge ${stateKind(state)}` }, icon && stateIcon(state), stateLabel(state));
+const stateBadge = (state) => el("span", { class: `state-badge ${stateKind(state)}`, title: stateLabel(state) },
+  stateIcon(state), el("span", { class: "state-word", text: stateLabel(state) }));
 
 // One agent as a row of the pop-up's list: its state, its name and, quietly at
 // the right, how long it ran (what it is doing now is in its tooltip).
@@ -1506,7 +1520,7 @@ function runStatus(agents, status, time) {
   const done = count("done"), failed = count("failed");
   const width = (k) => `width: ${(100 * k / agents.length).toFixed(1)}%`;
   return el("span", { class: "run-status" },
-    el("span", { class: "run-line" }, stateBadge(status, false), time && el("span", { class: "run-time tick", text: time }),
+    el("span", { class: "run-line" }, stateBadge(status), time && el("span", { class: "run-time tick", text: time }),
       agents.length > 0 && el("span", { class: "run-count", text: `${done} of ${agents.length} done${failed ? ` · ${failed} failed` : ""}` })),
     agents.length > 0 && el("span", { class: `bar ${stateKind(status)}` },
       done > 0 && el("i", { style: width(done) }), failed > 0 && el("i", { class: "bad", style: width(failed) })));
@@ -1546,10 +1560,15 @@ function runGroup(r, n, open, picked) {
 
 const everyAgent = ({ workflows, direct }) => [...workflows.flatMap((r) => r.agents), ...direct];
 
-// The list's own entry for an agent: it has the tool calls its details lack.
+// An agent's row in its chat's list, once that is loaded, as its details would
+// have it (a subagent's description is its name, its type its kind; a workflow
+// agent has its workflow's name): it knows its tool calls, which they don't.
 function listedAgent(sid, id) {
   const data = state.agents[sid];
-  return data && !data.error ? everyAgent(data).find((a) => a.id === id) : null;
+  if (!data || data.error) return null;
+  const all = [...data.direct.map((a) => ({ ...a, label: a.description, kind: a.agentType })),
+    ...data.workflows.flatMap((r) => r.agents.map((a) => ({ ...a, workflow: r.name })))];
+  return all.find((a) => a.id === id) || null;
 }
 
 // How many agents a chat started (in its workflows and on its own), and how many run now.

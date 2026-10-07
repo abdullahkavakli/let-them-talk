@@ -114,7 +114,13 @@
 
 <dialog id="agents-pop" aria-label="Agents in this chat">
   <button class="icon-btn close" id="agents-pop-close" aria-label="Close">&times;</button>
-  <div class="pop-side" id="agents-pop-list"></div>
+  <div class="pop-side">
+    <header class="pop-head">
+      <h3>Agents in this chat</h3>
+      <p id="agents-pop-note" class="muted small"></p>
+    </header>
+    <div id="agents-pop-list"></div>
+  </div>
   <div class="pop-main" id="agents-pop-detail"></div>
 </dialog>
 

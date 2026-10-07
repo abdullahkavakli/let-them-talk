@@ -354,35 +354,44 @@ details.run > summary { gap: 8px 11px; }
 #drawer .agents-line:hover { background: var(--field-hover); }
 #drawer .agents-line:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* The agents pop-up is a window of two panes, as a Mac's list and its inspector:
-   the agents on the left, the picked one's details on the right, each
-   scrolling on its own. A narrow window shows one pane at a time. */
+   the agents on the left, under a title that stays put, the picked one's
+   details on the right, each scrolling on its own. A narrow window shows one
+   pane at a time. */
 #agents-pop { width: min(980px, calc(100vw - 32px)); height: min(680px, calc(100vh - 48px)); max-height: none; overflow: hidden; }
 #agents-pop[open] { display: flex; }
 #agents-pop h2 { font-family: inherit; font-size: 12px; font-weight: 600; letter-spacing: 0; color: var(--muted); }
 .pop-side {
-  flex: 0 0 clamp(300px, 40%, 380px); min-width: 0; overflow: hidden auto; padding: 18px 12px 16px 16px;
+  flex: 0 0 clamp(300px, 40%, 380px); min-width: 0; min-height: 0; display: flex; flex-direction: column;
   border-right: 1px solid var(--border); background: rgb(var(--glass-rgb) / .3);
 }
-#agents-pop .pop-side h3 { padding-right: 0; }
-.pop-side .pop-note { margin: -4px 0 14px; }
-.pop-main { flex: 1; min-width: 0; overflow: hidden auto; padding: 18px 22px 22px 24px; }
+.pop-head { flex: none; padding: 18px 16px 12px; }
+#agents-pop .pop-head h3 { margin: 0; padding-right: 0; }
+.pop-head p { margin: 2px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#agents-pop-list { flex: 1; min-height: 0; overflow: hidden auto; padding: 2px 12px 16px 16px; scroll-padding: 12px; }
+.pop-main { flex: 1; min-width: 0; overflow: hidden auto; padding: 18px 22px 22px 24px; scroll-padding: 12px; }
 .pop-main h3 { overflow-wrap: anywhere; }
-.pop-side, .pop-main { scroll-padding: 12px; }
 /* nothing picked yet */
-.pop-empty { height: 100%; min-height: 200px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 0 24px; }
-.pop-empty p { margin: 2px 0; }
+.pop-empty {
+  height: 100%; min-height: 200px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; text-align: center; padding: 0 12%;
+}
+.pop-empty p { margin: 0; }
+.pop-empty .muted { max-width: 300px; }
 .pop-empty .pop-empty-title { font-size: 15px; font-weight: 600; }
+.empty-icon { margin-bottom: 6px; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linecap: round; opacity: .7; }
 /* an agent's details: back to the chat (in the panel), or to the list (in a pop-up too narrow for both) */
 :is(#drawer, #agents-pop) .btn.back {
-  display: block; max-width: calc(100% - 48px); margin: 0 0 12px; padding: 5px 12px; font-size: 12.5px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: flex; align-items: center; width: fit-content; max-width: calc(100% - 48px); min-height: 28px;
+  margin: 0 0 12px; padding: 0 12px 0 6px; gap: 2px; font-size: 12.5px;
 }
+.btn.back::before { content: ""; flex: none; width: 12px; height: 12px; background: var(--chev) center / 12px no-repeat; transform: rotate(90deg); }
+.btn.back .back-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #agents-pop .btn.back { display: none; }
 @media (max-width: 720px) {
   #agents-pop .pop-side, #agents-pop .pop-main { flex: 1 1 100%; border-right: 0; }
   #agents-pop:not([data-pane="detail"]) .pop-main, #agents-pop[data-pane="detail"] .pop-side { display: none; }
-  #agents-pop .pop-side h3 { padding-right: 44px; }
-  #agents-pop .btn.back { display: block; }
+  #agents-pop .pop-head { padding-right: 52px; }
+  #agents-pop .btn.back { display: flex; }
 }
 .note-card { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; background: var(--panel-2); }
 .note-card header { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; }
@@ -415,6 +424,8 @@ details.run > summary { gap: 8px 11px; }
 }
 .drawer-actions > label.check { flex: 1 1 100%; display: flex; align-items: center; gap: 8px; margin: 2px 0 -2px 2px; color: var(--muted); }
 .drawer-actions > label.check input { margin: 0; accent-color: var(--accent); }
+.drawer-foot > label.check { display: flex; align-items: center; gap: 8px; width: fit-content; margin: 9px 2px 0; color: var(--muted); }
+.drawer-foot > label.check input { margin: 0; accent-color: var(--accent); }
 /* what can be done with the card itself, apart from the rest of its details */
 .drawer-foot { margin-top: 20px; padding-top: 8px; border-top: 1px solid var(--border); }
 .chat { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
@@ -564,12 +575,18 @@ details.run > .agent-row:last-child { margin-bottom: 6px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .agent-row[aria-current] .state-icon { --ico: var(--on-accent); --ico-fg: var(--accent); }
 .state-badge {
-  display: inline-flex; align-items: center; gap: 5px; padding: 1px 9px; border-radius: 999px; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 5px; padding: 1px 9px 1px 6px; border-radius: 999px; white-space: nowrap;
   font-size: 11.5px; font-weight: 600; color: color-mix(in srgb, var(--ico) 70%, var(--text));
   background: color-mix(in srgb, var(--ico) 14%, transparent);
 }
-.state-badge:has(.state-icon) { padding-left: 6px; }
 .state-badge .state-icon { width: 12px; height: 12px; }
+/* a narrow card keeps room for its name and numbers: its state shows by the
+   icon alone (the word is in its tooltip) */
+details.run { container-type: inline-size; }
+@container (max-width: 300px) {
+  .run-line .state-badge { width: 20px; height: 20px; padding: 0; justify-content: center; }
+  .run-line .state-badge .state-word { display: none; }
+}
 .dot.a-running { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 
 .badge.win { color: var(--accent); border-color: var(--accent); }
@@ -792,9 +809,8 @@ dialog textarea, dialog input:not([type="checkbox"]):not([type="radio"]), .renam
 }
 dialog label.choice { background: var(--field); border-color: transparent; border-radius: 16px; }
 dialog label.choice:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
-/* red text on a faint red: what can't be undone */
-:is(.sidebar, #drawer, dialog) .btn.danger { background: color-mix(in srgb, var(--error) 8%, var(--field)); }
-:is(.sidebar, #drawer, dialog) .btn.danger:hover { background: color-mix(in srgb, var(--error) 16%, var(--field)); }
+/* red text, and a faint red under the pointer: what can't be undone */
+:is(.sidebar, #drawer, dialog) .btn.danger:hover { background: color-mix(in srgb, var(--error) 13%, var(--field)); }
 
 /* The Send box, as Messages on a Mac: one rounded field holds the images and
    the text, with a round Send on the right. A clearer fill than the panel
@@ -1006,7 +1022,7 @@ body { font-family: var(--font-ui); }
 @keyframes sub-pulse { 50% { box-shadow: 0 0 0 5px var(--accent-soft); } }
 @media (prefers-reduced-motion: reduce) {
   .sub, .sub .dot, .running-now i, .state-icon .arc, .sub-step.now.running::before { animation: none; }
-  select, details > summary::before, .agents-line::after, .combo-toggle::before, .agent-row, .conn-row, .chip.link, .topbar .board-pick { transition: none; }
+  select, details > summary::before, .agents-line::after, .combo-toggle::before, .agent-row, .conn-row, .chip-link, .topbar .board-pick { transition: none; }
 }
 .sub.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft), var(--card-shadow); }
 /* a subagent's details: how it stands and what it ran on, as a short list of
@@ -1018,9 +1034,16 @@ dl.facts > div { display: flex; align-items: center; justify-content: space-betw
 dl.facts > div + div { border-top: 1px solid var(--border); }
 :is(#drawer, #agents-pop) dl.facts dt { color: var(--quiet); }
 dl.facts dd { min-width: 0; text-align: right; }
-.chip.link { max-width: 100%; border: 0; font: inherit; font-weight: 600; color: var(--accent); cursor: pointer; transition: background-color .15s ease; }
-.chip.link:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
-.chip.link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.chip-link {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-height: 24px; padding: 0 10px 0 8px;
+  border: 0; border-radius: 999px; background: var(--panel); box-shadow: 0 0 0 1px var(--border);
+  color: var(--text); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  transition: background-color .15s ease, color .15s ease;
+}
+.chip-link span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip-link .dot { width: 8px; height: 8px; }
+.chip-link:hover { background: var(--accent-soft); color: var(--accent); }
+.chip-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .sub-steps { margin: 0 0 20px; }
 .bubble + h2, .fold + h2 { margin-top: 20px; }
 .sub-step { position: relative; display: flex; align-items: baseline; gap: 14px; padding: 6px 0 6px 22px; font-size: 12px; }

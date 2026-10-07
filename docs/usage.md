@@ -153,9 +153,10 @@ it to show them all (**Show fewer** folds them again).
 Click one (or its row in the [Agents in this chat](#agents-in-this-chat)
 pop-up) to see what it is doing: its state, a short list of facts (model,
 time, tokens, its workflow and phase or its type, and the chat that started
-it, a button back to that chat), its latest steps as a timeline, its latest
-message and the task it was given. The **←** button at the top, with that
-chat's name, goes back to its details.
+it, a button with that chat's dot, as on its card, that goes back to the
+chat), its latest steps as a timeline, its latest message and the task it was
+given. The button at the top (a chevron and that chat's name) goes back to
+its details.
 
 A subagent runs inside the chat that started it, and only that chat can reach
 it. While that chat runs:
@@ -230,12 +231,14 @@ use it. Enter sends, Shift+Enter adds a line.
 **Agents in this chat** is one row, with how many agents there are and how
 many run now. Click it to open the workflows and subagents the chat started
 in a pop-up over the board. The pop-up has two panes: the agents on the left,
-and the one picked on the right.
+under a title that stays while the list scrolls, and the one picked on the
+right.
 
 - On the left, each workflow is a card: its name, its state (*Running*,
   *Done*, *Failed*, *Stopped* …), how long it has gone on, how far it got
   (*3 of 5 done*, as words and as a thin bar, failed ones in red) and its
-  agents under their phases. The chat's own subagents are a card too. Each
+  agents under their phases. In a narrow card the state shows by its icon
+  alone. The chat's own subagents are a card too. Each
   agent has an icon for its state (a turning ring while it runs, a check, a
   cross, a clock while it waits) and, quietly at the right, how long it ran;
   what a running one is doing now is in its tooltip. A card folds and
@@ -243,11 +246,12 @@ and the one picked on the right.
 - Click an agent to see it on the right while the list stays where it is: its
   state, model, time, tokens and tool calls (when the server knows them), the
   chat that started it (click it to go back to that chat), its steps as a
-  timeline, its latest message and the task it was given. The pop-up opens on
-  the first agent that is running (its card unfolds if you had folded it), or
-  with nothing picked if none runs.
-- A narrow window shows one pane at a time: **← All agents** goes back to the
-  list.
+  timeline, its latest message and the task it was given. What the list
+  knows of it shows at once, the rest when its details come. The pop-up opens
+  on the first agent that is running (its card unfolds if you had folded it),
+  or with *No agent picked* if none runs.
+- A narrow window shows one pane at a time: **All agents** (with a chevron)
+  goes back to the list.
 
 A workflow has **Ask to stop** in its card while it runs and **Ask to
 resume** once it stopped or failed; each sends the chat a message asking for
