@@ -3348,18 +3348,21 @@ def send_to_session(bid, body):
 def send_to_subagent(bid, body):
     """Your text for a subagent goes to the chat that runs it, which passes it
     on with SendMessage: a subagent has no address of its own outside its
-    chat. The chat gets it as any text you send it (see send_to_session)."""
+    chat. The chat gets it as any text you send it (see send_to_session):
+    images are saved where the chat, and so its subagent, reads them, and
+    their lines go at the end of the message it passes on."""
     aid = str(body.get("agentId") or "")
     if not AID_RE.fullmatch(aid):
         raise ValueError("That isn't a subagent.")
     name = " ".join(str(body.get("label") or "").split())[:120] or aid
     text = str(body.get("text") or "").strip()
-    if not text:
+    images = body.get("images") or []
+    if not text and not images:
         raise ValueError("Write something to send.")
     ask = (f"Please pass this message from me to your subagent \"{name}\" (agent id {aid}) with SendMessage "
-           f"(to: \"{aid}\"), word for word, then go on with what you were doing. If it can't be reached, "
-           f"tell me.\n\n{text}")
-    return send_to_session(bid, {"sessionId": body.get("sessionId"), "text": ask})
+           f"(to: \"{aid}\"), word for word, including any image lines at its end, then go on with what you "
+           f"were doing. If it can't be reached, tell me.\n\n{text}").rstrip()
+    return send_to_session(bid, {"sessionId": body.get("sessionId"), "text": ask, "images": images})
 
 
 def _prompt_background(bid, s, text):
@@ -4184,9 +4187,9 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             length = -1
-        # a Send, and a new agent's first prompt, may carry images
-        if not 0 <= length <= (SEND_BODY if parts[-1:] in (["send"], ["launch-background"], ["launch-editor"],
-                                                           ["launch-team"]) else MAX_BODY):
+        # a Send (to a chat or a subagent), and a new agent's first prompt, may carry images
+        if not 0 <= length <= (SEND_BODY if parts[-1:] in (["send"], ["send-subagent"], ["launch-background"],
+                                                           ["launch-editor"], ["launch-team"]) else MAX_BODY):
             return self._send(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "request too large"})
         try:
             body = json.loads(self.rfile.read(length) or b"{}")

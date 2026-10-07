@@ -423,10 +423,32 @@ def checks_wide(browser):
         page.wait_for_timeout(200)
         ended = page.locator("#drawer-body #sub-box").count() == 0
         page.api.post_result = {}
-        check(name, msg == [{"sessionId": B, "agentId": "a1b2c3", "label": "Fable judge", "text": "stop and report"}]
+        check(name, msg == [{"sessionId": B, "agentId": "a1b2c3", "label": "Fable judge", "text": "stop and report",
+                             "images": []}]
               and att and att[-1].get("jobId") == "abcdef12" and "Open in terminal" not in term
               and "terminal window" in term and ended, (msg, att, ended))
         page.evaluate("state.outbox = {}")
+
+    name = "subagent: its message box is a chat's (the round send inside); a click sends, images pasted or dropped go too"
+    with step(page, name):
+        page.evaluate("state.images = {}")
+        page.evaluate(f"openSub('{B}', 'a1b2c3', 'Fable judge')")
+        page.wait_for_selector("#drawer-body .composer #sub-box")
+        same = page.locator("#drawer-body .composer .composer-send").count() == 1
+        paste(page, "#drawer-body #sub-box", "image/png")
+        dropped = (paste(page, "#drawer-body h3", "image/png", "dragover")
+                   and paste(page, "#drawer-body h3", "image/png", "drop"))
+        page.wait_for_selector("#drawer-body .composer .thumb img")
+        page.wait_for_timeout(200)
+        thumbs = page.locator("#drawer-body .composer .thumb").count()
+        page.locator("#drawer-body #sub-box").fill("look at this")
+        page.locator("#drawer-body .composer-send").click()
+        page.wait_for_timeout(300)
+        msg = [b for p, b in page.api.posts if p.endswith("/send-subagent")]
+        cleared = page.locator("#drawer-body .composer .thumb").count() == 0
+        check(name, same and dropped and thumbs == 2 and msg and msg[-1]["text"] == "look at this"
+              and msg[-1]["images"] == [{"data": PNG_1PX}] * 2 and cleared,
+              (same, dropped, thumbs, msg[-1:] and msg[-1]["text"], cleared))
 
     name = "send box: × takes an image out, a dropped non-image is refused, images alone can go"
     with step(page, name):

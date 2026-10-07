@@ -589,6 +589,13 @@ for body, why in (({"agentId": "../x", "text": "hi"}, "an id that isn't one"), (
         check(f"subagent message: refused: {why}", False)
     except ValueError as e:
         check(f"subagent message: refused: {why}", len(sent) == count, str(e))
+S.CLAUDE_TMP = Path(tempfile.mkdtemp()) / "claude-test"  # the images section removed the last one
+S.send_to_subagent("b", {"sessionId": "chat", "agentId": "a1b2c3", "label": "x", "text": "", "images": [{"data": b64(PNG)}]})
+note = sent[-1][0]["text"] if sent else ""
+named = S.re.search(r"\[Image: source: (\S+)\]", note)
+check("subagent message: images go too, saved where its chat (and so the subagent) reads them, their lines passed on",
+      "including any image lines at its end" in note and named and Path(named.group(1)).read_bytes() == PNG, note[-160:])
+S.shutil.rmtree(S.CLAUDE_TMP.parent)
 
 # ------------------------- New workflow with agents: a master and its team (faked)
 

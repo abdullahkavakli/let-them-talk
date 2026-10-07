@@ -738,29 +738,6 @@ const redrawSub = () => { renderDrawer(); renderAgentsPop(); };
 function subActions(sel, d, n) {
   if (!n?.live) return [];
   const key = `${sel.parent}:${sel.id}`, name = d.label || sel.label || "it";
-  const box = canReach(n) && el("textarea", {
-    id: "sub-box", class: "send-box", rows: 2, placeholder: `A message for it, passed on by ${display(n)}`,
-    oninput: (e) => { subDrafts[key] = e.target.value; },
-    onkeydown: (e) => {
-      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
-    },
-  });
-  if (box) box.value = subDrafts[key] || "";
-  const send = async () => {
-    const text = box.value.trim();
-    if (!text || subSent[key] === "sending") return;
-    subSent[key] = "sending";
-    redrawSub();
-    try {
-      await api(`/api/board/${state.boardId}/send-subagent`, { sessionId: sel.parent, agentId: sel.id, label: name, text });
-      subDrafts[key] = "";
-      subSent[key] = Date.now() / 1000;
-    } catch (e) {
-      delete subSent[key];
-      toast(failText(e), "error");
-    }
-    redrawSub();
-  };
   const attach = n.background && n.jobId && n.resumable !== false && el("button", {
     class: "btn", text: "Open in terminal", title: `${display(n)}'s terminal: pick "${name}" with ↑/↓ under its prompt box`,
     onclick: () => agentAction(n, "agent-attach", (r) => r.opened
@@ -769,17 +746,63 @@ function subActions(sel, d, n) {
   });
   const inside = !attach && (n.editor ? `It runs inside ${display(n)} in ${n.editor}.`
     : n.entrypoint === "cli" ? `It runs inside ${display(n)}'s terminal window: pick it there with ↑/↓ under the prompt box.` : "");
-  const sent = subSent[key];
+  const terminal = [attach && el("div", { class: "drawer-actions" }, attach), inside && el("p", { class: "muted small", text: inside })];
+  if (!canReach(n)) return terminal;
+  // The same box as a chat's Send box (sendSection): text and images, Enter sends.
+  const images = state.images[key] || [];
+  const ready = () => !!(box.value.trim() || (state.images[key] || []).length);
+  const box = el("textarea", {
+    id: "sub-box", rows: 1, class: "send-box", placeholder: "Your message",
+    oninput: (e) => { subDrafts[key] = e.target.value; composer.classList.toggle("ready", ready()); },
+    onpaste: (e) => {  // a screenshot goes in as an image; copied text pastes as text
+      const files = [...(e.clipboardData?.files || [])];
+      if (!files.length || e.clipboardData.getData("text/plain")) return;
+      e.preventDefault();
+      addImages(key, files, redrawSub);
+    },
+    onkeydown: (e) => {
+      if (e.isComposing || e.key !== "Enter" || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
+      e.preventDefault();
+      if (ready()) button.click();
+    },
+  });
+  box.value = subDrafts[key] || "";
+  const sending = subSent[key] === "sending", label = sending ? "Sending…" : "Send message";
+  const button = el("button", {
+    class: "composer-send", disabled: sending, "aria-label": label, title: label,
+    onclick: async () => {
+      const text = box.value.trim(), sent = state.images[key] || [];
+      if (!ready()) return box.focus();
+      subSent[key] = "sending";
+      subDrafts[key] = "";
+      state.images[key] = [];
+      redrawSub();
+      try {
+        await api(`/api/board/${state.boardId}/send-subagent`, { sessionId: sel.parent, agentId: sel.id, label: name,
+          text, images: sent.map((i) => ({ data: i.data })) });
+        subSent[key] = Date.now() / 1000;
+        sent.forEach((i) => URL.revokeObjectURL(i.url));
+      } catch (e) {
+        delete subSent[key];
+        // back into the box to fix and resend, unless something new was added meanwhile
+        if (!(subDrafts[key] || "").trim()) subDrafts[key] = text;
+        if (!(state.images[key] || []).length) state.images[key] = sent;
+        toast(failText(e), "error");
+      }
+      redrawSub();
+    },
+  }, sendIcon());
+  const composer = el("div", { class: `composer${box.value.trim() || images.length ? " ready" : ""}` },
+    images.length > 0 && el("div", { class: "composer-images" }, ...imageThumbs(key, redrawSub)),
+    el("div", { class: "composer-row" }, box, button));
+  const last = subSent[key];
   return [
-    box && el("h2", { text: "Send it a message" }),
-    box,
-    el("div", { class: "drawer-actions" },
-      box && el("button", { class: "btn primary", text: sent === "sending" ? "Sending…" : "Send",
-        disabled: sent === "sending", onclick: send }),
-      attach),
-    el("p", { class: "muted small", text: [
-      box && `It goes to ${display(n)}, which passes it on to this agent.`,
-      typeof sent === "number" && `Last one went at ${clock(sent)}.`, inside].filter(Boolean).join(" ") }),
+    el("h2", { text: "Send it a message" }),
+    composer,
+    el("p", { class: "composer-hint", text: [`It goes to ${display(n)}, which passes it on to this agent.`,
+      typeof last === "number" && `Last one went at ${clock(last)}.`,
+      "Enter sends; Shift+Enter adds a line. Paste or drop images to send them too."].filter(Boolean).join(" ") }),
+    ...terminal,
   ];
 }
 
@@ -2554,14 +2577,19 @@ const NEW_AGENT = "new-agent";  // their key in state.images
 function renderAgentImages() {
   const images = state.images[NEW_AGENT] || [];
   $("#n-images").hidden = !images.length;
-  $("#n-images").replaceChildren(...images.map((img, i) => el("div", { class: "thumb" },
+  $("#n-images").replaceChildren(...imageThumbs(NEW_AGENT, renderAgentImages));
+}
+
+// A thumbnail with × for each image going with the next text under key.
+function imageThumbs(key, redraw) {
+  return (state.images[key] || []).map((img, i) => el("div", { class: "thumb" },
     el("img", { src: img.url, alt: `Image ${i + 1}` }),
     el("button", { type: "button", class: "thumb-x", text: "×", "aria-label": `Remove image ${i + 1}`, title: "Remove",
       onclick: () => {
         URL.revokeObjectURL(img.url);
-        state.images[NEW_AGENT] = state.images[NEW_AGENT].filter((x) => x !== img);
-        renderAgentImages();
-      } }))));
+        state.images[key] = state.images[key].filter((x) => x !== img);
+        redraw();
+      } })));
 }
 function clearAgentImages() {
   for (const img of state.images[NEW_AGENT] || []) URL.revokeObjectURL(img.url);
@@ -3039,11 +3067,15 @@ async function addImages(sid, files, redraw = renderDrawer) {
   redraw();
 }
 
-// Images dropped anywhere on a chat's details go into its Send box, so they
-// needn't hit the box itself. The cue is a class on the drawer, which the
-// polls don't redraw (they redraw what is in it).
+// Images dropped anywhere on a chat's (or a subagent's) details go into its
+// Send box, so they needn't hit the box itself. The cue is a class on the
+// drawer, which the polls don't redraw (they redraw what is in it).
 const draggingFiles = (e) => !!e.dataTransfer?.types.includes("Files");
-const dropsInto = () => state.selected?.type === "node" && $("#drawer-body #send-box") ? state.selected.id : null;
+const dropsInto = () => {
+  const sel = state.selected;
+  if (sel?.type === "node" && $("#drawer-body #send-box")) return sel.id;
+  return sel?.type === "sub" && $("#drawer-body #sub-box") ? `${sel.parent}:${sel.id}` : null;  // its key (subActions)
+};
 $("#drawer").addEventListener("dragover", (e) => {
   if (!draggingFiles(e) || !dropsInto()) return;
   e.preventDefault();

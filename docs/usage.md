@@ -161,10 +161,11 @@ its details.
 A subagent runs inside the chat that started it, and only that chat can reach
 it. While that chat runs:
 
-- **Send it a message:** type it under its facts and press Enter (or
-  **Send**). It goes to the chat that started it, which passes it on word for
-  word (with `SendMessage`) and tells you if it can't. The line under the box
-  says when the last one went.
+- **Send it a message:** the same box as a chat's Send box, under its facts:
+  type and press Enter (or the round send button); paste or drop images to
+  send them too. It goes to the chat that started it, which passes it on word
+  for word (with `SendMessage`, images included) and tells you if it can't.
+  The line under the box says when the last one went.
 - **Open in terminal** (a background agent's subagent): opens that agent's
   terminal (`claude attach`), where Claude Code lists its subagents under the
   prompt box; pick this one with ↑/↓ to watch it or type to it. A subagent of
