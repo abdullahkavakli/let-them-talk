@@ -26,4 +26,5 @@ More depth: `docs/usage.md` (what the app does), `docs/how-it-works.md`, `docs/c
 - A deliberate change to what a check looks at (`server.py` or `static/`) changes that check in the same commit; a UI change also updates `docs/usage.md`. Each check covers something that broke once.
 - Arrow note wording stays identical in `server.py` `default_notes()`/`who()` and `static/app.js` `defaultNotes()`/`who`.
 - Before merging, look for duplicate top-level definitions in `server.py` (Python silently keeps the last): `python3 -c "import ast,collections;t=ast.parse(open('server.py').read());c=collections.Counter(n.name for n in t.body if isinstance(n,(ast.FunctionDef,ast.ClassDef)));print([k for k,v in c.items() if v>1])"`.
-- Only Selawik ships in `static/fonts/`; never bundle Segoe UI Variable.
+- `server.py` uses only Python's standard library (3.12+); add no packages.
+- Third-party files keep their license files: `static/fonts/` holds only Selawik (Microsoft's, unmodified, SIL Open Font License 1.1; never bundle Segoe UI Variable); `mods/let-them-talk-handoff/skills/handoff/` is Matt Pocock's `/handoff` skill from mattpocock/skills (MIT).
