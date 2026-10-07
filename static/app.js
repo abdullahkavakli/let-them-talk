@@ -2459,7 +2459,8 @@ fillModels(nd.teamModel);
 fillEfforts(nd.teamEffort);
 
 function agentSection(i) {
-  // its title says its role; folded, its model and the start of its prompt too
+  // its title says its role; folded, a model or effort other than Opus and
+  // Default ("on Haiku, low effort") and the start of its prompt too
   const head = el("span"), runs = el("span", { class: "n-agent-model" }), peek = el("span", { class: "n-agent-peek muted" });
   const task = el("textarea", { id: `n-task-${i}`, class: "n-task", rows: 3,
     placeholder: "Its part of the work; the master sends it this as its task",
@@ -2469,10 +2470,11 @@ function agentSection(i) {
     // Enter goes on to its prompt, as it would start the team otherwise
     onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); task.focus(); } } });
   const showRuns = () => {
-    runs.textContent = ` · ${model.selectedOptions[0].text}` +
+    runs.textContent = model.value === "opus" && !effort.value ? "" : ` · on ${model.selectedOptions[0].text}` +
       (effort.value ? `, ${effort.selectedOptions[0].text.toLowerCase()} effort` : "");
   };
-  const model = el("select", { id: `n-model-${i}`, class: "n-team-model", onchange: showRuns });
+  const model = el("select", { id: `n-model-${i}`, class: "n-team-model",
+    onchange: () => { showRuns(); refreshAgentDialog(); } });  // Haiku's note
   const effort = el("select", { id: `n-effort-${i}`, class: "n-team-effort", onchange: showRuns });
   fillModels(model);
   fillEfforts(effort);
@@ -2520,6 +2522,8 @@ const changeCount = () => keepStepperStill(refreshAgentDialog);
 function refreshAgentDialog() {
   const bg = whereTo() === "background", wf = nd.workflow, team = teamSize() > 0;
   renderTeam();
+  const haiku = team ? [nd.teamModel, ...nd.sections.slice(0, teamSize()).map((s) => s.querySelector(".n-team-model"))]
+    .some((e) => e.value === "haiku") : /haiku/i.test(nd.model.value);
   $("#n-title").textContent = wf ? "New workflow" : "New agent";
   $("#n-prompt-label").textContent = team ? "What should the master do?" : wf ? "What should the workflow do?" : "What should it do?";
   nd.prompt.placeholder = team ? "e.g. Build the sign-up page: split the work among your agents and check what they send back"
@@ -2546,8 +2550,8 @@ function refreshAgentDialog() {
       "own model and effort; each agent is named after the master and its role, and an arrow each way links it with the master."
       : wf && "A new background agent starts in this folder and runs your task as a Claude Code workflow; " +
       "the model you pick runs it and its agents, which show under Subagents.",
-    bg && !team && /haiku/i.test(nd.model.value) && nd.mode.value === "auto"
-      ? "With Haiku, auto mode may not be available; the agent then asks before it acts."
+    bg && haiku && nd.mode.value === "auto"
+      ? `With Haiku, auto mode may not be available; ${team ? "the master or an agent on it" : "the agent"} then asks before it acts.`
       : bg && "Claude Code must already trust the folder (run claude there once and accept).",
     !bg && `${nd.editor.value} must trust the folder: in Restricted Mode, Claude Code is off there and no chat opens.`,
     !bg && nd.model.value && `Let Them Talk's mod runs it on ${nd.model.selectedOptions[0].text} ` +
@@ -2640,7 +2644,7 @@ nd.dialog.addEventListener("drop", (e) => {
   addImages(NEW_AGENT, [...e.dataTransfer.files], renderAgentImages);
 });
 
-for (const e of [nd.editor, nd.mode, nd.model, ...document.querySelectorAll('input[name="n-where"]')]) {
+for (const e of [nd.editor, nd.mode, nd.model, nd.teamModel, ...document.querySelectorAll('input[name="n-where"]')]) {
   e.addEventListener("change", refreshAgentDialog);
   e.addEventListener("input", refreshAgentDialog);
 }

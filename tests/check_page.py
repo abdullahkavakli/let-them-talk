@@ -1003,10 +1003,12 @@ def checks_wide(browser):
         models, efforts = "Fable,Opus,Sonnet,Haiku", "Default,Low,Medium,High,Extra high,Max"
         check(name, none and picks == [[True, "opus", models], [True, "", efforts]] * 3, (none, picks))
 
-    name = "new workflow: what you type in a section stays when the number changes; its title shows the role"
+    name = "new workflow: what you type in a section, and the master's picks, stay when the number changes; its title shows the role"
     with step(page, name):
         page.locator("#new-workflow").click()
         page.locator("#n-team-count").fill("3")
+        page.locator("#n-team-model").select_option("fable")
+        page.locator("#n-team-effort").select_option("low")
         page.locator("#n-role-0").fill("tester")
         page.locator("#n-task-0").fill("Test the login page")
         page.locator("#n-role-1").fill("writer")
@@ -1020,6 +1022,7 @@ def checks_wide(browser):
         check(name, one and sections().count() == 2 and page.input_value("#n-role-0") == "tester"
               and page.input_value("#n-role-1") == "writer"
               and page.input_value("#n-model-1") == "sonnet" and page.input_value("#n-effort-1") == "low"
+              and page.input_value("#n-team-model") == "fable" and page.input_value("#n-team-effort") == "low"
               and page.inner_text("details.n-agent summary >> nth=0").startswith("Agent 1 · tester"), one)
 
     name = "new workflow: with no agents it starts one workflow agent, as before"
@@ -1036,14 +1039,15 @@ def checks_wide(browser):
     name = "new workflow: with agents it sends the team (your prompt, each role, prompt, model and effort), then starts clean"
     with step(page, name):
         page.api.post_result = {"launchId": "t1", "name": "Fix the login", "agents": []}
-        # those the checks above left, as a dialog closed without starting keeps them
-        page.evaluate("nd.sections = []; nd.teamList.replaceChildren()")
         page.locator("#new-workflow").click()
         page.locator("#n-prompt").fill("Fix the login")
         page.locator("#n-team-count").fill("2")
         for i, (role, task) in enumerate((("tester", "Test it"), ("writer", "Document it"))):
             page.locator(f"#n-role-{i}").fill(f" {role} ")
             page.locator(f"#n-task-{i}").fill(task)
+        # back from what the checks above picked, as a dialog closed without starting keeps it
+        for sel, v in (("#n-team-model", "opus"), ("#n-team-effort", ""), ("#n-model-1", "opus"), ("#n-effort-1", "")):
+            page.locator(sel).select_option(v)
         page.locator("#n-submit").click()
         page.wait_for_timeout(300)
         closed = not page.evaluate("document.querySelector('#chat-dialog').open")
@@ -1125,6 +1129,23 @@ def checks_wide(browser):
               and [(a["model"], a["effort"]) for a in sent[-1]["agents"]] == [("opus", ""), ("haiku", "max")]
               and again == ["opus", "", "opus", ""], (sent, again))
 
+    name = "new workflow: with the master or an agent on Haiku in auto mode, the note says it may ask before it acts"
+    with step(page, name):
+        page.locator("#new-workflow").click()
+        page.locator("#n-team-count").fill("1")
+        says = lambda: "auto mode may not be available; the master or an agent on it then asks" in page.inner_text("#n-note")
+        before = says()
+        page.locator("#n-model-0").select_option("haiku")
+        agent = says()
+        page.locator("#n-model-0").select_option("opus")
+        page.locator("#n-team-model").select_option("haiku")
+        master = says()
+        page.locator("#n-mode").select_option("acceptEdits")
+        asks = says()
+        page.locator("#n-mode").select_option("auto")
+        page.locator("#n-team-model").select_option("opus")
+        check(name, not before and agent and master and not asks and not says(), (before, agent, master, asks))
+
     name = "new workflow: images and Ultracode go with the team, and are cleared after"
     with step(page, name):
         page.evaluate("state.images = {}")
@@ -1201,7 +1222,8 @@ def checks_wide(browser):
         check(name, at8 == "n-team-count" and page.evaluate("document.activeElement.id") == "n-team-count"
               and sections().count() == 0, (at8, page.evaluate("document.activeElement.id")))
 
-    name = "new workflow: a folded section's title shows the role, the model (and effort, if picked) and the start of its prompt"
+    name = ("new workflow: a folded section's title shows the role, the model and effort unless they are Opus and Default, "
+            "and the start of its prompt")
     with step(page, name):
         page.locator("#new-workflow").click()
         page.locator("#n-team-count").fill("1")
@@ -1214,8 +1236,15 @@ def checks_wide(browser):
         page.locator("#n-effort-0").select_option("xhigh")
         page.locator("details.n-agent summary").first.click()
         picked = page.inner_text("details.n-agent summary >> nth=0")
-        check(name, text.startswith("Agent 1 · tester · Opus") and "Test the login page" in text and "sign-up" not in text
-              and picked.startswith("Agent 1 · tester · Sonnet, extra high effort"), (text, picked))
+        page.locator("details.n-agent summary").first.click()
+        page.locator("#n-role-0").fill("")
+        page.locator("#n-model-0").select_option("haiku")
+        page.locator("#n-effort-0").select_option("")
+        page.locator("details.n-agent summary").first.click()
+        no_role = page.inner_text("details.n-agent summary >> nth=0")
+        check(name, text.startswith("Agent 1 · tester") and "Opus" not in text and "Test the login page" in text
+              and "sign-up" not in text and picked.startswith("Agent 1 · tester · on Sonnet, extra high effort")
+              and no_role.startswith("Agent 1 · on Haiku") and "effort" not in no_role, (text, picked, no_role))
 
     name = "arrows: an arrow each way runs side by side between the two cards, each label clear of the other"
     with step(page, name):
@@ -1303,6 +1332,16 @@ def checks_narrow(browser):
                 page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
                 page.wait_for_timeout(50)
             check(name, page.input_value("#n-team-count") == "3", page.input_value("#n-team-count"))
+        name = f"narrow {w} px: an agent's model and effort sit " + ("under its role, clear of it" if w <= 600 else "level with its role")
+        with step(page, name):
+            page.locator("#new-workflow").click()
+            page.locator("#n-team-count").fill("1")
+            role, role_end, model_label, effort_label, model = page.evaluate("""(() => {
+                const at = (s) => document.querySelector(s).getBoundingClientRect();
+                return [at('#n-role-0').top, at('#n-role-0').bottom, at('label[for="n-model-0"]').top,
+                        at('label[for="n-effort-0"]').top, at('#n-model-0').top]; })()""")
+            check(name, effort_label == model_label and (model_label >= role_end + 8 if w <= 600 else abs(model - role) < 1),
+                  (role, role_end, model_label, effort_label, model))
         name = f"narrow {w} px: no sideways scrolling"
         with step(page, name):
             check(name, page.evaluate("document.documentElement.scrollWidth <= innerWidth"))

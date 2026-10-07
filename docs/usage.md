@@ -108,13 +108,15 @@ words unless you name it.
 Or build a team: scroll down to **Team**, pick **How many agents?** (up to 8)
 and give each agent a **Role** (*tester*, *writer* …) and a **Prompt**, its
 part of the work, in its own section (click its title to fold it; folded, it
-shows the role, the model and the start of the prompt). The prompt at the top
-then goes to the master. The master and its agents are background agents in
+shows the role, the model and effort unless they are Opus and Default (*on
+Haiku, low effort*), and the start of the prompt). The prompt at the top then
+goes to the master. The master and its agents are background agents in
 that folder, with the permissions (and **Ultracode**, if ticked) you picked,
 and none opens a terminal. Each one has its own **Model** (Fable, Opus,
 Sonnet or Haiku) and **Effort** (low to max, or **Default**: Claude Code's
 own): the master's at the top, each agent's beside its role. Unless you pick
-others, all run on Opus with the default effort.
+others, all run on Opus with the default effort. On Haiku, auto mode may not
+be available, and one on it then asks before it acts.
 
 - The agents start first and wait: each one's first prompt says its role,
   that it is on a team, the master's name, and to wait for the master's

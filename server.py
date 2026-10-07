@@ -2527,6 +2527,7 @@ PERMISSION_MODES = ("auto", "acceptEdits", "plan", "manual", "dontAsk")
 CLI_MODES = PERMISSION_MODES + ("bypassPermissions",)  # a handoff passes on the chat's, whichever
 # claude --effort's levels; Claude Code lowers one a model lacks to high, and drops it for a model without any
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
+EFFORT_WORDS = {"xhigh": "extra high"}  # as the dialog says it
 JOB_RE = re.compile(r"[0-9a-f]{8}")
 BG_LINE = re.compile(r"^backgrounded · ([0-9a-f]{8})", re.M)
 COPY_LINE = re.compile(r"started a copy as ([0-9a-f]{8})")
@@ -2963,7 +2964,8 @@ def _first_words(text, most):
 def _model_effort(item, who):
     """The model and effort picked for the master or an agent (who: "The
     master's", "Agent 2's"), checked; none picked: Opus, and Claude Code's own effort ("")."""
-    model, effort = str(item.get("model") or TEAM_MODEL), str(item.get("effort") or "")
+    model = str(item.get("model") or "").strip().lower() or TEAM_MODEL
+    effort = str(item.get("effort") or "").strip().lower()
     if model not in TEAM_MODELS:
         raise ValueError(f"{who} model can be only Fable, Opus, Sonnet or Haiku.")
     if effort and effort not in EFFORTS:
@@ -3046,7 +3048,8 @@ def _master_prompt(team, running, missing, images=()):
     lines = [with_images(team["prompt"], images), "",
              f"[{APP_NAME}] You are \"{team['master']}\", the master of a team of background agents your user "
              "started for this. Each one runs in this folder and waits for its task from you:"]
-    on = lambda a: TEAM_MODELS[a["model"]] + (f" at {a['effort']} effort" if a["effort"] else "")  # to size its task by
+    # to size its task by, in the dialog's words
+    on = lambda a: TEAM_MODELS[a["model"]] + (f" at {EFFORT_WORDS.get(a['effort'], a['effort'])} effort" if a["effort"] else "")
     lines += [f"- \"{a['name']}\", the {a['role']}, on {on(a)}: {a['prompt']}" for a in running]
     if missing:
         lines.append("These agents couldn't be started, so do their part yourself:")

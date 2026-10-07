@@ -884,6 +884,7 @@ details.n-agent[open] :is(.n-agent-peek, .n-agent-model) { display: none; }
 @media (max-width: 600px) {
   .n-agent-row { grid-template-columns: 1fr 1fr; }
   .n-agent-row > :first-child { grid-column: 1 / -1; }
+  .n-agent-row > :not(:first-child) label { margin-top: 10px; }  /* clear of the role's box above */
 }
 
 /* New agent: images dropped on the dialog go with its prompt */

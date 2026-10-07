@@ -425,6 +425,17 @@ S.start_background("b", {"prompt": "hi", "folder": folder})
 starts = [a for a in ran if "--bg" in a]
 check("ultracode: New agent with Ultracode ticked starts it with the ultracode setting, only then",
       starts[0][starts[0].index("--settings") + 1] == '{"ultracode": true}' and "--settings" not in starts[1], ran)
+ran.clear()
+S.start_background("b", {"prompt": "hi", "folder": folder, "effort": "low"})
+try:
+    S.start_background("b", {"prompt": "hi", "folder": folder, "effort": "huge"})
+    refused = ""
+except ValueError as e:
+    refused = str(e)
+starts = [a for a in ran if "--bg" in a]
+check("new agent: an effort given goes on to claude; an unknown one is refused before claude runs",
+      len(starts) == 1 and starts[0][starts[0].index("--effort") + 1] == "low" and refused == "Unknown effort: huge",
+      (ran, refused))
 
 # ------------------------------- Open in IDE: a running background agent ends first
 
@@ -652,10 +663,11 @@ arrows = lambda b: {(b["nodes"][c["from"]]["name"], b["nodes"][c["to"]]["name"])
 apart = lambda spots: all(abs(p[0] - q[0]) >= S.CARD_W + 20 or abs(p[1] - q[1]) >= S.CARD_H + 15
                           for i, p in enumerate(spots) for q in spots[i + 1:])
 sessions[:] = []
-job, runs, b = start_team()
+# none picked: one agent as the page sends it (Opus, Default), one without them
+job, runs, b = start_team({**BODY, "model": "opus", "effort": "", "agents": [{**TEAM[0], "model": "opus", "effort": ""}, TEAM[1]]})
 names = [bg_name(a) for a in runs]
 check("team: the agents start first, then the master, each in the background with the permissions picked; "
-      "none picked: on Opus, with Claude Code's own effort",
+      "none picked (Default, or nothing sent): on Opus, with Claude Code's own effort",
       names == ["Fix the login - tester", "Fix the login - writer", "Fix the login"]
       and all(a[:1] == ["--bg"] and a[a.index("--model") + 1] == "opus" and "--effort" not in a
               and a[a.index("--permission-mode") + 1] == "acceptEdits" and "--settings" not in a for a in runs), names)
@@ -689,15 +701,19 @@ check("team: one agent reads as one, not \"1 agents\"", job["state"] == "done"
       and "the master and its agent (tester)" in job["detail"] and "1 agents" not in job["detail"], job["detail"])
 
 sessions[:] = []
-job, runs, b = start_team({**BODY, "model": "fable", "effort": "max",
-                           "agents": [{**TEAM[0], "model": "sonnet", "effort": "low"}, {**TEAM[1], "model": "haiku"}]})
+job, runs, b = start_team({**BODY, "model": " Fable", "effort": "MAX",
+                           "agents": [{**TEAM[0], "model": "sonnet", "effort": "low"}, {**TEAM[1], "model": "haiku"},
+                                      {"role": "reviewer", "prompt": "Review it", "effort": "xhigh"}]})
 picked = [(bg_name(a), a[a.index("--model") + 1], "--effort" in a and a[a.index("--effort") + 1]) for a in runs]
-check("team: each agent and the master run on the model and effort picked for it (none picked: Claude Code's own effort)",
+check("team: each agent and the master run on the model and effort picked for it, in any case "
+      "(none picked: Opus, Claude Code's own effort)",
       picked == [("Fix the login - tester", "sonnet", "low"), ("Fix the login - writer", "haiku", False),
-                 ("Fix the login", "fable", "max")] and job["state"] == "done", picked)
-check("team: the plan names each agent's model, and its effort if picked",
+                 ("Fix the login - reviewer", "opus", "xhigh"), ("Fix the login", "fable", "max")]
+      and job["state"] == "done", picked)
+check("team: the plan names each agent's model, and its effort if picked, in the dialog's words",
       '- "Fix the login - tester", the tester, on Sonnet at low effort: Test the login page' in runs[-1][-1]
-      and '- "Fix the login - writer", the writer, on Haiku: Write its help page' in runs[-1][-1], runs[-1][-1])
+      and '- "Fix the login - writer", the writer, on Haiku: Write its help page' in runs[-1][-1]
+      and '- "Fix the login - reviewer", the reviewer, on Opus at extra high effort: Review it' in runs[-1][-1], runs[-1][-1])
 
 sessions[:] = []
 job, runs, b = start_team({**BODY, "images": [{"data": b64(PNG)}], "ultracode": True})
