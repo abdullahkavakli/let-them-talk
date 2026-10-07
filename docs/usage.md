@@ -39,8 +39,10 @@ they work on. You can edit or switch off either note before sending.
 
 Arrows are labelled with their reason (or *connected*). An arrow is dashed
 and moving while its notes are sent, red with *! not delivered* if one
-failed, and grey and dotted once either chat has ended. Click one (its line
-or its label) to see why and when it was connected, and:
+failed, and grey and dotted once either chat has ended. Two cards with an
+arrow each way have the two side by side between them, the one from the card
+on the left above, each with its own label. Click one (its line or its label)
+to see why and when it was connected, and:
 
 - **Conversation:** what the two chats sent each other with `SendMessage`, in
   both directions: the chat the arrow starts from on the left, the other on
@@ -101,6 +103,38 @@ any chat, in the folder you pick, whose first prompt is *Use a workflow to do
 this: …*. The model you pick runs it and its agents, which show under
 [Subagents](#subagents). Its card is named *workflow* and the task's first
 words unless you name it.
+
+Or build a team: scroll down to **Team**, pick **How many agents?** (up to 8)
+and give each agent a **Role** (*tester*, *writer* …) and a **Prompt**, its
+part of the work, in its own section (click its title to fold it; folded, it
+shows the role and the start of the prompt). The prompt at the top then goes
+to the master. The master and its agents are background agents in that
+folder, all on Opus, with the permissions (and **Ultracode**, if ticked) you
+picked, and none opens a terminal.
+
+- The agents start first and wait: each one's first prompt says its role,
+  that it is on a team, the master's name, and to wait for the master's
+  message with its task, then report back to the master.
+- Then the master starts, with your prompt (and any images you added, which
+  only the master gets) and the plan: each agent's name, role and prompt, to
+  send each one its prompt in full as its task and gather their reports.
+- The master is named as you name it (up to 30 characters; else after the
+  prompt's first words that fit, e.g. *Fix the login*), each agent after the
+  master and its role (*Fix the login - tester*), with a number added to the
+  master's name if a running chat, or a team still starting, has one of those
+  names (messages find chats by name). Roles and names take letters, digits,
+  spaces, - and _.
+- Their cards go side by side, the agents in a column right of the master,
+  and an arrow each way links the master with each agent (*task* and
+  *report*; none between agents). These arrows send no notes, as the first
+  prompts already introduce them; click one to follow what the two send each
+  other.
+- Every role and prompt is checked before anything starts (the box that needs
+  a fix gets the cursor). Notices and Activity say how it goes: one that
+  didn't start (and why) is named, one that doesn't come up running within 90
+  seconds is removed, and the master is told to do its part itself; an agent
+  whose arrow back can't be made keeps no arrow at all, and the notice says
+  why.
 
 ## Cards
 
