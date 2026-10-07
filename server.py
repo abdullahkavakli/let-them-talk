@@ -2519,9 +2519,10 @@ type_lock = threading.Lock()
 
 def _prompt_box(raw, suggestion=""):
     """What a background agent's prompt box holds, from its screen as
-    `claude logs` prints it: "" when empty (or showing only its grey
+    `claude attach` draws it: "" when empty (or showing only its grey
     suggestion), None when no prompt box is showing (a question, a
-    permission prompt or a menu takes its place)."""
+    permission prompt or a menu takes its place). Not from `claude logs`:
+    a long history replays out of place there and hides the box."""
     lines = [l.rstrip() for l in render_screen(raw).splitlines()]
     rules = [i for i, l in enumerate(lines) if l.strip().startswith("─────")]
     if len(rules) < 2:
@@ -2580,10 +2581,11 @@ def _prompted_since(sid, since):
     return False
 
 
-def _press_keys(job, keys):
+def _press_keys(job, keys, check=None):
     """Attach to a running background agent in a terminal of the app's own,
     press keys (pairs of text and seconds to wait after it) once its prompt
-    box is drawn, and leave as a closed window would; the agent runs on."""
+    box is drawn, and leave as a closed window would; the agent runs on.
+    check(screen) sees the drawn screen first and raises to press nothing."""
     master, slave = os.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
     env = {**claude_env(), "TERM": "xterm-256color"}
@@ -2611,6 +2613,13 @@ def _press_keys(job, keys):
             raise ValueError("Couldn't open its prompt box: "
                              f"{_plain(seen.decode('utf-8', 'replace'))[-200:] or 'no answer'}")
         drain(0.3)
+        if check:
+            for _ in range(10):  # until it stops drawing, at most 2 s more
+                before = len(seen)
+                drain(0.2)
+                if len(seen) == before:
+                    break
+            check(seen.decode("utf-8", "replace"))
         for key, wait in keys:
             os.write(master, key.encode())
             drain(wait)
@@ -2626,19 +2635,21 @@ def _press_keys(job, keys):
 def _type_prompt(s, text):
     """Type a prompt into a running background agent's prompt box and send it."""
     job = s["jobId"]
-    with type_lock:
-        raw = run_claude(["logs", job], timeout=30, text=False).stdout.decode("utf-8", "replace")
-        suggestion = " ".join(str((job_state(job) or {}).get("suggestedReply") or "").split())
-        box = _prompt_box(raw, suggestion)
+    suggestion = " ".join(str((job_state(job) or {}).get("suggestedReply") or "").split())
+
+    def check(screen):
+        box = _prompt_box(screen, suggestion)
         if box is None:
             raise ValueError("It's showing a question or a menu instead of its prompt box. "
                              "Answer it in its terminal first.")
         if box:
             raise ValueError("Its prompt box already has text typed in its terminal. "
                              "Send or clear it there first.")
+
+    with type_lock:
         since = time.time()
         keys = [(key, 0.05 if key in ("\\", "\r") else 0.02) for key in _typed_keys(text)]
-        _press_keys(job, keys + [("", 0.4), ("\r", 1.0)])
+        _press_keys(job, keys + [("", 0.4), ("\r", 1.0)], check)
     deadline = since + TYPE_STARTED
     while not _prompted_since(s["sessionId"], since):
         if time.time() > deadline:
