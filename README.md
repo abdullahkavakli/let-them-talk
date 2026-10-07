@@ -132,9 +132,13 @@ installed inside WSL, where the server runs.
     as if you typed it there, so it keeps running and its open terminal stays
     and shows it (if you have unsent text in that terminal, or it is asking
     you something there, nothing is typed); one whose process has ended is
-    woken with it. If sending fails, the text goes back into
-    the box. When the chat waits for you, the box shows a likely reply in
-    grey; press Tab (or →) to use it. Enter sends, Shift+Enter adds a line.
+    woken with it. Images go with it as in Claude Code: paste a screenshot
+    (Ctrl+V), drop image files on the box or pick them with **+**; each
+    shows as a thumbnail, × takes it out (PNG, JPEG, GIF or WebP, up to 5 at
+    a time, 10 MB each; images can go without text). If sending fails, the
+    text and images go back into the box. When the chat waits for you, the
+    box shows a likely reply in grey; press Tab (or →) to use it. Enter
+    sends, Shift+Enter adds a line.
   - **Agents in this chat (N)** is one line, with how many are running;
     click it to open the workflows and subagents the chat started in a
     pop-up over the board, with their state, model, time and tokens, and a
@@ -259,6 +263,12 @@ installed inside WSL, where the server runs.
   as a prompt instead: typed into its prompt box through `claude attach`
   while its process runs, or with `claude --resume <id> --bg` once that has
   ended.
+- An image you send is saved under a random name, readable only by you, in
+  the chat's own folder in Claude Code's temporary folder
+  (`/tmp/claude-<uid>/<project>/let-them-talk-images/`), and your text gets
+  a line `[Image: source: <path>]` for it, the way Claude Code names an
+  image you paste. The chat opens it with its Read tool without asking, as
+  it does its own files there. Images are deleted a week after they were sent.
 - An arrow's **Conversation** is read from both chats' transcripts: a message
   belongs to it when its message id is in one chat's `SendMessage` call and
   in the other's transcript, or when it went to the other chat's own socket

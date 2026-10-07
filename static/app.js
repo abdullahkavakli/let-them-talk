@@ -775,7 +775,7 @@ function settleOutbox(sid) {
   const mine = msgs.filter((m) => m.role === "user");
   state.outbox[sid] = out.filter((o) => {
     if (msgs.length && msgs[0].at > o.at) return false;
-    const i = mine.findIndex((m) => m.at >= o.at - 30 && (m.via === "app" || m.text.trim() === o.text));
+    const i = mine.findIndex((m) => m.at >= o.at - 30 && (m.via === "app" || imageTags(m.text).trim() === o.text));
     if (i < 0) return true;
     mine.splice(i, 1);
     return false;
@@ -2311,15 +2311,24 @@ state.drafts = {};  // sessionId -> text typed into its Send box
 state.sending = new Set();  // sessionIds with a Send in flight
 state.outbox = {};  // sessionId -> [{text, at, state}] sent from here, not yet in its chat
 state.logs = {};    // sessionId -> last screen of a background agent
+state.images = {};  // sessionId -> [{url, data}] images going with its next text (url: the thumbnail)
+
+// Images are pasted, dropped or added into the Send box, and the server
+// checks them again (see _read_images in server.py).
+const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+const IMAGE_MB = 10, IMAGE_COUNT = 5;
+// The line the server adds for each image, shown as Claude Code shows one you paste.
+const imageTags = (text) => { let i = 0; return text.replace(/^\[Image: source: [^\]\n]+\]$/gm, () => `[Image #${++i}]`); };
 
 // A chat can take text from here if it is running and can receive messages,
 // or if it is a background agent (which wakes up with a prompt).
 const canReach = (n) => n.live && (n.background || !n.messageBlock);
 const promptable = (n) => n.background && n.agentState !== "working" && n.status !== "busy";
 
-async function sendTo(n, text, how) {
+async function sendTo(n, text, how, images = []) {
   try {
-    const res = await api(`/api/board/${state.boardId}/send`, { sessionId: n.sessionId, text, how });
+    const res = await api(`/api/board/${state.boardId}/send`,
+      { sessionId: n.sessionId, text, how, images: images.map((i) => ({ data: i.data })) });
     toast(res.result.how === "prompt"
       ? (res.result.copy ? `Claude Code started a copy (${res.result.copy}) instead of waking it.` : `Sent the prompt to ${display(n)}.`)
       : `Sent the message to ${display(n)}.`, res.result.copy ? "error" : "ok");
@@ -2455,7 +2464,7 @@ function chatMessage(m, activity) {
     const long = m.text.length > FOLD_CHARS || m.text.split("\n").length > FOLD_LINES;
     return el("div", { class: "msg user" },
       el("div", { class: "msg-meta", text: `${m.via === "app" ? "You, from here" : "You"} · ${clock(m.at)}` }),
-      el("div", { class: "bubble" + (long && !open ? " folded" : ""), text: m.text }),
+      el("div", { class: "bubble" + (long && !open ? " folded" : ""), text: imageTags(m.text) }),
       long && toggle(open ? "Show less" : "Show all"));
   }
   // Claude's replies, and notes from other sessions (Claude writes those too),
@@ -2485,65 +2494,150 @@ function sendSection(n) {
   // A likely reply, grey like Claude Code's own suggestion. On the empty box Tab
   // (or →) takes it and a second Tab moves on as usual. Enter sends,
   // Shift+Enter adds a line, and an empty box sends nothing.
-  const sg = !(state.outbox[n.sessionId] || []).length && state.chat[n.sessionId]?.suggest;
+  const sid = n.sessionId;
+  const sg = !(state.outbox[sid] || []).length && state.chat[sid]?.suggest;
   const suggest = sg?.text;
+  const images = state.images[sid] || [];
+  // Images can go alone, as in Claude Code; then there's something to send.
+  const ready = () => !!(box.value.trim() || (state.images[sid] || []).length);
   const box = el("textarea", {
-    id: "send-box", rows: 3, class: "send-box",
+    id: "send-box", rows: 1, class: "send-box",
     placeholder: suggest ? `${suggest}  (Tab to use)` : sg?.pending ? "Suggesting a reply…"
       : asPrompt ? "Its next prompt" : "Your message",
-    oninput: (e) => { state.drafts[n.sessionId] = e.target.value; },
+    oninput: (e) => { state.drafts[sid] = e.target.value; composer.classList.toggle("ready", ready()); },
+    // A screenshot pasted (Ctrl+V) goes in as an image; copied text pastes as text.
+    onpaste: (e) => {
+      const files = [...(e.clipboardData?.files || [])];
+      if (!files.length || e.clipboardData.getData("text/plain")) return;
+      e.preventDefault();
+      addImages(sid, files);
+    },
     onkeydown: (e) => {
       if (e.isComposing) return;
       const plain = !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey;
       if (e.key === "Enter" && plain) {
         e.preventDefault();
-        if (box.value.trim()) button.click();
+        if (ready()) button.click();
         return;
       }
       if (!((e.key === "Tab" && plain) || e.key === "ArrowRight") || !suggest || box.value) return;
       e.preventDefault();
-      box.value = state.drafts[n.sessionId] = suggest;
+      box.value = state.drafts[sid] = suggest;
+      composer.classList.add("ready");
     },
   });
-  box.value = state.drafts[n.sessionId] || "";
+  box.value = state.drafts[sid] || "";
   // The drawer is redrawn every poll, so "sending" lives in state, not on this button.
-  const sending = state.sending.has(n.sessionId);
+  const sending = state.sending.has(sid);
   // Asking you something in its terminal: nothing can be typed there until you answer.
   const asking = n.background && n.running && n.agentState === "blocked";
+  const label = sending ? "Sending…" : asPrompt ? "Send prompt" : "Send message";
   const button = el("button", {
-    class: asking ? "btn" : "btn primary", disabled: sending,
-    text: sending ? "Sending…" : asPrompt ? "Send prompt" : "Send message",
+    class: "composer-send", disabled: sending, "aria-label": label, title: label,
     onclick: () => {
-      const sid = n.sessionId, text = box.value.trim();
-      if (!text) return box.focus();
+      const text = box.value.trim(), sent = state.images[sid] || [];
+      if (!ready()) return box.focus();
       state.drafts[sid] = "";
-      // Back into the box to fix and resend, unless something new was typed meanwhile.
-      sendAsBubble(n, text, () => { if (!(state.drafts[sid] || "").trim()) state.drafts[sid] = text; });
+      state.images[sid] = [];
+      // Back into the box to fix and resend, unless something new was added meanwhile.
+      sendAsBubble(n, text, () => {
+        if (!(state.drafts[sid] || "").trim()) state.drafts[sid] = text;
+        if (!(state.images[sid] || []).length) state.images[sid] = sent;
+      }, sent);
     },
+  }, sendIcon());
+  const pick = el("input", {
+    type: "file", accept: IMAGE_TYPES.join(","), multiple: true, hidden: true,
+    onchange: (e) => { addImages(sid, [...e.target.files]); e.target.value = ""; },
   });
+  // Messages-style: the images over the text, + on the left, the round Send on the right.
+  const composer = el("div", {
+    class: `composer${box.value.trim() || images.length ? " ready" : ""}${asking ? " asking" : ""}`,
+    ondragover: (e) => {
+      if (!e.dataTransfer.types.includes("Files")) return;
+      e.preventDefault();
+      composer.classList.add("dropping");
+    },
+    ondragleave: (e) => { if (!composer.contains(e.relatedTarget)) composer.classList.remove("dropping"); },
+    ondrop: (e) => {
+      if (!e.dataTransfer.files.length) return;
+      e.preventDefault();
+      composer.classList.remove("dropping");
+      addImages(sid, [...e.dataTransfer.files]);
+    },
+  },
+  images.length > 0 && el("div", { class: "composer-images" }, ...images.map((img, i) => el("div", { class: "thumb" },
+    el("img", { src: img.url, alt: `Image ${i + 1}` }),
+    el("button", { class: "thumb-x", text: "×", "aria-label": `Remove image ${i + 1}`, title: "Remove",
+      onclick: () => {
+        URL.revokeObjectURL(img.url);
+        state.images[sid] = state.images[sid].filter((x) => x !== img);
+        renderDrawer();
+      } })))),
+  el("div", { class: "composer-row" },
+    el("button", { class: "composer-add", "aria-label": "Add images", title: "Add images (or paste or drop them here)",
+      onclick: () => pick.click() }, plusIcon()),
+    box, button, pick));
   return [
     el("h2", { text: asPrompt ? "Send a prompt" : "Send a message" }),
-    box,
-    el("p", { class: "muted small", text: (asking
+    composer,
+    el("p", { class: "composer-hint", text: (asking
       ? "It's asking you something in its terminal, so a prompt can't be typed there until you answer it."
       : asPrompt ? "It wakes up with this as your next prompt, as if you had typed it."
       : "It arrives as a message from Let Them Talk and is read between its steps.") +
-      " Enter sends; Shift+Enter adds a line." }),
-    el("div", { class: "drawer-actions" }, button),
+      " Enter sends; Shift+Enter adds a line. Paste or drop images to send them too." }),
   ];
 }
 
-// Sends text to a chat, shown in it at once as your bubble, like a phone; the
-// bubble gives way to the real message once the chat has read it (see
-// settleOutbox). If sending fails, the bubble goes and failed() runs.
-async function sendAsBubble(n, text, failed) {
-  const sid = n.sessionId, out = { text, at: Date.now() / 1000, state: "sending" };
+// An up arrow for the round Send button, drawn like plusIcon.
+function sendIcon() {
+  const icon = svg("svg", { width: 14, height: 14, viewBox: "0 0 14 14", "aria-hidden": "true" });
+  icon.append(svg("path", { d: "M7 12V2.5M2.75 6.5 7 2.25l4.25 4.25", fill: "none", stroke: "currentColor",
+    "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round" }));
+  return icon;
+}
+
+// Adds images (pasted, dropped or picked) to what goes with a chat's next
+// text, with a thumbnail each; others are refused with a notice.
+async function addImages(sid, files) {
+  const take = [], refused = new Set();
+  for (const f of files) {
+    if (!IMAGE_TYPES.includes(f.type)) refused.add("Only PNG, JPEG, GIF and WebP images can be sent.");
+    else if (f.size > IMAGE_MB << 20) refused.add(`${f.name || "That image"} is over ${IMAGE_MB} MB; send a smaller one.`);
+    else if ((state.images[sid] || []).length + take.length >= IMAGE_COUNT) refused.add(`Send at most ${IMAGE_COUNT} images at a time.`);
+    else take.push(f);
+  }
+  refused.forEach((why) => toast(why, "error"));
+  const read = (f) => new Promise((done, fail) => {
+    const r = new FileReader();
+    r.onload = () => done(r.result.slice(r.result.indexOf(",") + 1));  // base64, without "data:...,"
+    r.onerror = () => fail(r.error);
+    r.readAsDataURL(f);
+  });
+  try {
+    for (const f of take) {
+      const data = await read(f);  // the list may have been sent meanwhile: add to the current one
+      (state.images[sid] ||= []).push({ url: URL.createObjectURL(f), data });
+    }
+  } catch (e) {
+    toast(`An image couldn't be read: ${e?.message || e}`, "error");
+  }
+  renderDrawer();
+}
+
+// Sends text (and images) to a chat, shown in it at once as your bubble, like
+// a phone; the bubble gives way to the real message once the chat has read
+// it (see settleOutbox). If sending fails, the bubble goes and failed() runs.
+async function sendAsBubble(n, text, failed, images = []) {
+  const sid = n.sessionId, shown = [text, images.map((_, i) => `[Image #${i + 1}]`).join("\n")].filter(Boolean);
+  const out = { text: shown.join("\n\n"), at: Date.now() / 1000, state: "sending" };
   (state.outbox[sid] ||= []).push(out);
   state.sending.add(sid);
   renderDrawer();
   try {
-    if (await sendTo(n, text)) {
+    if (await sendTo(n, text, undefined, images)) {
       out.state = "sent";
+      images.forEach((i) => URL.revokeObjectURL(i.url));
     } else {
       state.outbox[sid] = state.outbox[sid].filter((o) => o !== out);
       failed();

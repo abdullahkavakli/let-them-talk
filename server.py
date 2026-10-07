@@ -19,6 +19,7 @@ import re
 import select
 import shutil
 import signal
+import stat
 import struct
 import subprocess
 import tempfile
@@ -2799,20 +2800,115 @@ def message_note(text):
     return f"[{APP_NAME}] Message from your user:\n\n{text}"
 
 
+# Images sent with your text. Claude Code saves an image you paste into its
+# temporary folder and tells Claude where, "[Image: source: <path>]". A chat
+# reads its own project's folder there (/tmp/claude-<uid>/<project>/, named
+# as its transcripts' folder) without asking, so the app saves yours there
+# too and adds that line for each; Claude opens them with its Read tool.
+CLAUDE_TMP = Path(tempfile.gettempdir()) / f"claude-{os.getuid()}"
+IMAGE_DIR = "let-them-talk-images"
+IMAGE_MAX = 10 << 20         # bytes in one image
+IMAGE_COUNT = 5              # images sent with one text
+IMAGE_KEEP = 7 * 24 * 3600   # seconds a sent image is kept
+SEND_BODY = MAX_BODY + IMAGE_COUNT * IMAGE_MAX * 4 // 3  # base64 is a third bigger
+
+
+def _image_kind(data):
+    """png, jpg, gif or webp, from the file's first bytes; None for anything else."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def _read_images(items):
+    """The images sent with a text ([{"data": base64}]), checked: [(bytes, kind)]."""
+    if not isinstance(items, list) or not all(isinstance(it, dict) for it in items):
+        raise ValueError("The images didn't come through; add them again.")
+    if len(items) > IMAGE_COUNT:
+        raise ValueError(f"Send at most {IMAGE_COUNT} images at a time.")
+    out = []
+    for it in items:
+        try:
+            data = base64.b64decode(str(it.get("data") or ""), validate=True)
+        except ValueError:
+            raise ValueError("An image didn't come through; add it again.") from None
+        kind = _image_kind(data)
+        if kind is None:
+            raise ValueError("Only PNG, JPEG, GIF and WebP images can be sent.")
+        if len(data) > IMAGE_MAX:
+            raise ValueError(f"An image is over {IMAGE_MAX >> 20} MB; send a smaller one.")
+        out.append((data, kind))
+    return out
+
+
+def _own_dir(path, private=False):
+    """Make path a folder, or check it is one: this user's and not a link;
+    private: also closed to everyone else."""
+    try:
+        os.mkdir(path, 0o700)
+    except FileExistsError:
+        pass
+    st = os.lstat(path)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or private and st.st_mode & 0o077:
+        raise ValueError(f"The image wasn't saved: {path} isn't a private folder of yours.")
+
+
+def _save_images(s, images):
+    """Save images where chat s reads them without asking, each under a new
+    random name; old ones go. Returns their paths."""
+    if s.get("platform") == "windows":
+        raise ValueError("Images can't be sent to a chat running on Windows.")
+    session_title(s["sessionId"])  # finds the transcript
+    path = title_cache.get(s["sessionId"], {}).get("path")
+    project = path.parent.name if path else re.sub(r"[^A-Za-z0-9]", "-", s.get("cwd") or "")
+    folder = CLAUDE_TMP / project / IMAGE_DIR
+    _own_dir(CLAUDE_TMP, private=True)
+    _own_dir(folder.parent)
+    _own_dir(folder, private=True)
+    now = time.time()
+    for old in CLAUDE_TMP.glob(f"*/{IMAGE_DIR}/*"):
+        try:
+            if old.lstat().st_mtime < now - IMAGE_KEEP:
+                old.unlink()
+        except OSError:
+            pass
+    paths = []
+    for data, kind in images:
+        p = folder / f"{uuid.uuid4().hex[:16]}.{kind}"
+        with os.fdopen(os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), "wb") as f:
+            f.write(data)
+        paths.append(p)
+    return paths
+
+
+def with_images(text, paths):
+    """text, then a line naming each image, as Claude Code names one you paste."""
+    return "\n\n".join(x for x in (text, "\n".join(f"[Image: source: {p}]" for p in paths)) if x)
+
+
 def send_to_session(bid, body):
-    """Send a chat your text. A background agent that isn't busy gets it as a
-    real prompt (it wakes up with it); any other running chat gets it as a
-    message, which it reads between steps."""
+    """Send a chat your text, and any images with it. A background agent that
+    isn't busy gets it as a real prompt (it wakes up with it); any other
+    running chat gets it as a message, which it reads between steps."""
     sid, text = body.get("sessionId"), str(body.get("text") or "").strip()
-    if not text:
+    images = _read_images(body.get("images") or [])
+    if not text and not images:
         raise ValueError("Write something to send.")
     s = find_session(sid)
     as_prompt = s.get("background") and s.get("status") != "busy" and s.get("agentState") != "working" \
         and body.get("how") != "message"
+    if not as_prompt and s.get("messageBlock"):
+        raise ValueError(s["messageBlock"])
+    if images:
+        text = with_images(text, _save_images(s, images))
     if as_prompt:
         return _prompt_background(bid, s, text)
-    if s.get("messageBlock"):
-        raise ValueError(s["messageBlock"])
     states, _ = relay_send([{"to": s["name"], "text": message_note(text)}])
     ok = states[0]["state"] != "failed"
     with lock:
@@ -3481,17 +3577,17 @@ class Handler(BaseHTTPRequestHandler):
         # answers, so other web pages cannot drive it.
         if not self._host_ok() or self.headers.get(CSRF_HEADER) != "1":
             return self._send(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
+        parts = urlparse(self.path).path.strip("/").split("/")
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             length = -1
-        if not 0 <= length <= MAX_BODY:
+        if not 0 <= length <= (SEND_BODY if parts[-1:] == ["send"] else MAX_BODY):  # a Send may carry images
             return self._send(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "request too large"})
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
         except ValueError:
             return self._send(HTTPStatus.BAD_REQUEST, {"error": "bad json"})
-        parts = urlparse(self.path).path.strip("/").split("/")
         try:
             if parts == ["api", "boards"]:
                 folder = normalize_folder(str(body.get("folder", "")))

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Checks parts of server.py without a server: where new cards go, New
-agent → Chat in IDE in a folder, and renaming a card. Every program launch, session list and
-message is faked, so nothing opens and nothing is sent. Needs only Python.
+agent → Chat in IDE in a folder, renaming a card, and images sent with a prompt. Every
+program launch, session list and message is faked, so nothing opens and nothing is sent.
+Needs only Python.
 
 Run:  python3 tests/check_server.py      Exit 0: all passed. 1: a check failed.
 """
@@ -188,6 +189,81 @@ rows[:] = [{"id": "j1", "sessionId": "s1", "pid": None, "state": "done"}]
 took = next(s for s in real_live_sessions() if s["sessionId"] == "s1")
 check("open in IDE: once the IDE goes on with it, its card is that chat, not the ended agent",
       not took["background"] and not took["jobId"] and took["editor"] == "Cursor", took)
+
+# ------------------------------------------- Images with a prompt or message
+
+S.CLAUDE_TMP = Path(tempfile.mkdtemp()) / "claude-test"  # not the real temp folder
+S.session_title = lambda sid: None  # no transcript: the folder is named from the chat's folder
+S.background_rows = lambda fresh=False: []
+PNG = b"\x89PNG\r\n\x1a\n" + b"\0" * 64
+b64 = lambda data: S.base64.b64encode(data).decode()
+prompts, woken, sessions[:] = [], [], [
+    {"sessionId": "chat", "name": "chat", "platform": "wsl", "cwd": "/home/you/my app", "background": False,
+     "running": True, "messageBlock": None, "status": "idle"},
+    {"sessionId": "bg", "name": "bg", "platform": "wsl", "cwd": "/home/you/proj", "background": True,
+     "running": True, "jobId": "j1", "status": "idle"},
+    {"sessionId": "nap", "name": "nap", "platform": "wsl", "cwd": "/home/you/proj", "background": True,
+     "running": False, "jobId": "j2", "status": "asleep"},
+    {"sessionId": "win", "name": "win", "platform": "windows", "cwd": "/mnt/c/x", "background": False,
+     "running": True, "messageBlock": None, "status": "idle"}]
+S._type_prompt = lambda s, text: prompts.append(text)
+S.run_claude = lambda args, **kw: woken.append(args) or types.SimpleNamespace(
+    stdout="backgrounded · 0123abcd\n", stderr="", returncode=0)
+saved = lambda: sorted(S.CLAUDE_TMP.glob(f"*/{S.IMAGE_DIR}/*"))
+
+sent.clear()
+S.send_to_session("b", {"sessionId": "chat", "text": "look", "images": [{"data": b64(PNG)}]})
+files = saved()
+note = sent[-1][0]["text"] if sent else ""
+check("images: a message gets a line naming the saved image, as Claude Code names a pasted one",
+      len(files) == 1 and note.endswith(f"look\n\n[Image: source: {files[0]}]"), note)
+check("images: saved in the chat's own project temp folder, under a new random name",
+      files and files[0].parent == S.CLAUDE_TMP / "-home-you-my-app" / S.IMAGE_DIR
+      and S.re.fullmatch(r"[0-9a-f]{16}\.png", files[0].name) and files[0].read_bytes() == PNG, files)
+check("images: the file and its folders are private (0600, 0700)",
+      files and files[0].stat().st_mode & 0o777 == 0o600 and files[0].parent.stat().st_mode & 0o777 == 0o700
+      and S.CLAUDE_TMP.stat().st_mode & 0o777 == 0o700)
+S.send_to_session("b", {"sessionId": "bg", "text": "", "images": [{"data": b64(PNG)}, {"data": b64(b"GIF89a" + PNG)}]})
+check("images: a running background agent gets them typed with its prompt, and images alone can go",
+      prompts and S.re.fullmatch(r"\[Image: source: \S+\.png\]\n\[Image: source: \S+\.gif\]", prompts[-1]), prompts)
+S.send_to_session("b", {"sessionId": "nap", "text": "and this", "images": [{"data": b64(PNG)}]})
+check("images: an asleep one is woken with them in its prompt",
+      woken and woken[-1][:4] == ["--resume", "nap", "--bg", "--"] and "and this\n\n[Image: source: " in woken[-1][4])
+S.send_to_session("b", {"sessionId": "nap", "text": "just text"})
+check("images: text alone goes as before", woken[-1][4] == "just text")
+
+before = saved()
+for body, why, says in (
+        ({"images": [{"data": b64(b"<svg onload=alert(1)>")}]}, "something that isn't an image", "Only PNG"),
+        ({"images": [{"data": b64(PNG + b"\0" * S.IMAGE_MAX)}]}, "an image over the size cap", "over"),
+        ({"images": [{"data": b64(PNG)}] * (S.IMAGE_COUNT + 1)}, "more images than the cap", "at most"),
+        ({"images": [{"data": "not base64!"}]}, "data that isn't base64", "didn't come through"),
+        ({"images": ["x"]}, "a list of something else", "didn't come through"),
+        ({"sessionId": "win", "images": [{"data": b64(PNG)}]}, "a chat running on Windows", "Windows")):
+    try:
+        S.send_to_session("b", {"sessionId": "chat", "text": "x", **body})
+        check(f"images: refused: {why}", False)
+    except ValueError as e:
+        check(f"images: refused: {why}", says in str(e) and saved() == before, str(e))
+
+old = S.CLAUDE_TMP / "-elsewhere" / S.IMAGE_DIR / "0000000000000000.png"
+old.parent.mkdir(parents=True)
+old.write_bytes(PNG)
+os.utime(old, (time.time() - S.IMAGE_KEEP - 60,) * 2)
+S.send_to_session("b", {"sessionId": "chat", "text": "new", "images": [{"data": b64(PNG)}]})
+check("images: ones sent over a week ago are deleted, newer ones kept",
+      not old.exists() and set(before) < set(saved()))
+link = S.CLAUDE_TMP / "-home-you-proj" / S.IMAGE_DIR
+for f in link.iterdir():
+    f.unlink()
+link.rmdir()
+link.symlink_to(tempfile.mkdtemp())
+try:
+    S.send_to_session("b", {"sessionId": "bg", "text": "x", "images": [{"data": b64(PNG)}]})
+    check("images: a link where the image folder goes is refused", False)
+except ValueError as e:
+    check("images: a link where the image folder goes is refused", not list(link.iterdir()), str(e))
+S.shutil.rmtree(S.CLAUDE_TMP.parent)
 
 failed = [r for r in results if not r[1]]
 for name, ok, detail in results:

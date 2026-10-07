@@ -178,6 +178,20 @@ def open_card(page, sid):
     poll(page)
 
 
+PNG_1PX = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+
+
+def paste(page, sel, kind, how="paste"):
+    """A file pasted (Ctrl+V) into, or dropped on, what sel finds: a 1-pixel PNG, or text."""
+    page.evaluate("""([sel, b64, kind, how]) => {
+        const bytes = kind.startsWith('image/') ? Uint8Array.from(atob(b64), c => c.charCodeAt(0)) : ['notes'];
+        const dt = new DataTransfer(); dt.items.add(new File([bytes], 'file', { type: kind }));
+        const init = { bubbles: true, cancelable: true };
+        document.querySelector(sel).dispatchEvent(how === 'paste'
+            ? new ClipboardEvent('paste', { ...init, clipboardData: dt }) : new DragEvent('drop', { ...init, dataTransfer: dt })); }""",
+        [sel, PNG_1PX, kind, how])
+
+
 def is_open(page, sel):
     return page.evaluate(f"(e => !!e && !e.hidden && !!e.offsetHeight)(document.querySelector('{sel}'))")
 
@@ -285,6 +299,40 @@ def checks_wide(browser):
         page.wait_for_timeout(200)
         sent = [(b["sessionId"], b["end"]) for p, b in page.api.posts if p.endswith("/open-folder")]
         check(name, quiet and page.dialogs[asked:] == ["confirm"] and sent == [(C, False), (B, True)], sent)
+
+    name = "send box: a pasted screenshot shows as a thumbnail and goes with the text"
+    with step(page, name):
+        open_card(page, B)
+        page.evaluate("state.images = {}")
+        paste(page, "#send-box", "image/png")
+        page.wait_for_selector("#drawer-body .composer .thumb img")
+        page.locator("#send-box").fill("what is wrong here?")
+        page.locator("#drawer-body .composer-send").click()
+        page.wait_for_timeout(300)
+        sent = [b for p, b in page.api.posts if p.endswith("/send")]
+        check(name, sent == [{"sessionId": B, "text": "what is wrong here?", "images": [{"data": PNG_1PX}]}]
+              and page.locator("#drawer-body .composer .thumb").count() == 0
+              and "[Image #1]" in page.inner_text("#drawer-body .msg.pending .bubble"), str(sent)[:200])
+        page.evaluate("state.outbox = {}")
+
+    name = "send box: × takes an image out, a dropped non-image is refused, images alone can go"
+    with step(page, name):
+        open_card(page, B)
+        page.evaluate("state.images = {}")
+        paste(page, "#send-box", "image/png")
+        paste(page, "#send-box", "image/png")
+        page.wait_for_function("document.querySelectorAll('#drawer-body .thumb').length === 2")
+        page.locator("#drawer-body .thumb-x").first.click()
+        page.wait_for_timeout(100)
+        one = page.locator("#drawer-body .thumb").count() == 1
+        paste(page, "#drawer-body .composer", "text/plain", "drop")
+        page.wait_for_timeout(100)
+        refused = page.locator("#toasts .toast.error").count() == 1 and page.locator("#drawer-body .thumb").count() == 1
+        page.locator("#send-box").press("Enter")
+        page.wait_for_timeout(300)
+        sent = [b for p, b in page.api.posts if p.endswith("/send")]
+        check(name, one and refused and len(sent) == 1 and sent[0]["text"] == "" and len(sent[0]["images"]) == 1)
+        page.evaluate("state.outbox = {}")
 
     name = "notices: beside the open details, not over them"
     with step(page, name):

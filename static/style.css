@@ -319,11 +319,11 @@ body.connecting .node:not(.ended) { cursor: copy; }
   white-space: pre-wrap; overflow-wrap: anywhere;
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
 }
-.send-box, .rename-box {
+.rename-box {
   display: block; width: 100%; font: inherit; color: var(--text); background: var(--panel-2);
   border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; resize: vertical;
 }
-.send-box:focus-visible, .rename-box:focus-visible { outline: 2px solid var(--accent); border-color: var(--accent); }
+.rename-box:focus-visible { outline: 2px solid var(--accent); border-color: var(--accent); }
 .chat { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
 .msg { display: flex; flex-direction: column; align-items: flex-start; max-width: 88%; }
 .msg.user { align-self: flex-end; align-items: flex-end; }
@@ -667,11 +667,66 @@ dialog::backdrop { background: var(--scrim); }
 .sidebar .btn, #drawer .btn:not(.primary), dialog .btn:not(.primary) { background: var(--field); border-color: transparent; }
 .sidebar .btn:hover, #drawer .btn:not(.primary):hover, dialog .btn:not(.primary):hover,
 .avail-row:hover, #activity-box > summary:hover, dialog label.choice:hover { background: var(--field-hover); }
-dialog textarea, dialog input:not([type="checkbox"]):not([type="radio"]), dialog select, .send-box, .rename-box {
+dialog textarea, dialog input:not([type="checkbox"]):not([type="radio"]), dialog select, .rename-box {
   background: var(--field); border-color: transparent; border-radius: 12px;
 }
 dialog label.choice { background: var(--field); border-color: transparent; border-radius: 16px; }
 dialog label.choice:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+
+/* The Send box, as Messages on a Mac: one rounded field holds the images and
+   the text, with + on the left and a round Send on the right. A clearer fill
+   than the panel (white in light, a lighter grey in dark), sunk a little
+   under a lit rim; it grows with the text, and focused it gets the accent
+   halo of Apple's text fields. */
+.composer {
+  border-radius: 20px; padding: 4px;
+  background: rgb(var(--glass-rgb) / calc(var(--ga) + .3));
+  border: 1px solid var(--border);
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / .07), inset 0 -1px 0 var(--glass-lo), 0 1px 0 var(--glass-side);
+  transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
+}
+.composer:has(.send-box:focus) {
+  border-color: var(--accent);
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / .07), 0 0 0 3.5px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.composer.dropping { border-color: var(--accent); background: var(--accent-soft); }
+.composer-row { display: flex; align-items: flex-end; gap: 4px; }
+.send-box {
+  flex: 1; min-width: 0; margin: 0; padding: 5px 4px; border: 0; outline: none; background: none; resize: none;
+  font: inherit; font-size: 14px; line-height: 20px; color: var(--text);
+  field-sizing: content; min-height: 30px; max-height: 40vh;
+}
+.send-box::placeholder { color: var(--muted); }
+.composer-add, .composer-send {
+  flex: none; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 50%; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background-color .15s ease, color .15s ease, transform .1s ease;
+}
+.composer-add { background: var(--field); color: var(--muted); }
+.composer-add:hover { background: var(--field-hover); color: var(--text); }
+.composer-send { background: var(--accent); color: #fff; box-shadow: inset 0 1px 0 rgb(255 255 255 / .3); }
+.composer-send:hover { filter: brightness(1.08); }
+.composer-send:active:not(:disabled), .composer-add:active { transform: scale(.92); }
+/* nothing to send yet, or it's asking you something: a quiet grey */
+:is(.composer:not(.ready), .composer.asking) .composer-send { background: var(--field); color: var(--muted); box-shadow: none; }
+.composer-send:disabled { opacity: .5; cursor: default; }
+:is(.composer-add, .composer-send, .thumb-x):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.composer-images { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 6px 6px; }
+.thumb { position: relative; width: 64px; height: 64px; }
+.thumb img {
+  display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 14px;
+  box-shadow: 0 0 0 1px var(--glass-edge), 0 2px 6px rgb(0 0 0 / .12);
+}
+.thumb-x {
+  position: absolute; top: -6px; right: -6px; width: 22px; height: 22px; padding: 0 0 2px;
+  border: 0; border-radius: 50%; background: rgb(60 60 67 / .78); color: #fff;
+  font: 600 15px/1 var(--font-ui); cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 0 2px rgb(var(--glass-rgb) / .9);
+  -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+}
+.thumb-x:hover { background: rgb(60 60 67 / .95); }
+.composer-hint { margin: 6px 14px 18px; font-size: 11.5px; line-height: 1.4; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .composer, .composer-add, .composer-send { transition: none; } }
 
 /* content stays solid: cards keep a soft shadow */
 .node { border-radius: 16px; box-shadow: var(--card-shadow); }
