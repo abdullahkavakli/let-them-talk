@@ -58,7 +58,10 @@ installed inside WSL, where the server runs.
   editor window you used last (Cursor, VS Code …, in that window's folder)
   or start a **Terminal/background agent** in a folder Claude Code already
   trusts, with its permissions and model (its terminal opens unless you
-  untick that). The editor chat gets your prompt as a message from Let Them
+  untick that). Under the folder box, **Working in** has a button for each
+  folder you're working in (the board's, the sidebar's and those of the
+  board's running chats); typing a path, **Browse…** and the place buttons
+  still reach any folder. The editor chat gets your prompt as a message from Let Them
   Talk; a notice says whether it arrived (with **Copy prompt** if not). A new
   agent goes on the board you started it from.
 - **New workflow** (top bar): say what it should do, and optionally how many
