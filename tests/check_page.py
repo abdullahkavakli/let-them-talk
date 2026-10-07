@@ -125,6 +125,10 @@ class FakeAPI:
             data = self.chat(q.get("session"))
         elif path == "/api/agents":
             data = {"sessionId": q.get("session"), "live": True, "direct": [], "workflows": []}
+        elif path == "/api/subagent":
+            data = {"id": q.get("agent"), "sessionId": q.get("session"), "label": "Fable judge", "kind": "general-purpose",
+                    "workflow": None, "phase": None, "model": "claude-fable-5-1", "tokens": 1000, "state": "running",
+                    "startedAt": 0, "lastAt": 0, "durationMs": 1000, "task": "Judge it", "steps": [], "said": None}
         elif path == "/api/talk":
             data = {"createdAt": 1, "total": 1, "messages": [{"id": "t1", "at": 2, "before": False, "from": A, "to": B,
                                                            "kind": "msg", "state": "read", "text": "**hi** `there`"}]}
@@ -335,6 +339,30 @@ def checks_wide(browser):
         notes = page.locator("#toasts .toast").all_inner_texts()
         page.api.post_result = {}
         check(name, not any("Sent the" in t for t in notes), notes)
+
+    name = "subagent: a message goes through its chat; its terminal opens for a background agent's subagent"
+    with step(page, name):
+        page.api.post_result = {"opened": True, "command": "claude attach abcdef12"}
+        page.evaluate(f"openSub('{B}', 'a1b2c3', 'Fable judge')")  # beta: a background agent
+        page.wait_for_selector("#drawer-body #sub-box")
+        page.locator("#drawer-body #sub-box").fill("stop and report")
+        page.locator("#drawer-body #sub-box").press("Enter")
+        page.wait_for_timeout(300)
+        page.get_by_role("button", name="Open in terminal").click()
+        page.wait_for_timeout(300)
+        msg = [b for p, b in page.api.posts if p.endswith("/send-subagent")]
+        att = [b for p, b in page.api.posts if p.endswith("/agent-attach")]
+        page.evaluate(f"openSub('{A}', 'a1b2c3', 'Fable judge')")  # alpha: a chat in a terminal
+        page.wait_for_selector("#drawer-body #sub-box")
+        term = page.inner_text("#drawer-body")
+        page.evaluate(f"openSub('{D}', 'a1b2c3', 'Fable judge')")  # delta: ended
+        page.wait_for_selector("#drawer-body h3")
+        page.wait_for_timeout(200)
+        ended = page.locator("#drawer-body #sub-box").count() == 0
+        page.api.post_result = {}
+        check(name, msg == [{"sessionId": B, "agentId": "a1b2c3", "label": "Fable judge", "text": "stop and report"}]
+              and att and att[-1].get("jobId") == "abcdef12" and "Open in terminal" not in term
+              and "terminal window" in term and ended, (msg, att, ended))
         page.evaluate("state.outbox = {}")
 
     name = "send box: × takes an image out, a dropped non-image is refused, images alone can go"

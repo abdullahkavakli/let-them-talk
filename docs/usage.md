@@ -155,6 +155,18 @@ its latest message, the task it was given, its workflow and phase (or its
 type) and the chat that started it. The **←** button at the top, with that
 chat's name, goes back to its details.
 
+A subagent runs inside the chat that started it, and only that chat can reach
+it. While that chat runs:
+
+- **Send it a message:** type it under its facts and press Enter (or
+  **Send**). It goes to the chat that started it, which passes it on word for
+  word (with `SendMessage`) and tells you if it can't. The line under the box
+  says when the last one went.
+- **Open in terminal** (a background agent's subagent): opens that agent's
+  terminal (`claude attach`), where Claude Code lists its subagents under the
+  prompt box; pick this one with ↑/↓ to watch it or type to it. A subagent of
+  a chat in a terminal or in Cursor says where it runs instead.
+
 While it is on, the button shows how many are running. If nothing is running
 when you turn it on, a note says so.
 

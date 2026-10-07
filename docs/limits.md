@@ -17,7 +17,8 @@ from messaging each other.
 
 Only sessions can be connected. Subagents (the small cards under
 [Subagents](usage.md#subagents)) can't be reached from outside, so connect
-their parent session.
+their parent session. A message you send a subagent from its details goes the
+same way: to its chat, which passes it on.
 
 ## Sessions are addressed by name
 

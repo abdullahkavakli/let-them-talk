@@ -570,6 +570,26 @@ check("new agent: an IDE chat gets the image in the message with its prompt, onc
 sessions.pop()
 S.shutil.rmtree(S.CLAUDE_TMP.parent)
 
+# --------------------------- A message for a subagent goes through its chat
+
+sent.clear()
+S.send_to_subagent("b", {"sessionId": "chat", "agentId": "a1b2c3", "label": "Fable judge", "text": "stop and report"})
+note = sent[-1][0]["text"] if sent else ""
+check("subagent message: its chat gets it, asked to pass it on word for word with SendMessage to the agent id",
+      sent and sent[-1][0]["to"] == "chat" and 'subagent "Fable judge" (agent id a1b2c3) with SendMessage (to: "a1b2c3")'
+      in note and note.endswith("stop and report"), note)
+S.send_to_subagent("b", {"sessionId": "bg", "agentId": "a1b2c3", "label": "x", "text": "hello"})
+check("subagent message: an idle background agent gets it as a prompt, typed in",
+      prompts and "(to: \"a1b2c3\")" in prompts[-1] and prompts[-1].endswith("hello"), prompts[-1:])
+for body, why in (({"agentId": "../x", "text": "hi"}, "an id that isn't one"), ({"agentId": "a1", "text": "  "}, "no text"),
+                  ({"sessionId": "gone", "agentId": "a1", "text": "hi"}, "a chat that isn't running")):
+    count = len(sent)
+    try:
+        S.send_to_subagent("b", {"sessionId": "chat", **body})
+        check(f"subagent message: refused: {why}", False)
+    except ValueError as e:
+        check(f"subagent message: refused: {why}", len(sent) == count, str(e))
+
 # ------------------------- New workflow with agents: a master and its team (faked)
 
 S.CLAUDE_TMP = Path(tempfile.mkdtemp()) / "claude-test"  # the master's images go here, not in the real temp folder

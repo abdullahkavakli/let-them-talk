@@ -691,6 +691,7 @@ function subDetails(sel, back, toChat) {
       }) : "a chat that isn't on this board"),
       d.workflow && [el("dt", { text: "Workflow" }), el("dd", { text: [d.workflow, d.phase].filter(Boolean).join(" · ") })],
       !d.workflow && d.kind && [el("dt", { text: "Type" }), el("dd", { text: d.kind })]),
+    ...subActions(sel, d, n),
     el("h2", { text: running ? "Doing now" : "Last step" }),
     steps.length ? el("div", { class: "sub-steps" }, ...steps.map((s, i) => el("div", { class: `sub-step${i ? "" : " now"}` },
       el("span", { class: "mono", text: s.text }), el("span", { class: "muted small", text: ago(s.at) }))))
@@ -700,6 +701,61 @@ function subDetails(sel, back, toChat) {
       : [el("p", { class: "muted small", text: running ? "It hasn't written anything yet; it reports when it finishes." : "None." })]),
     el("h2", { text: "Its task" }),
     ...(d.task ? foldBubble(`${key}:task`, d.task) : [el("p", { class: "muted small", text: "Not recorded." })]),
+  ];
+}
+
+// A subagent runs inside the chat that started it, and only that chat can
+// reach it: your message goes to the chat, which passes it on (SendMessage),
+// and its terminal is that chat's, where Claude Code lists it under the prompt
+// box (↑/↓ picks it). Shown wherever its details are (panel or pop-up).
+const subDrafts = {}, subSent = {};  // "parent:agent" -> text in its box / when a message last went
+const redrawSub = () => { renderDrawer(); renderAgentsPop(); };
+
+function subActions(sel, d, n) {
+  if (!n?.live) return [];
+  const key = `${sel.parent}:${sel.id}`, name = d.label || sel.label || "it";
+  const box = canReach(n) && el("textarea", {
+    id: "sub-box", class: "send-box", rows: 2, placeholder: `A message for it, passed on by ${display(n)}`,
+    oninput: (e) => { subDrafts[key] = e.target.value; },
+    onkeydown: (e) => {
+      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
+    },
+  });
+  if (box) box.value = subDrafts[key] || "";
+  const send = async () => {
+    const text = box.value.trim();
+    if (!text || subSent[key] === "sending") return;
+    subSent[key] = "sending";
+    redrawSub();
+    try {
+      await api(`/api/board/${state.boardId}/send-subagent`, { sessionId: sel.parent, agentId: sel.id, label: name, text });
+      subDrafts[key] = "";
+      subSent[key] = Date.now() / 1000;
+    } catch (e) {
+      delete subSent[key];
+      toast(failText(e), "error");
+    }
+    redrawSub();
+  };
+  const attach = n.background && n.jobId && n.resumable !== false && el("button", {
+    class: "btn", text: "Open in terminal", title: `${display(n)}'s terminal: pick "${name}" with ↑/↓ under its prompt box`,
+    onclick: () => agentAction(n, "agent-attach", (r) => r.opened
+      ? toast(`Opened ${display(n)}'s terminal: pick "${name}" with ↑/↓ under its prompt box.`, "ok")
+      : toast(`Run this in a terminal: ${r.command}`, "info", 0)),
+  });
+  const inside = !attach && (n.editor ? `It runs inside ${display(n)} in ${n.editor}.`
+    : n.entrypoint === "cli" ? `It runs inside ${display(n)}'s terminal window: pick it there with ↑/↓ under the prompt box.` : "");
+  const sent = subSent[key];
+  return [
+    box && el("h2", { text: "Send it a message" }),
+    box,
+    el("div", { class: "drawer-actions" },
+      box && el("button", { class: "btn primary", text: sent === "sending" ? "Sending…" : "Send",
+        disabled: sent === "sending", onclick: send }),
+      attach),
+    el("p", { class: "muted small", text: [
+      box && `It goes to ${display(n)}, which passes it on to this agent.`,
+      typeof sent === "number" && `Last one went at ${clock(sent)}.`, inside].filter(Boolean).join(" ") }),
   ];
 }
 

@@ -3345,6 +3345,23 @@ def send_to_session(bid, body):
     return {"how": "message"}
 
 
+def send_to_subagent(bid, body):
+    """Your text for a subagent goes to the chat that runs it, which passes it
+    on with SendMessage: a subagent has no address of its own outside its
+    chat. The chat gets it as any text you send it (see send_to_session)."""
+    aid = str(body.get("agentId") or "")
+    if not AID_RE.fullmatch(aid):
+        raise ValueError("That isn't a subagent.")
+    name = " ".join(str(body.get("label") or "").split())[:120] or aid
+    text = str(body.get("text") or "").strip()
+    if not text:
+        raise ValueError("Write something to send.")
+    ask = (f"Please pass this message from me to your subagent \"{name}\" (agent id {aid}) with SendMessage "
+           f"(to: \"{aid}\"), word for word, then go on with what you were doing. If it can't be reached, "
+           f"tell me.\n\n{text}")
+    return send_to_session(bid, {"sessionId": body.get("sessionId"), "text": ask})
+
+
 def _prompt_background(bid, s, text):
     """Give a background agent a new prompt, in place. A running one gets it
     typed into its prompt box, so it keeps running and a terminal attached
@@ -4199,6 +4216,7 @@ class Handler(BaseHTTPRequestHandler):
                     "launch-editor": lambda: start_editor_chat(bid, body),
                     "handoff": lambda: start_handoff(bid, body),
                     "send": lambda: send_to_session(bid, body),
+                    "send-subagent": lambda: send_to_subagent(bid, body),
                     "agent-stop": lambda: stop_background(bid, body),
                     "agent-end": lambda: end_background(bid, body),
                     "agent-delete": lambda: delete_background(bid, body),
