@@ -273,6 +273,19 @@ def checks_wide(browser):
         sent = [b for p, b in page.api.posts if p.endswith("/agent-end")]
         check(name, ended == 0 and "confirm" in page.dialogs and sent == [{"jobId": "abcdef12"}])
 
+    name = "details: Open in IDE ends a running background agent only after a yes, an asleep one isn't asked"
+    with step(page, name):
+        asked = len(page.dialogs)
+        open_card(page, C)  # gamma: its process ended
+        page.locator("#drawer-body button", has_text="Open in IDE").click()
+        page.wait_for_timeout(200)
+        quiet = len(page.dialogs) == asked
+        open_card(page, B)  # beta: running; the confirm is accepted
+        page.locator("#drawer-body button", has_text="Open in IDE").click()
+        page.wait_for_timeout(200)
+        sent = [(b["sessionId"], b["end"]) for p, b in page.api.posts if p.endswith("/open-folder")]
+        check(name, quiet and page.dialogs[asked:] == ["confirm"] and sent == [(C, False), (B, True)], sent)
+
     name = "notices: beside the open details, not over them"
     with step(page, name):
         open_card(page, B)

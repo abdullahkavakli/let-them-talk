@@ -46,7 +46,7 @@ S.relay_send = lambda items: (sent.append(items) or [{"state": "sent", "detail":
 S.load_board = lambda bid: {"nodes": {}, "activity": []}
 S.save_board = lambda board: None
 S.add_activity = lambda board, text, level: None
-S.live_sessions = lambda: list(sessions)
+real_live_sessions, S.live_sessions = S.live_sessions, lambda: list(sessions)
 S.FOLDER_SETTLE = 0.05
 S.LAUNCH_WAIT = 6
 real_sleep = time.sleep
@@ -151,6 +151,43 @@ try:
     check("rename: a name that doesn't change in time is reported", False)
 except ValueError as e:
     check("rename: a name that doesn't change in time is reported", "hasn't changed" in str(e), str(e))
+
+# ------------------------------- Open in IDE: a running background agent ends first
+
+home = tempfile.mkdtemp()
+board = {"folder": home, "nodes": {"s1": {"cwd": home}}, "activity": []}
+order, rows = [], [{"id": "j1", "sessionId": "s1", "pid": 7}]
+S.background_rows = lambda fresh=False: rows
+S.has_transcript = lambda sid: True
+S.run_claude = lambda args, **kw: order.append(" ".join(["claude", *args])) or types.SimpleNamespace(
+    returncode=0, stdout="", stderr="")
+S.open_in_editor = lambda editor, folder: order.append("folder") or {"opened": True, "command": ""}
+S.open_editor_link = lambda editor, **params: order.append(f"link {params['session']}") or True
+r = S.open_folder("b", {"sessionId": "s1", "editor": "Cursor", "continue": True, "end": True})
+check("open in IDE: a running background agent ends (claude stop) once its folder opens, before the link",
+      order == ["folder", "claude stop j1", "link s1"] and r["ended"] == "j1", order)
+order.clear()
+S.open_folder("b", {"sessionId": "s1", "editor": "Cursor", "continue": True})
+check("open in IDE: without your yes it isn't ended", order == ["folder", "link s1"], order)
+order.clear()
+S.has_transcript = lambda sid: False
+try:
+    S.open_folder("b", {"sessionId": "s1", "editor": "Cursor", "continue": True, "end": True})
+    check("open in IDE: one without its first reply saved is refused before anything opens", False)
+except ValueError:
+    check("open in IDE: one without its first reply saved is refused before anything opens", order == [], order)
+
+sock = os.path.join(home, "sock")
+Path(sock).touch()
+reg = {"pid": 5, "sessionId": "s1", "kind": "interactive", "entrypoint": "claude-vscode", "name": "it",
+       "messagingSocketPath": sock, "cwd": home}
+S._read_registry, S._proc_start, S.WIN_REGISTRY_DIR = (lambda d: [dict(reg)]), (lambda pid: ""), None
+S.wsl_exe = lambda pid, started: "/x/.cursor-server/extensions/anthropic.claude-code-1/resources/native-binary/claude"
+S.session_title = S.session_model = lambda sid: None
+rows[:] = [{"id": "j1", "sessionId": "s1", "pid": None, "state": "done"}]
+took = next(s for s in real_live_sessions() if s["sessionId"] == "s1")
+check("open in IDE: once the IDE goes on with it, its card is that chat, not the ended agent",
+      not took["background"] and not took["jobId"] and took["editor"] == "Cursor", took)
 
 failed = [r for r in results if not r[1]]
 for name, ok, detail in results:

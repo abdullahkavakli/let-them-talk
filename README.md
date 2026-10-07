@@ -147,18 +147,20 @@ installed inside WSL, where the server runs.
     remembered); click one to open it in a pop-up over the board, with the
     same details as clicking the arrow. The chat's details stay underneath;
     ×, Esc or a click outside closes it.
-  - **Open in Cursor** (or your editor) shows the chat there (**Reopen in
-    Cursor** once it has ended).
-  - **Continue in Cursor** (an ended chat with no editor of its own; the
+  - **Open in IDE** (a chat in Cursor or another editor) shows the chat
+    there (**Reopen in IDE** once it has ended).
+  - **Continue in IDE** (an ended chat with no editor of its own; the
     IDE picked under **Settings**) opens its folder, then the conversation in
     Cursor's Claude panel there, since Cursor finds a chat only in a window
     on its folder. The editor must trust the folder (in Restricted Mode,
     Claude Code is off); if the editor can't be asked, the notice says what
     to run instead (`cursor "<folder>"`).
 - **Background agents:** **Open in terminal** (`claude attach <id>` in a new
-  window), **Open in Cursor** (its folder, then its conversation in
-  Cursor's Claude panel, as **Continue in Cursor** does; also while it runs,
-  and then both write to the same conversation), **Show its screen** (click again to hide; it reads **What is it
+  window), **Open in IDE** (its folder, then its conversation in the IDE's
+  Claude panel, as **Continue in IDE** does, to go on with it there; only one
+  place can run a conversation, so a running agent asks first, then ends
+  here with `claude stop`, its terminal windows closing, and its card turns
+  into the IDE's chat), **Show its screen** (click again to hide; it reads **What is it
   asking?** while the agent waits for you), **Stop** (while it works or
   shows a permission prompt or a question: Esc through `claude attach`, so
   it stops what it is doing, or declines the prompt, and waits for you; it

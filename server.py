@@ -1535,6 +1535,8 @@ def live_sessions():
         if match is None and row["sessionId"] not in seen:
             match = _background_session(row)
             sessions.append(match)
+        if match is not None and match["kind"] != "bg":
+            continue  # ended here and taken up in an editor or a terminal: it is that chat now
         if match is not None:
             state = row.get("state")
             if state == "working" and row.get("status") == "idle":
@@ -3101,17 +3103,25 @@ def end_background(bid, body):
     its conversation stays, and a prompt (or `claude attach <id>`) wakes it.
     Refused before its first reply is saved: it could only be restarted then."""
     job = _job_of(body)
-    row = next((r for r in background_rows(fresh=True) if r["id"] == job), None)
+    _stop_job(_endable(next((r for r in background_rows(fresh=True) if r["id"] == job), None)))
+    return {"ended": job, "resume": f"claude attach {job}"}
+
+
+def _endable(row):
+    """A background agent's row, if it runs and may be ended now."""
     if row is None or not row.get("pid"):
         raise ValueError("It isn't running, so there is nothing to end.")
     if not has_transcript(row["sessionId"]):
         raise ValueError("It hasn't saved its first reply yet; ended now, it couldn't be woken again. "
                          "Wait for that reply, or use Stop.")
-    proc = run_claude(["stop", job], timeout=60)
+    return row
+
+
+def _stop_job(row):
+    proc = run_claude(["stop", row["id"]], timeout=60)
     if proc.returncode != 0:
         raise ValueError(_cli_error(proc))
     background_rows(fresh=True)
-    return {"ended": job, "resume": f"claude attach {job}"}
 
 
 def delete_background(bid, body):
@@ -3356,14 +3366,25 @@ def open_folder(bid, body):
     if local and not os.path.isdir(local):
         raise ValueError(f"The folder {folder} isn't there any more.")
     editor = str(body.get("editor") or node.get("editor") or "")
+    # A running background agent holds its conversation, and Claude Code lets
+    # nothing else go on with it (the editor's "Open here anyway" included)
+    # until it has ended. With "end" (you said yes to that) it ends here while
+    # the folder's window comes up, before the link reaches the editor.
+    row = None
+    if body.get("continue") and body.get("end"):
+        row = next((r for r in background_rows(fresh=True) if r["sessionId"] == sid and r.get("pid")), None)
+        row = row and _endable(row)
     opened = open_in_editor(editor, folder)
     if not opened["opened"]:
         raise ValueError(f"{editor} couldn't be asked to open {folder}. Run this instead: {opened['command']}")
     if body.get("continue"):
-        time.sleep(FOLDER_SETTLE)
+        settled = time.time() + FOLDER_SETTLE
+        if row:
+            _stop_job(row)
+        time.sleep(max(0, settled - time.time()))
         if not open_editor_link(editor, session=sid):
             raise ValueError(f"{folder} is open in {editor}, but the conversation couldn't be opened there.")
-    return {"folder": folder}
+    return {"folder": folder, "ended": row and row["id"]}
 
 
 # -------------------------------------------------------------------- http

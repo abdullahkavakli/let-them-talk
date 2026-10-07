@@ -1024,7 +1024,7 @@ function nodeDetails(n) {
       n.model && [el("dt", { text: "Model" }), el("dd", { text: modelName(n.model) })],
       el("dt", { text: "Session" }), el("dd", { class: "mono small", text: n.sessionId }))),
     (n.editor || continuable(n)) && el("div", { class: "drawer-actions" }, n.editor && el("button", {
-      class: "btn primary", text: n.live ? `Open in ${n.editor}` : `Reopen in ${n.editor}`,
+      class: "btn primary", text: n.live ? "Open in IDE" : "Reopen in IDE",
       title: `Shows this chat in ${n.editor}`,
       onclick: () => { window.location.href = editorLink(n.editor, { session: n.sessionId }); },
     }), continuable(n) && conversationButton(n, "Continue in", "btn primary")),
@@ -1061,17 +1061,19 @@ function nodeDetails(n) {
 // editor window in front, so the server opens the folder first (or brings its
 // window forward) and the link a moment later. A chat that isn't running and
 // has no editor of its own gets "Continue in" at the top of its details; a
-// background agent gets "Open in" in its own section, even while it runs
-// (then both write to the same conversation; the user chose that).
+// background agent gets "Open in" in its own section. A running one holds its
+// conversation, and Claude Code lets nothing else go on with it (the editor's
+// "Open here anyway" included), so after a yes it ends here first.
 const editorBusy = {};  // sessionId, or "board" -> a folder is being opened (kept across redraws)
 const trustNote = (editor) =>
   `If ${editor} asks whether you trust the folder, say yes: in Restricted Mode, Claude Code is off there.`;
 
-async function openInEditor(key, body) {
+async function openInEditor(key, body, done) {
   editorBusy[key] = true;
   if (state.view) render();
   try {
-    await api(`/api/board/${state.boardId}/open-folder`, body);
+    const res = await api(`/api/board/${state.boardId}/open-folder`, body);
+    if (done) done(res.result || {});
   } catch (e) {
     toast(failText(e), "error");
   } finally {
@@ -1085,13 +1087,27 @@ const continuable = (n) => !n.background && !n.editor && where(n) && !(n.live &&
 
 function conversationButton(n, verb, cls) {
   const editor = n.editor || defaultEditor(), busy = editorBusy[n.sessionId];
-  const both = n.background && n.running ? " It keeps running here too, so both write to the same conversation." : "";
+  const end = !!(n.background && n.running);
   return el("button", {
-    class: cls, text: busy ? "Opening…" : `${verb} ${editor}`, disabled: !!busy,
-    title: `Opens its folder in ${editor}, then this conversation in ${editor}'s Claude panel there.${both} ` +
-      trustNote(editor),
-    onclick: () => openInEditor(n.sessionId, { sessionId: n.sessionId, editor, continue: true }),
+    class: cls, text: busy ? "Opening…" : `${verb} IDE`, disabled: !!busy,
+    title: `Opens its folder in ${editor}, then this conversation in ${editor}'s Claude panel there, where you ` +
+      `go on with it.${end ? " It ends here first (you're asked)." : ""} ${trustNote(editor)}`,
+    onclick: () => {
+      if (end && !confirm(endHereText(n, editor))) return;
+      openInEditor(n.sessionId, { sessionId: n.sessionId, editor, continue: true, end },
+        (r) => r.ended && toast(`Ended ${display(n)} here; it goes on in ${editor}.`, "ok"));
+    },
   });
+}
+
+// What ending a running background agent closes, so you can go on with it in the IDE.
+function endHereText(n, editor) {
+  const midway = n.status === "busy" ? ", in the middle of what it is doing" : "";
+  const shown = n.shownIn ? `its ${n.shownIn === "Terminal" ? "terminal" : n.shownIn} window and any other ` +
+    "terminal showing it close" : "any terminal window showing it closes";
+  return `Go on with ${display(n)} in ${editor}?\n\nOnly one place can run a conversation, so it ends here ` +
+    `first: it stops running in the background${midway}, and ${shown}. Then it opens in ${editor}, where you ` +
+    "go on with it. Its card stays on the board.";
 }
 
 // The board's own folder in an editor window (the sidebar's Board folder).
