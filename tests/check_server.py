@@ -654,9 +654,10 @@ apart = lambda spots: all(abs(p[0] - q[0]) >= S.CARD_W + 20 or abs(p[1] - q[1]) 
 sessions[:] = []
 job, runs, b = start_team()
 names = [bg_name(a) for a in runs]
-check("team: the agents start first, then the master, each in the background on Opus with the permissions picked",
+check("team: the agents start first, then the master, each in the background with the permissions picked; "
+      "none picked: on Opus, with Claude Code's own effort",
       names == ["Fix the login - tester", "Fix the login - writer", "Fix the login"]
-      and all(a[:1] == ["--bg"] and a[a.index("--model") + 1] == "opus"
+      and all(a[:1] == ["--bg"] and a[a.index("--model") + 1] == "opus" and "--effort" not in a
               and a[a.index("--permission-mode") + 1] == "acceptEdits" and "--settings" not in a for a in runs), names)
 waits = [a[-1] for a in runs[:2]]
 check("team: each agent's first prompt names it, its role and the master, and says to wait for its task",
@@ -664,10 +665,10 @@ check("team: each agent's first prompt names it, its role and the master, and sa
           and "Don't start any work yet" in w and t["prompt"] not in w for w, r, t in zip(waits, ("tester", "writer"), TEAM)),
       waits)
 plan = runs[2][-1]
-check("team: the master's first prompt is your prompt, then the plan: each agent's name, role and prompt, sent in full",
+check("team: the master's first prompt is your prompt, then the plan: each agent's name, role, model and prompt, sent in full",
       plan.startswith("Fix the login\n\n")
-      and '- "Fix the login - tester", the tester: Test the login page' in plan
-      and '- "Fix the login - writer", the writer: Write its help page' in plan and "couldn't be started" not in plan
+      and '- "Fix the login - tester", the tester, on Opus: Test the login page' in plan
+      and '- "Fix the login - writer", the writer, on Opus: Write its help page' in plan and "couldn't be started" not in plan
       and "its prompt above, in full" in plan and "[Image:" not in plan, plan)
 check("team: an arrow each way between the master and each agent, none between agents, no notes sent",
       arrows(b) == {("Fix the login", "Fix the login - tester"), ("Fix the login - tester", "Fix the login"),
@@ -686,6 +687,17 @@ sessions[:] = []
 job, runs, b = start_team({**BODY, "agents": TEAM[:1]})
 check("team: one agent reads as one, not \"1 agents\"", job["state"] == "done"
       and "the master and its agent (tester)" in job["detail"] and "1 agents" not in job["detail"], job["detail"])
+
+sessions[:] = []
+job, runs, b = start_team({**BODY, "model": "fable", "effort": "max",
+                           "agents": [{**TEAM[0], "model": "sonnet", "effort": "low"}, {**TEAM[1], "model": "haiku"}]})
+picked = [(bg_name(a), a[a.index("--model") + 1], "--effort" in a and a[a.index("--effort") + 1]) for a in runs]
+check("team: each agent and the master run on the model and effort picked for it (none picked: Claude Code's own effort)",
+      picked == [("Fix the login - tester", "sonnet", "low"), ("Fix the login - writer", "haiku", False),
+                 ("Fix the login", "fable", "max")] and job["state"] == "done", picked)
+check("team: the plan names each agent's model, and its effort if picked",
+      '- "Fix the login - tester", the tester, on Sonnet at low effort: Test the login page' in runs[-1][-1]
+      and '- "Fix the login - writer", the writer, on Haiku: Write its help page' in runs[-1][-1], runs[-1][-1])
 
 sessions[:] = []
 job, runs, b = start_team({**BODY, "images": [{"data": b64(PNG)}], "ultracode": True})
@@ -712,6 +724,13 @@ for body, why, says in (
         ({"prompt": "x", "name": "x" * 31, "agents": TEAM}, "a master's name over 30 characters", "30 characters"),
         ({"prompt": "x", "name": "Crew [a1]", "agents": TEAM}, "a master's name with brackets", "only letters, digits"),
         ({"prompt": "x", "agents": TEAM, "permissionMode": "yolo"}, "an unknown permission mode", "Unknown"),
+        ({"prompt": "x", "agents": [TEAM[0], {**TEAM[1], "model": "gpt"}]}, "an agent's unknown model",
+         "Agent 2's model can be only Fable, Opus, Sonnet or Haiku."),
+        ({"prompt": "x", "agents": [{**TEAM[0], "effort": "huge"}]}, "an agent's unknown effort",
+         "Agent 1's effort can be only low, medium, high, extra high or max."),
+        ({"prompt": "x", "agents": TEAM, "model": "claude-opus-5-5 --x"}, "the master's unknown model",
+         "The master's model can be only"),
+        ({"prompt": "x", "agents": TEAM, "effort": ["max"]}, "the master's effort that isn't one", "The master's effort can be only"),
         ({"prompt": "x", "agents": TEAM, "images": [{"data": b64(b"<svg/>")}]}, "something that isn't an image", "Only PNG"),
         ({"prompt": "x", "agents": [{"role": f"r{i}", "prompt": long_task} for i in range(8)]},
          "prompts too long together for one command line", "too long together")):

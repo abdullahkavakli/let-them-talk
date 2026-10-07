@@ -991,6 +991,18 @@ def checks_wide(browser):
         check(name, plain and none and three and team_only and five and folded
               and page.evaluate("document.querySelectorAll('.n-agent')[1].open"), (plain, none, three, team_only, five, folded))
 
+    name = "new workflow: each agent's section, and the master at the top, get a model (Opus) and an effort (Default)"
+    with step(page, name):
+        page.locator("#new-workflow").click()
+        page.locator("#n-team-count").fill("0")
+        none = not is_open(page, "#n-team-model") and not is_open(page, "#n-team-effort")
+        page.locator("#n-team-count").fill("2")
+        picks = page.evaluate("""['#n-team-model', '#n-team-effort', '#n-model-0', '#n-effort-0', '#n-model-1', '#n-effort-1']
+            .map(s => { const e = document.querySelector(s);
+                        return [e.offsetHeight > 0, e.value, [...e.options].map(o => o.text).join(',')]; })""")
+        models, efforts = "Fable,Opus,Sonnet,Haiku", "Default,Low,Medium,High,Extra high,Max"
+        check(name, none and picks == [[True, "opus", models], [True, "", efforts]] * 3, (none, picks))
+
     name = "new workflow: what you type in a section stays when the number changes; its title shows the role"
     with step(page, name):
         page.locator("#new-workflow").click()
@@ -998,6 +1010,8 @@ def checks_wide(browser):
         page.locator("#n-role-0").fill("tester")
         page.locator("#n-task-0").fill("Test the login page")
         page.locator("#n-role-1").fill("writer")
+        page.locator("#n-model-1").select_option("sonnet")
+        page.locator("#n-effort-1").select_option("low")
         page.locator("#n-team-count").fill("1")
         one = sections().count() == 1 and page.input_value("#n-task-0") == "Test the login page"
         page.locator("#n-team-less").click()
@@ -1005,6 +1019,7 @@ def checks_wide(browser):
         page.locator("#n-team-more").click()
         check(name, one and sections().count() == 2 and page.input_value("#n-role-0") == "tester"
               and page.input_value("#n-role-1") == "writer"
+              and page.input_value("#n-model-1") == "sonnet" and page.input_value("#n-effort-1") == "low"
               and page.inner_text("details.n-agent summary >> nth=0").startswith("Agent 1 · tester"), one)
 
     name = "new workflow: with no agents it starts one workflow agent, as before"
@@ -1018,9 +1033,11 @@ def checks_wide(browser):
         sent = [b for p, b in page.api.posts if p.endswith("/launch-background")]
         check(name, sent and sent[-1]["prompt"].startswith("Use a workflow to do this: Review src") and not team_posts(), sent)
 
-    name = "new workflow: with agents it sends the team (your prompt, each role and prompt), then starts clean"
+    name = "new workflow: with agents it sends the team (your prompt, each role, prompt, model and effort), then starts clean"
     with step(page, name):
         page.api.post_result = {"launchId": "t1", "name": "Fix the login", "agents": []}
+        # those the checks above left, as a dialog closed without starting keeps them
+        page.evaluate("nd.sections = []; nd.teamList.replaceChildren()")
         page.locator("#new-workflow").click()
         page.locator("#n-prompt").fill("Fix the login")
         page.locator("#n-team-count").fill("2")
@@ -1032,9 +1049,9 @@ def checks_wide(browser):
         closed = not page.evaluate("document.querySelector('#chat-dialog').open")
         page.locator("#new-workflow").click()
         check(name, team_posts() == [{"prompt": "Fix the login", "images": [], "folder": FOLDER, "name": "",
-                                      "permissionMode": "auto", "ultracode": False,
-                                      "agents": [{"role": "tester", "prompt": "Test it"},
-                                                 {"role": "writer", "prompt": "Document it"}]}]
+                                      "permissionMode": "auto", "ultracode": False, "model": "opus", "effort": "",
+                                      "agents": [{"role": "tester", "prompt": "Test it", "model": "opus", "effort": ""},
+                                                 {"role": "writer", "prompt": "Document it", "model": "opus", "effort": ""}]}]
               and closed and page.input_value("#n-team-count") == "0" and sections().count() == 0, team_posts())
 
     name = "new workflow: an agent without a role isn't sent; its section opens there"
@@ -1084,6 +1101,29 @@ def checks_wide(browser):
         page.wait_for_timeout(200)
         check(name, not team_posts() and page.inner_text("#n-error") == "Say what the master should do."
               and page.evaluate("document.activeElement.id") == "n-prompt", page.inner_text("#n-error"))
+
+    name = "new workflow: the models and efforts picked go with the team, and are back at Opus and Default after"
+    with step(page, name):
+        page.api.post_result = {"launchId": "t1", "name": "Fix the login", "agents": []}
+        page.locator("#new-workflow").click()
+        page.locator("#n-prompt").fill("Fix the login")
+        page.locator("#n-team-count").fill("2")
+        page.locator("#n-team-model").select_option("sonnet")
+        page.locator("#n-team-effort").select_option("xhigh")
+        for i in range(2):
+            page.locator(f"#n-role-{i}").fill(f"r{i}")
+            page.locator(f"#n-task-{i}").fill("y")
+        page.locator("#n-model-1").select_option("haiku")
+        page.locator("#n-effort-1").select_option("max")
+        page.locator("#n-submit").click()
+        page.wait_for_timeout(300)
+        sent = team_posts()
+        page.locator("#new-workflow").click()
+        page.locator("#n-team-count").fill("1")
+        again = [page.input_value(s) for s in ("#n-team-model", "#n-team-effort", "#n-model-0", "#n-effort-0")]
+        check(name, sent and (sent[-1]["model"], sent[-1]["effort"]) == ("sonnet", "xhigh")
+              and [(a["model"], a["effort"]) for a in sent[-1]["agents"]] == [("opus", ""), ("haiku", "max")]
+              and again == ["opus", "", "opus", ""], (sent, again))
 
     name = "new workflow: images and Ultracode go with the team, and are cleared after"
     with step(page, name):
@@ -1161,7 +1201,7 @@ def checks_wide(browser):
         check(name, at8 == "n-team-count" and page.evaluate("document.activeElement.id") == "n-team-count"
               and sections().count() == 0, (at8, page.evaluate("document.activeElement.id")))
 
-    name = "new workflow: a folded section's title shows the role and the start of its prompt"
+    name = "new workflow: a folded section's title shows the role, the model (and effort, if picked) and the start of its prompt"
     with step(page, name):
         page.locator("#new-workflow").click()
         page.locator("#n-team-count").fill("1")
@@ -1169,7 +1209,13 @@ def checks_wide(browser):
         page.locator("#n-task-0").fill("Test the login page\nthen the sign-up page")
         page.locator("details.n-agent summary").first.click()
         text = page.inner_text("details.n-agent summary >> nth=0")
-        check(name, "Agent 1 · tester" in text and "Test the login page" in text and "sign-up" not in text, text)
+        page.locator("details.n-agent summary").first.click()
+        page.locator("#n-model-0").select_option("sonnet")
+        page.locator("#n-effort-0").select_option("xhigh")
+        page.locator("details.n-agent summary").first.click()
+        picked = page.inner_text("details.n-agent summary >> nth=0")
+        check(name, text.startswith("Agent 1 · tester · Opus") and "Test the login page" in text and "sign-up" not in text
+              and picked.startswith("Agent 1 · tester · Sonnet, extra high effort"), (text, picked))
 
     name = "arrows: an arrow each way runs side by side between the two cards, each label clear of the other"
     with step(page, name):

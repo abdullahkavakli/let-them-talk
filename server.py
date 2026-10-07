@@ -2525,6 +2525,8 @@ def remove_node(bid, body):
 
 PERMISSION_MODES = ("auto", "acceptEdits", "plan", "manual", "dontAsk")
 CLI_MODES = PERMISSION_MODES + ("bypassPermissions",)  # a handoff passes on the chat's, whichever
+# claude --effort's levels; Claude Code lowers one a model lacks to high, and drops it for a model without any
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
 JOB_RE = re.compile(r"[0-9a-f]{8}")
 BG_LINE = re.compile(r"^backgrounded · ([0-9a-f]{8})", re.M)
 COPY_LINE = re.compile(r"started a copy as ([0-9a-f]{8})")
@@ -2581,6 +2583,11 @@ def start_background(bid, body, add_dirs=(), near=None, modes=PERMISSION_MODES, 
         if not re.fullmatch(r"[\w.\[\]-]{1,60}", model):
             raise ValueError("That model name has characters Claude Code won't accept.")
         args += ["--model", model]
+    effort = str(body.get("effort") or "")
+    if effort:
+        if effort not in EFFORTS:
+            raise ValueError(f"Unknown effort: {effort}")
+        args += ["--effort", effort]
     for d in add_dirs:
         args += ["--add-dir", str(d)]
     if body.get("ultracode") is True:
@@ -2905,18 +2912,20 @@ def _hand_off(lid, s):
                  f"which starts by reading {doc}.", "ok")
 
 
-# New workflow with agents: a master and its team, each a background agent on
-# Opus in the folder you pick. The agents start first and wait: a background
-# agent needs a first prompt, so each one's says who it is and that the master
-# will message it its task. The master starts once they run, so its messages
-# find them, with your prompt and the plan (each agent's name, role and the
-# prompt you wrote for it). Then an arrow each way links the master with each
-# agent. Their first prompts already introduce them, so the arrows send no
-# notes: a note would have an agent start talking before it has its task. An
-# agent that doesn't come up running in time is removed, and the master does
-# its part.
+# New workflow with agents: a master and its team, each a background agent in
+# the folder you pick, on the model and effort picked for it (Opus and Claude
+# Code's own effort unless you pick others). The agents start first and wait:
+# a background agent needs a first prompt, so each one's says who it is and
+# that the master will message it its task. The master starts once they run,
+# so its messages find them, with your prompt and the plan (each agent's name,
+# role, model and the prompt you wrote for it). Then an arrow each way links
+# the master with each agent. Their first prompts already introduce them, so
+# the arrows send no notes: a note would have an agent start talking before it
+# has its task. An agent that doesn't come up running in time is removed, and
+# the master does its part.
 TEAM_MAX = 8
 TEAM_MODEL = "opus"
+TEAM_MODELS = {"fable": "Fable", "opus": "Opus", "sonnet": "Sonnet", "haiku": "Haiku"}  # claude --model's names
 MASTER_MAX = 30  # characters in the master's name (a number may follow): "<master> - <role>" stays within 60
 ROLE_MAX = 24
 NAME_RE = re.compile(r"[\w -]+")  # a role, or the master's name you type: names go in quotes and in SendMessage's `to`
@@ -2951,6 +2960,17 @@ def _first_words(text, most):
     return " ".join(pick) or (words[0][:most] if words else "")
 
 
+def _model_effort(item, who):
+    """The model and effort picked for the master or an agent (who: "The
+    master's", "Agent 2's"), checked; none picked: Opus, and Claude Code's own effort ("")."""
+    model, effort = str(item.get("model") or TEAM_MODEL), str(item.get("effort") or "")
+    if model not in TEAM_MODELS:
+        raise ValueError(f"{who} model can be only Fable, Opus, Sonnet or Haiku.")
+    if effort and effort not in EFFORTS:
+        raise ValueError(f"{who} effort can be only low, medium, high, extra high or max.")
+    return {"model": model, "effort": effort}
+
+
 def _team_plan(body):
     """The team asked for, checked before anything starts; start_team names it."""
     prompt = str(body.get("prompt") or "").strip()
@@ -2975,7 +2995,7 @@ def _team_plan(body):
             raise ValueError(f"Agents {roles[role.lower()]} and {i} are both \"{role}\"; "
                              "give each its own role, as it is part of its name.")
         roles[role.lower()] = i
-        team.append({"role": role, "prompt": task})
+        team.append({"role": role, "prompt": task, **_model_effort(a, f"Agent {i}'s")})
     name = " ".join(str(body.get("name") or "").split())
     if len(name) > MASTER_MAX:
         raise ValueError(f"Keep the master's name to {MASTER_MAX} characters.")
@@ -2988,7 +3008,7 @@ def _team_plan(body):
     images = _read_images(body.get("images") or [])  # the master's
     base = _agent_name(prompt, name or _first_words(prompt, MASTER_MAX))[:MASTER_MAX].strip()
     return {"prompt": prompt, "base": base, "agents": team, "folder": folder, "mode": mode,
-            "images": images, "ultracode": body.get("ultracode") is True}
+            "images": images, "ultracode": body.get("ultracode") is True, **_model_effort(body, "The master's")}
 
 
 def _name_team(team, taken):
@@ -3026,7 +3046,8 @@ def _master_prompt(team, running, missing, images=()):
     lines = [with_images(team["prompt"], images), "",
              f"[{APP_NAME}] You are \"{team['master']}\", the master of a team of background agents your user "
              "started for this. Each one runs in this folder and waits for its task from you:"]
-    lines += [f"- \"{a['name']}\", the {a['role']}: {a['prompt']}" for a in running]
+    on = lambda a: TEAM_MODELS[a["model"]] + (f" at {a['effort']} effort" if a["effort"] else "")  # to size its task by
+    lines += [f"- \"{a['name']}\", the {a['role']}, on {on(a)}: {a['prompt']}" for a in running]
     if missing:
         lines.append("These agents couldn't be started, so do their part yourself:")
         lines += [f"- the {a['role']}: {a['prompt']}" for a in missing]
@@ -3145,13 +3166,12 @@ def _start_team(lid, team):
         images = _save_images({"cwd": team["folder"]}, team["images"]) if team["images"] else []
     except (ValueError, OSError) as e:
         return step("failed", f"Team \"{master}\" wasn't started: its images couldn't be saved. {said(str(e))}", "error")
-    common = {"folder": team["folder"], "model": TEAM_MODEL, "permissionMode": team["mode"],
-              "ultracode": team["ultracode"]}
+    common = {"folder": team["folder"], "permissionMode": team["mode"], "ultracode": team["ultracode"]}
     failed, late, kept = [], [], []  # (agent, why) that didn't start; agents that didn't come up: removed, or (agent, why) not
     for a, spot in zip(team["agents"], spots[1:]):
         try:
-            a["jobId"] = start_background(bid, {**common, "name": a["name"], "prompt": _waiting_prompt(a, master)},
-                                          spot=spot)["jobId"]
+            a["jobId"] = start_background(bid, {**common, "model": a["model"], "effort": a["effort"], "name": a["name"],
+                                                "prompt": _waiting_prompt(a, master)}, spot=spot)["jobId"]
         except (ValueError, OSError, subprocess.SubprocessError) as e:
             failed.append((a, str(e)))
     started = [a for a in team["agents"] if a.get("jobId")]
@@ -3172,8 +3192,8 @@ def _start_team(lid, team):
     step("master", f"Team \"{master}\": {_its_agents(len(running))} {'is' if one else 'are'} running; "
                    "starting the master…")
     try:
-        new = start_background(bid, {**common, "name": master, "prompt": _master_prompt(team, running, missing, images)},
-                               spot=spots[0])
+        new = start_background(bid, {**common, "model": team["model"], "effort": team["effort"], "name": master,
+                                     "prompt": _master_prompt(team, running, missing, images)}, spot=spots[0])
     except (ValueError, OSError, subprocess.SubprocessError) as e:
         return step("failed", f"The master of team \"{master}\" didn't start: {said(str(e))} "
                               f"{'Its agent is' if one else f'Its {len(running)} agents are'} running and "

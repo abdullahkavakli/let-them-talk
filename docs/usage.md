@@ -108,17 +108,21 @@ words unless you name it.
 Or build a team: scroll down to **Team**, pick **How many agents?** (up to 8)
 and give each agent a **Role** (*tester*, *writer* …) and a **Prompt**, its
 part of the work, in its own section (click its title to fold it; folded, it
-shows the role and the start of the prompt). The prompt at the top then goes
-to the master. The master and its agents are background agents in that
-folder, all on Opus, with the permissions (and **Ultracode**, if ticked) you
-picked, and none opens a terminal.
+shows the role, the model and the start of the prompt). The prompt at the top
+then goes to the master. The master and its agents are background agents in
+that folder, with the permissions (and **Ultracode**, if ticked) you picked,
+and none opens a terminal. Each one has its own **Model** (Fable, Opus,
+Sonnet or Haiku) and **Effort** (low to max, or **Default**: Claude Code's
+own): the master's at the top, each agent's beside its role. Unless you pick
+others, all run on Opus with the default effort.
 
 - The agents start first and wait: each one's first prompt says its role,
   that it is on a team, the master's name, and to wait for the master's
   message with its task, then report back to the master.
 - Then the master starts, with your prompt (and any images you added, which
-  only the master gets) and the plan: each agent's name, role and prompt, to
-  send each one its prompt in full as its task and gather their reports.
+  only the master gets) and the plan: each agent's name, role, model (and
+  effort, if picked) and prompt, to send each one its prompt in full as its
+  task and gather their reports.
 - The master is named as you name it (up to 30 characters; else after the
   prompt's first words that fit, e.g. *Fix the login*), each agent after the
   master and its role (*Fix the login - tester*), with a number added to the

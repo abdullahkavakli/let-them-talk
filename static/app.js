@@ -2425,6 +2425,7 @@ const nd = {
   agents: $("#n-agents"), terminal: $("#n-terminal"), ultra: $("#n-ultra"), note: $("#n-note"), error: $("#n-error"),
   submit: $("#n-submit"), workflow: false,
   team: $("#n-team"), count: $("#n-team-count"), teamList: $("#n-team-list"), sections: [],
+  teamModel: $("#n-team-model"), teamEffort: $("#n-team-effort"),
 };
 const whereTo = () => nd.workflow ? "background"
   : document.querySelector('input[name="n-where"]:checked').value;
@@ -2447,9 +2448,19 @@ const TEAM_MAX = 8, ROLE_MAX = 24, MASTER_MAX = 30;
 const NAME_CHARS = /^[\p{L}\p{N}_ -]+$/u;  // in a role or the master's name (the server's NAME_RE)
 const teamSize = () => nd.workflow ? Math.max(0, Math.min(TEAM_MAX, parseInt(nd.count.value, 10) || 0)) : 0;
 
+// Each agent's model and effort, and the master's (at the top): Opus and
+// Claude Code's own effort unless you pick others. All four models take every
+// level (Claude Code itself lowers one a model lacks to high).
+const EFFORTS = { "": "Default", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max" };
+const fillModels = (sel) => sel.replaceChildren(...Object.entries(WF_MODELS).map(([v, text]) =>
+  el("option", { value: v, text, selected: v === "opus" })));
+const fillEfforts = (sel) => sel.replaceChildren(...Object.entries(EFFORTS).map(([v, text]) => el("option", { value: v, text })));
+fillModels(nd.teamModel);
+fillEfforts(nd.teamEffort);
+
 function agentSection(i) {
-  // its title says its role; folded, the start of its prompt too
-  const head = el("span"), peek = el("span", { class: "n-agent-peek muted" });
+  // its title says its role; folded, its model and the start of its prompt too
+  const head = el("span"), runs = el("span", { class: "n-agent-model" }), peek = el("span", { class: "n-agent-peek muted" });
   const task = el("textarea", { id: `n-task-${i}`, class: "n-task", rows: 3,
     placeholder: "Its part of the work; the master sends it this as its task",
     oninput: () => { peek.textContent = task.value.trim().split("\n")[0]; } });
@@ -2457,10 +2468,20 @@ function agentSection(i) {
     placeholder: "e.g. tester", oninput: () => { head.textContent = role.value.trim() && ` · ${role.value.trim()}`; },
     // Enter goes on to its prompt, as it would start the team otherwise
     onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); task.focus(); } } });
+  const showRuns = () => {
+    runs.textContent = ` · ${model.selectedOptions[0].text}` +
+      (effort.value ? `, ${effort.selectedOptions[0].text.toLowerCase()} effort` : "");
+  };
+  const model = el("select", { id: `n-model-${i}`, class: "n-team-model", onchange: showRuns });
+  const effort = el("select", { id: `n-effort-${i}`, class: "n-team-effort", onchange: showRuns });
+  fillModels(model);
+  fillEfforts(effort);
+  showRuns();
+  const field = (label, box) => el("div", {}, el("label", { for: box.id, text: label }), box);
   return el("details", { class: "n-agent", open: true },
-    el("summary", {}, el("strong", { text: `Agent ${i + 1}` }), head, peek),
+    el("summary", {}, el("strong", { text: `Agent ${i + 1}` }), head, runs, peek),
     el("div", { class: "n-agent-body" },
-      el("label", { for: role.id, text: "Role" }), role,
+      el("div", { class: "n-agent-row" }, field("Role", role), field("Model", model), field("Effort", effort)),
       el("label", { for: task.id, text: "Prompt" }), task));
 }
 
@@ -2507,7 +2528,8 @@ function refreshAgentDialog() {
   nd.name.placeholder = team ? "optional; the master's name, else the prompt's first words"
     : wf ? "optional; \"workflow\" and the task's first words" : "optional; taken from the prompt";
   $("#n-agents-label").hidden = nd.agents.hidden = !wf || team;
-  $("#n-model-label").hidden = nd.model.hidden = team;  // a team runs on Opus
+  $("#n-model-label").hidden = nd.model.hidden = team;  // a team's master has its own, with its effort
+  for (const id of ["#n-team-model-label", "#n-team-model", "#n-team-effort-label", "#n-team-effort"]) $(id).hidden = !team;
   if (team) nd.name.maxLength = MASTER_MAX;
   else nd.name.removeAttribute("maxlength");
   nd.team.hidden = !wf;
@@ -2520,8 +2542,8 @@ function refreshAgentDialog() {
   if (!bg) nd.name.placeholder = "optional; its card's name on this board";
   nd.submit.textContent = team ? "Start team" : wf ? "Start workflow" : bg ? "Start agent" : `Open in ${nd.editor.value}`;
   nd.note.textContent = [
-    team ? "The master and its agents start in the background in this folder, all on Opus and with the settings above; " +
-      "each agent is named after the master and its role, and an arrow each way links it with the master."
+    team ? "The master and its agents start in the background in this folder with the settings above, each on its " +
+      "own model and effort; each agent is named after the master and its role, and an arrow each way links it with the master."
       : wf && "A new background agent starts in this folder and runs your task as a Claude Code workflow; " +
       "the model you pick runs it and its agents, which show under Subagents.",
     bg && !team && /haiku/i.test(nd.model.value) && nd.mode.value === "auto"
@@ -2662,7 +2684,8 @@ $("#chat-form").addEventListener("submit", async (evt) => {
   try {
     if (teamSize()) {
       const agents = nd.sections.slice(0, teamSize()).map((s) =>
-        ({ role: s.querySelector(".n-role").value.trim(), prompt: s.querySelector(".n-task").value.trim() }));
+        ({ role: s.querySelector(".n-role").value.trim(), prompt: s.querySelector(".n-task").value.trim(),
+          model: s.querySelector(".n-team-model").value, effort: s.querySelector(".n-team-effort").value }));
       // The server checks it all again; these show where.
       const there = (box, msg) => { box.focus(); return fail(msg); };
       if (!prompt) return there(nd.prompt, "Say what the master should do.");
@@ -2681,9 +2704,11 @@ $("#chat-form").addEventListener("submit", async (evt) => {
       // it starts in the server's own time; its notices say how it goes (see renderLaunches)
       await api(`/api/board/${state.boardId}/launch-team`, {
         prompt, images, agents, folder: nd.folder.value.trim(), name: nd.name.value.trim(),
-        permissionMode: nd.mode.value, ultracode: nd.ultra.checked,
+        permissionMode: nd.mode.value, ultracode: nd.ultra.checked, model: nd.teamModel.value, effort: nd.teamEffort.value,
       });
       nd.ultra.checked = false;
+      nd.teamModel.value = "opus";
+      nd.teamEffort.value = "";
       nd.count.value = 0;
       nd.sections = [];
       nd.teamList.replaceChildren();
