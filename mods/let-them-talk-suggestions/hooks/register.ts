@@ -1,4 +1,4 @@
-import type { Register } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
 
 // Let Them Talk (this repo) shows each chat's suggested next prompt in its
 // Send box: exactly what this chat's own prompt box shows, or nothing.
@@ -16,6 +16,15 @@ import type { Register } from 'claude-code'
 // IDE: the editor link that opens one can't name a model, so the app says
 // which when the chat's first turns start, and this names it on the chat's
 // own requests (not its subagents'). A model you then pick in the chat wins.
+//
+// And it tells the app when ultracode is on or off in this chat, as Claude
+// Code answers an /effort: "Ultracode on …", "Ultracode off …", or for
+// /effort status a line that names ultracode only while it is on. A refused
+// switch (a model without it, workflows off), an effort level alone and a
+// panel closed with Esc ("Cancelled") say nothing, so nothing is reported.
+// An /effort run while the chat works (typed, or Tab in its Effort panel)
+// answers on its screen only, which no hook sees: once the chat is idle,
+// this runs /effort status (a line the chat shows) and reports that answer.
 
 const APP = 'http://localhost:8765' // Let Them Talk's default port (LTT_PORT)
 const HEADERS = { 'Content-Type': 'application/json', 'X-Let-Them-Talk': '1' }
@@ -24,6 +33,10 @@ const OWN_WAIT_MS = 12000 // Claude Code makes its own within a few seconds of t
 const WINDOW_MS = 300_000 // after that the conversation may no longer be cached (server: MOD_WINDOW)
 const HELLO_EVERY_MS = 300_000 // so the app keeps counting this chat as having the mod
 const MODEL_ASKS = 3 // turns at a chat's start the app is asked for a model (it knows by the first)
+const ANSWER_WAIT_MS = 1500 // an idle /effort's answer is appended within ms; a busy one's never
+const COMMAND_NAME = /<command-name>\/?([^<]*)<\/command-name>/
+const COMMAND_OUT = /^\s*<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/
+const MAY_SWITCH = /^\s*(ultracode(\s|$)|$)/i // /effort ultracode [on|off], or its panel (no words): Claude Code's own reading
 
 const PROMPT = `[Suggestion only. Do not answer this message or continue the task.]
 Predict what the user will most likely type next in this chat. Predict what they
@@ -57,6 +70,54 @@ export function modelFor(wanted: string | undefined, startedOn: string | undefin
   return { model: now.startsWith(wanted) ? now : wanted, startedOn: startedOn ?? now, dropped: false }
 }
 
+/** What Claude Code's answer to an /effort says of ultracode: true (on), false
+ * (off), or undefined when it says nothing of it (a level, "Cancelled", a
+ * refused switch). /effort status names it only while it is on. */
+export function ultracodeSaid(answer: string): boolean | undefined {
+  const said = /\bUltracode (on|off)\b/.exec(answer)
+  if (said) return said[1] === 'on'
+  return /^\s*(Current effort level: |Effort level: auto\b)/.test(answer) ? false : undefined
+}
+
+/** This chat's process as the app finds it: its pid and start time (field 22
+ * of /proc/<pid>/stat), or nothing where there is no /proc. */
+export function processOf(stat: string): { pid?: number; procStart?: string } {
+  const pid = Number.parseInt(stat, 10)
+  const procStart = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]
+  return Number.isInteger(pid) && pid > 0 && procStart && /^\d+$/.test(procStart) ? { pid, procStart } : {}
+}
+
+/** What the mod keeps to tell the app about ultracode. */
+type Ultra = {
+  lastCommand?: string // the command whose answer is appended next
+  efforts: number // /effort runs so far
+  answered: number // the last /effort run whose answer was appended
+  looking: boolean // this mod's /effort status waits for the chat to be idle
+  proc?: { pid?: number; procStart?: string } // this chat's process
+  unsent?: string // a report the app didn't take (it was down), sent again next tick
+}
+
+/** Sends one report. The app keeps the newest it gets, so an old one sent late changes nothing. */
+async function sendUltracode($: EngineInterface, ultra: Ultra, body: string) {
+  try {
+    const sent = await $.http.fetch(`${APP}/api/mod/ultracode`, { method: 'POST', headers: HEADERS, body })
+    if (sent.status >= 500) ultra.unsent = body
+    else if (ultra.unsent === body) ultra.unsent = undefined
+  } catch {
+    ultra.unsent = body // Let Them Talk isn't running: it hears once it is
+  }
+}
+
+async function tellUltracode($: EngineInterface, ultra: Ultra, isOn: boolean) {
+  try {
+    ultra.proc ??= processOf(String(await $.fs.read('/proc/self/stat').catch(() => '')))
+    const at = await $.clock.now()
+    await sendUltracode($, ultra, JSON.stringify({ sessionId: await $.session.id(), on: isOn, at, ...ultra.proc }))
+  } catch {
+    // no session id yet: nothing to report it for
+  }
+}
+
 export const register: Register = on => {
   let turn = 0 // main-loop turns ended so far
   let starts = 0 // main-loop turns started so far
@@ -69,6 +130,7 @@ export const register: Register = on => {
   let wanted: string | undefined // the model the app picked for this chat
   let startedOn: string | undefined // the chat's own model when that took over
   let asked = 0
+  const ultra: Ultra = { efforts: 0, answered: 0, looking: false }
 
   // Work after a turn outlives the turn's own hooks, so a timer started here does it.
   on('session.start', async ($, e, next) => {
@@ -90,6 +152,7 @@ export const register: Register = on => {
             helloFor = sessionId
             sinceHello = 0
           }
+          if (ultra.unsent) await sendUltracode($, ultra, ultra.unsent)
           if (unsent) {
             const sent = await $.http.fetch(`${APP}/api/suggestion`, { method: 'POST', headers: HEADERS, body: unsent })
             if (sent.ok) unsent = undefined
@@ -169,4 +232,39 @@ export const register: Register = on => {
     if (!e.agentId && !e.isAborted && e.reason === 'answer') pending = { turn: ++turn, starts, waited: 0 }
     return done
   })
+
+  // An /effort run: while the chat is idle its answer is appended at once
+  // (below); while it works, never. Then, for one that may have switched
+  // ultracode, /effort status, which Claude Code queues until it is idle.
+  on('command.run', { command: 'effort' }, async ($, e, next) => {
+    const run = ++ultra.efforts
+    const ran = await next(e)
+    $.clock.after(ANSWER_WAIT_MS, () => {
+      if (ultra.answered >= run || ultra.looking || !MAY_SWITCH.test(e.args)) return
+      ultra.looking = true
+      $.command.run({ command: 'effort', args: 'status' })
+        .catch(() => undefined) // the chat ended: its next prompt tells the app
+        .finally(() => { ultra.looking = false })
+    })
+    return ran
+  }).catch(($, e, next) => next(e))
+
+  // The rows an /effort leaves in the conversation: its name, then its answer.
+  on('session.append', { door: 'command' }, async ($, e, next) => {
+    const kept = await next(e)
+    if (e.agentId) return kept
+    const text = e.message.content.map(block => (block.type === 'text' ? block.text : '')).join('')
+    const name = COMMAND_NAME.exec(text)
+    const out = name ? null : COMMAND_OUT.exec(text)
+    if (name) ultra.lastCommand = name[1]?.trim()
+    else if (out) {
+      if (ultra.lastCommand === 'effort') {
+        ultra.answered = ultra.efforts
+        const isOn = ultracodeSaid(out[1] ?? '')
+        if (isOn !== undefined) $.clock.after(0, () => void tellUltracode($, ultra, isOn))
+      }
+      ultra.lastCommand = undefined
+    }
+    return kept
+  }).catch(($, e, next) => next(e))
 }

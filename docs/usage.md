@@ -353,10 +353,24 @@ The line says *Ultracode is on* or *off*, as its conversation shows it, with
 **Turn off** or **Turn on**. The app types `/effort ultracode off` (or `on`)
 into its prompt box, as you would in its terminal, also while it works. A
 notice shows Claude Code's answer, or why it can't: workflows off under
-`/config`, or a model without ultracode.
+`/config`, or a model without ultracode. The app keeps what it switched, also
+across a restart of the app.
 
 It lasts until the agent ends. One started with **Ultracode** ticked in
 [New agent](#new-agent) starts with it again when woken.
+
+Switching it in the agent's own terminal counts too: `/effort ultracode on`
+(or `off`), or Tab and Enter in its Effort panel. While the agent is idle,
+the line follows at once. While it works, Claude Code shows its answer only
+on that screen, so the line keeps what it said until Claude Code tells:
+
+- With the [suggestions mod](configuration.md#suggestions-mod) loaded in the
+  agent, once its turn ends: the mod then runs `/effort status` in it (you
+  see that line in its terminal) and tells the app the answer.
+- Without the mod, at its next prompt.
+
+A switch Claude Code turns down, and the panel opened only to look and closed
+with Esc, change nothing.
 
 After a restart its conversation doesn't tell yet, so while its details are
 open the app finds out, once, when it is idle (if it is working, as soon as

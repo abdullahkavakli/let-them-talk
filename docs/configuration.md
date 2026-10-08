@@ -24,11 +24,13 @@ The older `ORGANIZER_*` names (such as `ORGANIZER_PORT`) still work.
 
 ## Suggestions mod
 
-The mod in `mods/let-them-talk-suggestions` does two things: it passes on
+The mod in `mods/let-them-talk-suggestions` does three things: it passes on
 Claude Code's reply suggestion for terminal chats (see
-[Reply suggestions](how-it-works.md#reply-suggestions)), and it runs a
+[Reply suggestions](how-it-works.md#reply-suggestions)), it runs a
 **Chat in IDE** on the model picked in **New agent** (see
-[The model of a Chat in IDE](how-it-works.md#the-model-of-a-chat-in-ide)).
+[The model of a Chat in IDE](how-it-works.md#the-model-of-a-chat-in-ide)),
+and it tells the app when ultracode is switched in a chat, also while it
+works (see [Ultracode](how-it-works.md#ultracode)).
 
 To load it in every chat started from then on, add its absolute path to the
 `env` block of `~/.claude/settings.json`:
@@ -41,7 +43,8 @@ For a single chat:
 `claude --plugin-dir /path/to/agent-organizer/mods/let-them-talk-suggestions`.
 
 - Chats started before the mod was loaded show no suggestion until
-  restarted.
+  restarted, and an ultracode switch made while they work shows only at
+  their next prompt.
 - A **Chat in IDE** gets the picked model only where the mod is loaded: a
   Cursor or VS Code connected to WSL reads the same `~/.claude/settings.json`;
   one on Windows has its own.

@@ -132,6 +132,36 @@ started from the app on the model picked in
 chat's first turns start, and the mod names that model on the chat's own
 requests, not its subagents'.
 
+## Ultracode
+
+Whether ultracode is on in a background agent (see
+[Ultracode](usage.md#ultracode)) is read from its transcript: Claude Code
+notes each `/effort` answered while the agent is idle ("Ultracode on …",
+"Ultracode off …", or for `/effort status` a line that names ultracode only
+while it is on), and at each prompt a reminder when it changed since the last
+one. The newest of these counts, with what the app saw itself (a **Turn on**
+or **Turn off**, a look in its Effort panel) and what the
+[suggestions mod](configuration.md#suggestions-mod) told it.
+
+- **While it works:** an `/effort` answers only on the agent's screen, and
+  its transcript gets nothing. The mod sees the command run but not the
+  answer, so it doesn't count what was typed (Claude Code may have turned it
+  down). After `/effort ultracode …` or the Effort panel (not after an effort
+  level, which leaves ultracode as it was), it runs `/effort status` in the
+  agent, which Claude Code queues until the agent is idle, and tells the app
+  what that says. The app shows neither that line nor its queued entry in
+  the agent's messages.
+- **What the mod sends:** each answer that says on or off, with the chat's
+  id and the pid and start time of its process (from `/proc`). The app takes
+  it only from the process running that chat now, and keeps the newest one
+  per chat. One the app missed (it was down) is sent again every 2 seconds.
+- **The app's own Turn on or off while it works:** the app reads Claude
+  Code's answer off the agent's screen, so it is in no transcript either;
+  the app keeps it on disk, so a restart of the app loses none.
+- **The panel opened only to look:** closed with Esc, Claude Code notes
+  "Cancelled", which changes nothing. Opened while the agent works, the mod's
+  `/effort status` reads what it left once the agent is idle.
+
 ## Moving an editor chat to a terminal
 
 The editor's Claude panel runs a chat as a Claude Code process of its own
@@ -170,6 +200,8 @@ show it in a frame.
 - `logs/suggestions.json`: the mod's latest suggestions, kept for a day.
 - `logs/models.json`: the model picked for each Chat in IDE, kept a week, so
   a chat resumed within a week still runs on it.
+- `logs/ultracode.json`: each chat's latest ultracode switch the app made, saw
+  or was told by the mod, kept 30 days.
 - `let-them-talk-handoffs` in the system's temp folder (`/tmp` on Linux and
   WSL): the handoffs.
 - Images you send: see [Images](#images).
