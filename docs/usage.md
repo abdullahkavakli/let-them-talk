@@ -293,6 +293,16 @@ A background agent's details have these buttons:
   turns into the IDE's chat.
 - **Show its screen** (click again to hide). It reads **What is it asking?**
   while the agent waits for you.
+- **Compact**: Claude Code's `/compact`, after asking you. Claude Code
+  replaces its conversation so far with a summary, so it goes on with its
+  context freed (its conversation file keeps every message). The app types
+  `/compact` into its prompt box, as you would in its terminal; one whose
+  process has ended is woken with it. Not while it works or asks you
+  something (the button waits). Meanwhile the button says *Compacting…*; a
+  notice and Activity say when it's done, with its context before and after
+  (*from 120k to 6k tokens*), or Claude Code's answer if it didn't compact
+  (*Not enough messages to compact.*). In any other chat, type `/compact`
+  yourself. How it works: [Compacting](how-it-works.md#compacting).
 - **Stop** (while it works or shows a permission prompt or a question): Esc
   through `claude attach`, so it stops what it is doing, or declines the
   prompt, and waits for you. It keeps running and its terminal stays open.

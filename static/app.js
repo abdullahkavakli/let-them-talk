@@ -3191,6 +3191,7 @@ function backgroundSection(n) {
         onclick: () => state.logs[n.sessionId]
           ? (delete state.logs[n.sessionId], renderDrawer())
           : agentAction(n, "agent-logs", (r) => { state.logs[n.sessionId] = r.text; renderDrawer(); }) }),
+      !restart && compactButton(n),
       n.running && n.status !== "idle" && el("button", { class: "btn", text: "Stop",
         onclick: () => confirm(`Stop ${display(n)}? It stops whatever it is doing now, as Esc does ` +
           "in its terminal. It keeps running, and its terminal stays open.")
@@ -3240,6 +3241,42 @@ async function setUltracode(n, want) {
     renderDrawer();
     poll();
   }
+}
+
+// Compact: Claude Code sums up a background agent's conversation so far (its
+// /compact), so it goes on with its context freed. The server types /compact
+// into it, or wakes an ended one with it, and watches its conversation; the
+// notices say how it went (see renderLaunches). Not while it works or asks
+// you something. Other chats only get messages: type /compact in them.
+state.compacting = new Set();  // sessionIds whose Compact request is on its way
+const compacting = (n) => state.compacting.has(n.sessionId) || (state.view?.launches || [])
+  .some((l) => l.kind === "compact" && l.from === n.sessionId && l.state === "compacting");
+
+function compactButton(n) {
+  const busy = compacting(n), wakes = !n.running ? " It wakes up for it." : "";
+  const waits = !n.running ? null : n.status === "busy" || n.agentState === "working"
+    ? "It can be compacted once it's idle." : n.status === "waiting" || n.agentState === "blocked"
+      ? "It can be compacted once you've answered it." : null;
+  return el("button", {
+    class: "btn", text: busy ? "Compacting…" : "Compact", disabled: busy || !!waits,
+    title: waits || "Types /compact into it, as in its terminal: Claude Code sums up its conversation so far, " +
+      `so it goes on with its context freed.${wakes}`,
+    onclick: async () => {
+      if (!confirm(`Compact ${display(n)}? Claude Code replaces its conversation so far with a summary: its ` +
+        `context is freed, but details the summary leaves out are gone for it.${wakes}`)) return;
+      state.compacting.add(n.sessionId);
+      renderDrawer();
+      try {
+        await api(`/api/board/${state.boardId}/compact`, { sessionId: n.sessionId });
+        await poll();  // its launch says it is compacting from now on
+      } catch (e) {
+        toast(failText(e), "error");
+      } finally {
+        state.compacting.delete(n.sessionId);
+        renderDrawer();
+      }
+    },
+  });
 }
 
 // Deleting a background agent can't be undone, so it sits at the bottom with

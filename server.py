@@ -361,6 +361,7 @@ ultra_lock = threading.Lock()
 ultra_cache = {}  # transcript path -> read offset, latest reminder, switch and typed prompt
 ULTRA_SCAN = (b'"ultra_effort_', b"Ultracode o", b'"role":"user","content":"')
 ULTRA_SAID = re.compile(r"<local-command-stdout>.*?\bUltracode (on|off)\b", re.S)
+SLASH_COMMAND = re.compile(r"/[\w:-]+(?:\s|$)")  # "/compact", "/rename x"; not a path like "/home/x"
 
 
 def _ultra_record(c, line):
@@ -382,8 +383,9 @@ def _ultra_record(c, line):
     said = ULTRA_SAID.match(text)  # a command's output (/effort, or the slider it opens)
     if said:
         c["switch"] = (said.group(1) == "on", at)
-    elif kind == "user" and not rec.get("isMeta") and text.strip() and not text.lstrip().startswith("<"):
-        c["prompt"] = at  # a prompt you typed
+    elif kind == "user" and not rec.get("isMeta") and not rec.get("isCompactSummary") and text.strip() \
+            and not text.lstrip().startswith("<") and not SLASH_COMMAND.match(text.strip()):
+        c["prompt"] = at  # a prompt you typed (a command such as /compact gets no reminder)
 
 
 def ultracode_state(s):
@@ -3736,8 +3738,8 @@ def look_up_ultracode(s):
         last = ultra_peeks.get(sid)
         if last and last[0] == run and (last[2] is not False or time.time() - last[1] < PEEK_RETRY):
             return last[2] is None
-        if s.get("status") != "idle":
-            return False  # working or asking: it is looked at once idle
+        if s.get("status") != "idle" or _compacting(sid):
+            return False  # working, asking or compacting: it is looked at once idle
         ultra_peeks[sid] = (run, time.time(), None)
     threading.Thread(target=_look_up_ultracode, args=(s, run), daemon=True).start()
     return True
@@ -3784,6 +3786,176 @@ def _effort_keys(found):
         found.update(on=said and said.group(1) == "on", at=time.time())
         return [("\x1b", PEEK_CLOSE)]
     return [(key, 0.02) for key in _typed_keys("/effort")] + [("", 0.4), typed]
+
+
+# Compact: /compact has Claude Code replace a chat's conversation so far with
+# a summary, so it goes on with its context freed (its transcript keeps every
+# message). Only a background agent can be told from here: the app types
+# /compact into a running one's prompt box, as you would in its terminal, and
+# wakes one whose process has ended with /compact as its prompt, which Claude
+# Code runs as the command too. A chat in a terminal or an editor only gets
+# messages, read between steps, and a message can't run a command.
+# While it compacts, the agent is busy. Claude Code notes the typed /compact
+# at once and the rest when it is done (seconds, or a minute or two for a long
+# conversation): a compact boundary with the context's size before and after,
+# then /compact's answer ("Compacted …", or why not, as "Not enough messages to
+# compact."). The app watches the transcript for those.
+COMPACT_GRACE = 15     # seconds before an agent that isn't busy counts as having stopped
+COMPACT_WAIT = 8 * 60  # seconds the app waits for it (a launch is listed for 10 minutes)
+COMMAND_SAID = re.compile(r"^<local-command-std(?:out|err)>(.*?)</local-command-std(?:out|err)>", re.S)
+compact_starting = set()  # sessionIds /compact is being typed into or woken with
+
+
+def _compacting(sid):
+    return sid in compact_starting or any(l.get("kind") == "compact" and l.get("from") == sid
+                                          and l["state"] == "compacting" for l in list(launches.values()))
+
+
+def start_compact(bid, body):
+    """Run /compact in a background agent. How it went shows as a launch
+    (compacting, then done or failed) and in Activity."""
+    sid = str(body.get("sessionId") or "")
+    s = find_session(sid)
+    if not s.get("background"):
+        raise ValueError("Only a background agent can be compacted from here. In another chat, type /compact yourself.")
+    if s.get("resumable") is False:
+        raise ValueError("It has no saved conversation, so there is nothing to compact.")
+    if s.get("running") and (s.get("status") == "busy" or s.get("agentState") == "working"):
+        raise ValueError("It's working. Compact it once it's idle.")
+    if s.get("running") and (s.get("status") == "waiting" or s.get("agentState") == "blocked"):
+        raise ValueError("It's waiting for your answer. Answer it in its terminal first.")
+    with lock:
+        node = (load_board(bid) or {}).get("nodes", {}).get(sid) or {}
+        s = {**s, "alias": node.get("alias")}  # for label()
+        if _compacting(sid):
+            raise ValueError("It's being compacted already.")
+        compact_starting.add(sid)
+    try:
+        session_title(sid)  # finds the transcript
+        path = title_cache.get(sid, {}).get("path")
+        offset, since = path.stat().st_size if path else 0, time.time()
+        if s.get("running"):
+            _type_compact(s["jobId"])
+        else:
+            _wake_compact(bid, s)
+        with lock:  # listed only now: a refusal is the request's error, not a notice of its own
+            lid = uuid.uuid4().hex[:10]
+            launches[lid] = {"id": lid, "board": bid, "at": time.time(), "kind": "compact", "from": sid,
+                             "state": "compacting", "detail": f"Compacting {label(s)} (/compact)…"}
+    finally:
+        compact_starting.discard(sid)
+    threading.Thread(target=_watch_compact, args=(lid, s, offset, since), daemon=True).start()
+    return {"launchId": lid}
+
+
+def _type_compact(job):
+    """Type /compact into a running background agent's prompt box. Enter goes
+    only once the box shows it: anything else showing could take the Enter."""
+    sent = []
+
+    def enter(screen):
+        if _prompt_box(screen) != "/compact":
+            return []
+        sent.append(True)
+        return [("\r", 1.0)]
+    with type_lock:
+        _press_keys(job, [(key, 0.02) for key in _typed_keys("/compact")] + [("", 0.4), enter], _box_check(job))
+    if not sent:
+        raise ValueError("/compact didn't show in its prompt box, so Enter wasn't pressed. Look at its terminal.")
+
+
+def _wake_compact(bid, s):
+    """Wake a background agent whose process has ended with /compact as its
+    prompt (no flags: see _prompt_background)."""
+    proc = run_claude(["--resume", s["sessionId"], "--bg", "--", "/compact"], cwd=s["cwd"] or None, timeout=90)
+    if not BG_LINE.search(_plain(proc.stdout)):
+        raise ValueError(_cli_error(proc, s["cwd"]))
+    copy = COPY_LINE.search(_plain(proc.stderr))
+    if copy:  # the copy compacts, not this one; its card shows, so it can be deleted
+        with lock:
+            board = load_board(bid)
+            board.setdefault("adopt", []).append(copy.group(1))
+            add_activity(board, f"Compact for {label(s, board)} started a copy ({copy.group(1)})", "error")
+            save_board(board)
+        raise ValueError(f"Claude Code started a copy ({copy.group(1)}) instead of waking it, so it wasn't compacted.")
+    background_rows(fresh=True)
+
+
+def _compact_result(path, offset):
+    """How /compact went, from what its transcript got past offset: {"ok":
+    True, "pre", "post"} once Claude Code wrote a compact boundary, {"ok":
+    False, "said": its answer} once it answered without one; else None."""
+    try:
+        with path.open("rb") as f:
+            f.seek(offset)
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    asked = False  # /compact's own record came, so the next answer is its
+    for raw in lines:
+        try:
+            rec = json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict) or rec.get("isSidechain"):
+            continue
+        kind = rec.get("type")
+        if kind == "system" and rec.get("subtype") == "compact_boundary":
+            meta = rec.get("compactMetadata") or {}
+            return {"ok": True, "pre": meta.get("preTokens"), "post": meta.get("postTokens")}
+        text = (rec.get("message") or {}).get("content") if kind == "user" else \
+            rec.get("content") if kind == "system" and rec.get("subtype") == "local_command" else None
+        if not isinstance(text, str):
+            continue
+        name = COMMAND_NAME.search(text)
+        if name:
+            asked = name.group(1) == "/compact"
+            continue
+        said = COMMAND_SAID.match(text)
+        if said and (asked or (rec.get("commandRun") or {}).get("command") == "compact"):
+            words = " ".join(_plain(said.group(1)).split())
+            return {"ok": words.startswith("Compacted"), "said": words or "Claude Code didn't say why."}
+    return None
+
+
+def _watch_compact(lid, s, offset, since):
+    """Wait for /compact's result in the agent's transcript, then say how it
+    went. It counts as stopped when, after a grace period, it is neither busy
+    nor done a few checks in a row (Esc pressed in its terminal, or it ended)."""
+    job, sid, quiet = launches[lid], s["sessionId"], 0
+    try:
+        while True:
+            time.sleep(1.5)
+            session_title(sid)
+            path = title_cache.get(sid, {}).get("path")
+            done = path and _compact_result(path, offset)
+            if done:
+                break
+            if time.time() > since + COMPACT_WAIT:
+                done = {"ok": False, "said": f"It hasn't finished after {COMPACT_WAIT // 60} minutes. "
+                                             "Look at its terminal."}
+                break
+            row = next((r for r in background_rows() if r["sessionId"] == sid), None)
+            quiet = 0 if row and row.get("pid") and row.get("status") == "busy" else quiet + 1
+            if quiet >= 4 and time.time() > since + COMPACT_GRACE:
+                done = {"ok": False, "said": "It stopped before it was done. Look at its terminal."}
+                break
+    except Exception as e:  # or it stays "compacting" and can't be compacted again
+        done = {"ok": False, "said": f"Watching it stopped on an error: {e}"}
+    if done["ok"]:
+        pre, post = done.get("pre"), done.get("post")
+        k = lambda n: f"{n / 1000:.0f}k" if n >= 1000 else str(n)
+        sizes = f": its context went from {k(pre)} to {k(post)} tokens" \
+            if isinstance(pre, int) and isinstance(post, int) else ""
+        detail, level = f"Compacted {label(s)}{sizes}.", "ok"
+    else:
+        detail, level = f"{label(s)} wasn't compacted: {done['said']}", "error"
+    job.update(state="done" if done["ok"] else "failed", detail=detail, at=time.time())
+    with lock:
+        board = load_board(job["board"])
+        if board is not None:
+            add_activity(board, detail, level)
+            save_board(board)
 
 
 def _job_of(body):
@@ -4255,6 +4427,7 @@ class Handler(BaseHTTPRequestHandler):
                     "remove": lambda: remove_node(bid, body),
                     "rename": lambda: rename_node(bid, body),
                     "ultracode": lambda: set_ultracode(bid, body),
+                    "compact": lambda: start_compact(bid, body),
                     "delete": lambda: delete_board(bid),
                     "folder": lambda: change_folder(bid, body),
                 }

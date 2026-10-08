@@ -79,6 +79,23 @@ Nobody can answer the fork, so it edits files without asking
 [What is stored where](#what-is-stored-where)). It is told only to write the
 handoff there; nothing else stops it from editing the chat's files.
 
+## Compacting
+
+**Compact** types `/compact` into a running background agent through
+`claude attach`, as a prompt is typed, pressing Enter only once its prompt
+box shows `/compact`. An ended one is woken with
+`claude --resume <id> --bg -- /compact`, which Claude Code runs as the
+command too. A chat in a terminal or an editor gets only messages, read
+between steps, and a message can't run a command, so it has no **Compact**.
+
+Claude Code writes the result into the agent's transcript once it is done
+(seconds, or a minute or two for a long conversation): a compact boundary
+with the context's size before and after, then `/compact`'s answer. The app
+reads what the transcript gets after you click. It stops waiting after 8
+minutes, or once the agent is neither busy nor done for a few seconds (Esc in
+its terminal, or it ended). Meanwhile it doesn't look up ultracode (see
+[Ultracode](usage.md#ultracode)) in that agent.
+
 ## Reply suggestions
 
 The Send box shows the same grey suggestion as the chat's own prompt box, or

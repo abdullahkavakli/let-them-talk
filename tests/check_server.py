@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Checks parts of server.py without a server: where new cards go, New
 agent → Chat in IDE in a folder, renaming a card, images sent with a prompt, switching
-ultracode or looking it up, and New workflow's teams. Every program launch, session list and message is faked, so nothing opens and
+ultracode or looking it up, compacting a background agent, and New workflow's teams.
+Every program launch, session list and message is faked, so nothing opens and
 nothing is sent. Needs only Python.
 
 Run:  python3 tests/check_server.py      Exit 0: all passed. 1: a check failed.
@@ -436,6 +437,195 @@ starts = [a for a in ran if "--bg" in a]
 check("new agent: an effort given goes on to claude; an unknown one is refused before claude runs",
       len(starts) == 1 and starts[0][starts[0].index("--effort") + 1] == "low" and refused == "Unknown effort: huge",
       (ran, refused))
+
+# --------------------------- Compact: /compact typed or woken, its result read
+
+CP = "0c0c0c0c-0000-4000-8000-0000000000cc"
+cp_log = root / "proj" / f"{CP}.jsonl"
+cp_log.write_text("")
+
+
+def cp_note(rec, at=None, path=cp_log):  # as Claude Code writes them
+    rec["timestamp"] = datetime.fromtimestamp(at or time.time(), timezone.utc).isoformat().replace("+00:00", "Z")
+    with path.open("a") as f:
+        f.write(json.dumps(rec, separators=(",", ":")) + "\n")
+
+
+cp_user = lambda text, **kw: cp_note({"type": "user", "message": {"role": "user", "content": text}, **kw})
+cp_asked = lambda: cp_user("<command-name>/compact</command-name>\n            <command-message>compact</command-message>"
+                           "\n            <command-args></command-args>")
+
+
+def cp_done(pre=39266, post=2563):  # what a real /compact wrote, in its order
+    cp_note({"type": "system", "subtype": "compact_boundary", "content": "Conversation compacted",
+             "compactMetadata": {"trigger": "manual", "preTokens": pre, "postTokens": post}})
+    cp_user("This session is being continued from a previous conversation …", isCompactSummary=True)
+    cp_user("<local-command-caveat>The command below was run directly in Claude Code …</local-command-caveat>", isMeta=True)
+    cp_asked()
+    cp_user("<local-command-stdout>\x1b[2mCompacted (ctrl+o to see full summary)\x1b[22m</local-command-stdout>")
+
+
+cp = {"took": True, "typing": True}
+cp_agent = {"sessionId": CP, "name": "cp", "platform": "wsl", "background": True, "running": True, "jobId": "cdcdcdcd",
+            "status": "idle", "agentState": "idle", "resumable": True, "cwd": folder}
+cp_rows = [{"id": "cdcdcdcd", "sessionId": CP, "pid": 9, "status": "busy"}]
+
+
+def press_cp(job, keys, check=None):
+    """`claude attach`, faked: the box shows what is typed; Enter sends it, and
+    Claude Code notes the typed /compact at once."""
+    screen, text = box(""), ""
+    if check:
+        check(screen)
+    pressed.append([])
+    keys = list(keys)
+    while keys:
+        key = keys.pop(0)
+        if callable(key):
+            keys[:0] = key(screen)
+            continue
+        key = key[0]
+        pressed[-1] += [key] if key else []
+        if key == "\r" and cp["took"]:
+            cp_user(text)
+            screen, text = box(""), ""
+        elif key and key != "\r" and cp["typing"]:
+            text += key
+            screen = box(text)
+    return screen
+
+
+def cp_wait(lid):
+    end = time.time() + 5
+    while time.time() < end and S.launches[lid]["state"] == "compacting":
+        real_sleep(0.02)
+    return S.launches[lid]
+
+
+typing = {}
+
+
+def press_twice(job, keys, check=None):  # a second click comes while /compact is typed
+    typing["listed"] = any(l.get("from") == CP for l in S.launches.values())
+    try:
+        S.start_compact("b", {"sessionId": CP})
+        typing["second"] = "went"
+    except ValueError as e:
+        typing["second"] = str(e)
+    return press_cp(job, keys, check)
+
+
+S._press_keys, S._box_check = press_twice, (lambda job: None)
+S.background_rows = lambda fresh=False: cp_rows
+board = {"nodes": {CP: {"alias": "Compactor"}}, "activity": []}
+sessions[:] = [cp_agent]
+pressed.clear()
+lid = S.start_compact("b", {"sessionId": CP})["launchId"]
+S._press_keys = press_cp
+first = dict(S.launches[lid])
+check("compact: while /compact is typed a second Compact is refused, and nothing is listed until it is sent",
+      "already" in typing.get("second", "") and typing.get("listed") is False, typing)
+try:
+    S.start_compact("b", {"sessionId": CP})
+    check("compact: a second Compact while one runs is refused", False)
+except ValueError as e:
+    check("compact: a second Compact while one runs is refused", "already" in str(e) and len(pressed) == 1, str(e))
+check("compact: an idle running background agent gets /compact typed, Enter once its box shows it",
+      pressed == [["/compact", "\r"]] and first["kind"] == "compact" and first["state"] == "compacting"
+      and first["from"] == CP and first["board"] == "b", (pressed, first))
+real_sleep(0.1)
+cp_done()
+job = cp_wait(lid)
+check("compact: done once its transcript has the compact boundary; notice and Activity give its context before and after",
+      job["state"] == "done" and job["detail"] == 'Compacted "Compactor": its context went from 39k to 3k tokens.'
+      and board["activity"][-1] == job["detail"], (job, board["activity"][-1:]))
+
+pressed.clear()
+lid = S.start_compact("b", {"sessionId": CP})["launchId"]
+real_sleep(0.1)
+cp_asked()  # a conversation too short: Claude Code answers in a system record
+cp_note({"type": "system", "subtype": "local_command", "commandRun": {"command": "compact", "args": ""},
+         "content": "<local-command-stdout>Not enough messages to compact.</local-command-stdout>"})
+job = cp_wait(lid)
+check("compact: Claude Code's answer when it doesn't compact is the notice, and an earlier compaction isn't taken for this one",
+      job["state"] == "failed" and job["detail"] == '"Compactor" wasn\'t compacted: Not enough messages to compact.'
+      and board["activity"][-1] == job["detail"], job)
+
+S.COMPACT_GRACE, cp_rows[0]["status"] = 0.1, "idle"
+lid = S.start_compact("b", {"sessionId": CP})["launchId"]
+job = cp_wait(lid)
+check("compact: one that is neither busy nor done after a while (Esc in its terminal, or it ended) is reported",
+      job["state"] == "failed" and "stopped before it was done" in job["detail"], job)
+S.COMPACT_GRACE, cp_rows[0]["status"] = 15, "busy"
+
+pressed.clear()
+cp["typing"] = False  # something else takes the keys: the box never shows /compact
+launched_before = set(S.launches)
+try:
+    S.start_compact("b", {"sessionId": CP})
+    check("compact: no Enter when its box doesn't show /compact, and nothing is left waiting", False)
+except ValueError as e:
+    check("compact: no Enter when its box doesn't show /compact, and nothing is left waiting",
+          pressed == [["/compact"]] and set(S.launches) == launched_before and "Enter wasn't pressed" in str(e), (pressed, str(e)))
+cp["typing"] = True
+for stray in set(S.launches) - launched_before:  # had it gone on, the checks below still run
+    S.launches.pop(stray)
+
+pressed.clear()
+for kw, why in (({"status": "busy", "agentState": "working"}, "a busy one"),
+                ({"status": "waiting", "agentState": "blocked"}, "one asking you something"),
+                ({"background": False, "jobId": None, "entrypoint": "cli"}, "a chat in a terminal"),
+                ({"background": False, "jobId": None, "entrypoint": "claude-vscode"}, "an editor chat"),
+                ({"running": False, "status": "asleep", "resumable": False}, "one with no saved conversation")):
+    sessions[:] = [{**cp_agent, **kw}]
+    try:
+        S.start_compact("b", {"sessionId": CP})
+        check(f"compact: refused, nothing typed or started: {why}", False)
+    except ValueError as e:
+        check(f"compact: refused, nothing typed or started: {why}",
+              not pressed and set(S.launches) == launched_before, str(e))
+
+woke = []
+S.run_claude = lambda args, **kw: woke.append(args) or types.SimpleNamespace(
+    stdout="backgrounded · cdcdcdcd\n", stderr="note: woke session cdcdcdcd with its saved options (--model).", returncode=0)
+sessions[:] = [{**cp_agent, "running": False, "status": "asleep", "agentState": "done"}]
+lid = S.start_compact("b", {"sessionId": CP})["launchId"]
+real_sleep(0.1)
+cp_user("/compact")
+cp_done(969833, 14454)
+job = cp_wait(lid)
+check("compact: an asleep one is woken with /compact as its prompt, nothing typed, and its result read the same way",
+      woke == [["--resume", CP, "--bg", "--", "/compact"]] and not pressed and job["state"] == "done"
+      and "from 970k to 14k tokens" in job["detail"], (woke, job))
+S.run_claude = lambda args, **kw: types.SimpleNamespace(
+    stdout="backgrounded · 0123abcd\n", returncode=0,
+    stderr="note: session cdcdcdcd is already running in the background, so this started a copy as 0123abcd.")
+launched_before = set(S.launches)
+try:
+    S.start_compact("b", {"sessionId": CP})
+    check("compact: a copy started instead of waking it is reported, and its card added", False)
+except ValueError as e:
+    check("compact: a copy started instead of waking it is reported, and its card added",
+          "copy (0123abcd)" in str(e) and board.get("adopt") == ["0123abcd"] and set(S.launches) == launched_before, str(e))
+
+S.launches["look"] = {"id": "look", "board": "b", "at": time.time(), "kind": "compact", "from": UC, "state": "compacting"}
+idle_uc = {**uc, "pid": 120, "startedAt": time.time() * 1000, "status": "idle"}
+check("compact: the ultracode look waits while it compacts (it would type /effort meanwhile)",
+      S.look_up_ultracode(idle_uc) is False and S.ultra_peeks[UC][0][0] != 120)
+del S.launches["look"]
+
+UK = "0c0c0c0c-0000-4000-8000-0000000000dd"
+uk_log = root / "proj" / f"{UK}.jsonl"
+t1 = time.time() - 50
+cp_note({"type": "user", "message": {"role": "user", "content": "fix it"}}, t1, uk_log)
+cp_note({"type": "attachment", "attachment": {"type": "ultra_effort_enter"}}, t1, uk_log)
+cp_note({"type": "user", "message": {"role": "user", "content":
+         "<local-command-stdout>Ultracode off. Effort stays high.</local-command-stdout>"}}, t1 + 1, uk_log)
+cp_note({"type": "user", "message": {"role": "user", "content": "/compact"}}, t1 + 2, uk_log)
+cp_note({"type": "user", "isCompactSummary": True, "message": {"role": "user", "content": "This session is …"}},
+        t1 + 3, uk_log)
+check("ultracode: a typed /compact and its summary aren't prompts, so a switch made before them still stands",
+      S.ultracode_state({"sessionId": UK, "startedAt": (t1 - 10) * 1000}) is False)
 
 # ------------------------------- Open in IDE: a running background agent ends first
 

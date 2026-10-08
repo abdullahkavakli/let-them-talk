@@ -125,6 +125,8 @@ class FakeAPI:
         self.agents = None      # every chat's agents (like AGENTS above); none by default
         self.hold_sub = False   # an agent's details wait in .held until the check sends them
         self.sub_asked = []     # the agents whose details were asked for
+        self.patch = {}         # sessionId -> fields of its card that differ
+        self.launches = []      # what the server lists as under way
 
     def chat(self, sid):
         self.asked += 1
@@ -162,6 +164,9 @@ class FakeAPI:
             else:
                 data = view(q["board"])
                 data["board"]["connections"] += self.arrows if q["board"] == "b1" else []
+                for n in data["nodes"]:
+                    n.update(self.patch.get(n["sessionId"], {}))
+                data["launches"] = self.launches
         elif path == "/api/chat":
             data = self.chat(q.get("session"))
         elif path == "/api/agents":
@@ -539,6 +544,52 @@ def checks_wide(browser):
               and row.inner_text().startswith("Ultracode is on") and row.locator("button:enabled").all_inner_texts() == ["Turn off"],
               (shown, waiting, said, row.inner_text()))
 
+    name = "compact: an idle background agent has Compact; it asks first, then asks the server"
+    with step(page, name):
+        page.api.patch = {B: {"status": "idle", "agentState": "idle", "waitingFor": None}}
+        poll(page)
+        open_card(page, B)
+        asked = len(page.dialogs)
+        page.locator("#drawer-body button", has_text="Compact").click()  # the confirm is accepted
+        page.wait_for_timeout(300)
+        sent = [b for p, b in page.api.posts if p.endswith("/compact")]
+        check(name, page.dialogs[asked:] == ["confirm"] and sent == [{"sessionId": B}], (page.dialogs[asked:], sent))
+
+    name = "compact: while it compacts the button waits, saying so; a notice says when it's done"
+    with step(page, name):
+        page.api.patch = {B: {"status": "idle", "agentState": "idle", "waitingFor": None}}
+        page.api.launches = [{"id": "k1", "board": "b1", "at": 1, "kind": "compact", "from": B, "state": "compacting",
+                              "detail": "Compacting \"beta\" (/compact)…"}]
+        poll(page)
+        open_card(page, B)
+        button = page.locator("#drawer-body button", has_text="Compact")
+        during = (button.inner_text(), button.is_disabled())
+        page.api.launches = [{**page.api.launches[0], "state": "done", "at": 2,
+                              "detail": "Compacted \"beta\": its context went from 39k to 3k tokens."}]
+        poll(page)
+        check(name, during == ("Compacting…", True) and (button.inner_text(), button.is_disabled()) == ("Compact", False)
+              and "from 39k to 3k tokens" in page.inner_text("#toasts"), (during, page.inner_text("#toasts")))
+
+    name = "compact: only background agents have it; it waits while one asks you, and an ended one is woken for it"
+    with step(page, name):
+        open_card(page, A)  # alpha: a chat in a terminal
+        terminal = page.locator("#drawer-body button", has_text="Compact").count()
+        page.api.patch = {A: {"editor": "Cursor", "entrypoint": "claude-vscode"}}  # alpha, as a chat in Cursor
+        poll(page)
+        editor = page.locator("#drawer-body button", has_text="Compact").count()
+        open_card(page, B)  # beta: asking you something
+        asking = page.locator("#drawer-body button", has_text="Compact").is_disabled()
+        open_card(page, C)  # gamma: its process ended
+        asked = len(page.dialogs)
+        page.locator("#drawer-body button", has_text="Compact").click()
+        page.wait_for_timeout(300)
+        woken = [b for p, b in page.api.posts if p.endswith("/compact")]
+        page.api.patch = {C: {"resumable": False}}
+        poll(page)
+        restart = page.locator("#drawer-body button", has_text="Compact").count()
+        check(name, terminal == editor == restart == 0 and asking and page.dialogs[asked:] == ["confirm"]
+              and woken == [{"sessionId": C}], (terminal, editor, restart, asking, woken))
+
     name = "ultracode: New agent can start a background agent with it, not a Chat in IDE"
     with step(page, name):
         page.api.post_result = {"jobId": "abcdef12", "name": "x"}
@@ -853,14 +904,15 @@ def checks_wide(browser):
         ring = page.evaluate("[document.activeElement.id, getComputedStyle(document.activeElement).boxShadow]")
         check(name, looks == [["SELECT", "none", True]] * 4 and ring[0] == "board-select" and ring[1] != "none", (looks, ring))
 
-    name = "details: buttons in a chat's rows are one height, and the four of Background agent sit in two even columns"
+    name = "details: buttons in a chat's rows are one height; Background agent's sit in two even columns, the odd last one across the row"
     with step(page, name):
         open_card(page, B)
         rows = page.evaluate("""() => [...document.querySelectorAll('#drawer-body .drawer-actions:not(.ultracode)')].map(r =>
             [...r.querySelectorAll('.btn')].map(b => { const k = b.getBoundingClientRect(); return [Math.round(k.left), Math.round(k.width), Math.round(k.height)]; }))""")
         every, bg = [b for r in rows for b in r], rows[0]
-        check(name, len({h for _, _, h in every}) == 1 and len(bg) == 4 and len({w for _, w, _ in bg}) == 1
-              and len({x for x, _, _ in bg}) == 2, rows)
+        pairs, last = bg[:4], bg[4:]
+        check(name, len({h for _, _, h in every}) == 1 and len(bg) == 5 and len({w for _, w, _ in pairs}) == 1
+              and len({x for x, _, _ in pairs}) == 2 and last[0][0] == pairs[0][0] and last[0][1] >= 2 * pairs[0][1], rows)
 
     name = "details: destructive buttons are red text on the normal fill, and Tell connected agents sits right under Remove"
     with step(page, name):
