@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Checks parts of server.py without a server: where new cards go, New
 agent → Chat in IDE in a folder, renaming a card, images sent with a prompt, switching
-ultracode or looking it up, compacting a background agent, and New workflow's teams.
+ultracode or looking it up, compacting a background agent, moving an editor chat
+to a terminal, and New workflow's teams.
 Every program launch, session list and message is faked, so nothing opens and
 nothing is sent. Needs only Python.
 
@@ -663,6 +664,101 @@ rows[:] = [{"id": "j1", "sessionId": "s1", "pid": None, "state": "done"}]
 took = next(s for s in real_live_sessions() if s["sessionId"] == "s1")
 check("open in IDE: once the IDE goes on with it, its card is that chat, not the ended agent",
       not took["background"] and not took["jobId"] and took["editor"] == "Cursor", took)
+
+# ------------------------------- Open in terminal: an editor chat closes first
+
+TC = "0d0d0d0d-0000-4000-8000-0000000000e1"
+ide_names = ("load_board", "add_activity", "_proc_start", "open_terminal", "IDE_CLOSE_WAIT", "has_transcript",
+             "_read_registry", "wsl_exe")
+ide_saved, real_kill = {n: getattr(S, n) for n in ide_names}, S.os.kill
+alive, order, notes = {5}, [], []
+ide_chat = {"sessionId": TC, "name": "it", "entrypoint": "claude-vscode", "editor": "Cursor", "platform": "wsl",
+            "background": False, "kind": "interactive", "cwd": home, "pid": 5}
+S.load_board = lambda bid: {"nodes": {TC: {"cwd": home, "name": "it", "editor": "Cursor"}}, "activity": []}
+S.add_activity = lambda board, text, level: notes.append((text, level))
+S.has_transcript = lambda sid: True
+S._proc_start = lambda pid: "1" if pid in alive else None
+
+
+def fake_kill(pid, sig):
+    order.append(f"kill {pid} {S.signal.Signals(sig).name}")
+    alive.discard(pid)  # it exits, as Claude Code does on SIGINT
+
+
+S.os.kill = fake_kill
+S.open_terminal = lambda job, cwd=None, command=None: order.append(f"terminal {cwd} {command}") or \
+    {"opened": True, "command": command}
+
+
+def move(**body):
+    order.clear(); notes.clear(); alive.add(5)
+    try:
+        return S.terminal_chat("b", {"sessionId": TC, **body})
+    except ValueError as e:
+        return str(e)
+
+
+try:
+    sessions[:] = [ide_chat]
+    r = move()
+    check("open in terminal: an editor chat open in the IDE isn't closed without your yes",
+          isinstance(r, str) and "open in Cursor" in r and order == [], (r, order))
+    r = move(end=True)
+    check("open in terminal: after your yes it gets SIGINT (not SIGTERM), then the terminal resumes it",
+          order == ["kill 5 SIGINT", f"terminal {home} claude --resume {TC}"] and r["closed"] and r["opened"]
+          and r["editor"] == "Cursor" and "Closed @it in Cursor and opened it in a terminal" in notes[0][0], (order, r, notes))
+    S.IDE_CLOSE_WAIT = 0.1
+    S.os.kill = lambda pid, sig: order.append(f"kill {pid}")  # it ignores the signal
+    r = move(end=True)
+    check("open in terminal: one that stays open in the IDE is reported, and no terminal opens on top of it",
+          isinstance(r, str) and "still open in Cursor" in r and order == ["kill 5"], (r, order))
+    S.IDE_CLOSE_WAIT = ide_saved["IDE_CLOSE_WAIT"]
+    S.os.kill = lambda pid, sig: (_ for _ in ()).throw(PermissionError(1, "Operation not permitted"))
+    r = move(end=True)
+    check("open in terminal: a chat that can't be signalled is reported, and no terminal opens",
+          isinstance(r, str) and "Couldn't close it in Cursor" in r and order == [], (r, order))
+    S.os.kill = fake_kill
+    S.open_terminal = lambda job, cwd=None, command=None: order.append("terminal") or {"opened": False, "command": command}
+    r = move(end=True)
+    check("open in terminal: when no terminal opens, the command comes back and Activity says so as an error",
+          r["closed"] and not r["opened"] and r["command"] == f"claude --resume {TC}"
+          and notes[0][1] == "error" and f"run claude --resume {TC}" in notes[0][0], (r, notes))
+    S.open_terminal = lambda job, cwd=None, command=None: order.append(f"terminal {cwd} {command}") or \
+        {"opened": True, "command": command}
+    sessions[:] = []  # its card has ended: not open in the IDE
+    r = move()
+    check("open in terminal: a chat not open in the IDE opens in the terminal with nothing closed",
+          order == [f"terminal {home} claude --resume {TC}"] and not r["closed"] and r["editor"] == "Cursor"
+          and notes[0] == ("Opened @it in a terminal", "info"), (order, r, notes))
+    sessions[:] = [{**ide_chat, "entrypoint": "cli", "editor": None}]
+    r = move(end=True)
+    check("open in terminal: a chat that already runs in a terminal isn't closed or opened again",
+          isinstance(r, str) and "already runs in a terminal" in r and order == [], (r, order))
+    sessions[:] = [ide_chat]
+    S.has_transcript = lambda sid: False
+    r = move(end=True)
+    check("open in terminal: one with no saved conversation is refused before the IDE one is closed",
+          isinstance(r, str) and "no saved conversation" in r and order == [], (r, order))
+    S.has_transcript = lambda sid: True
+    sessions[:] = [{**ide_chat, "platform": "windows"}]
+    r = move(end=True)
+    check("open in terminal: a chat on Windows is refused", isinstance(r, str) and "Windows" in r and order == [], (r, order))
+    check("open in terminal: only a real session id is taken (it goes into a shell command)",
+          move(sessionId="x; rm -rf ~") == "That isn't a chat's session id." and order == [])
+    # once the IDE's process is gone and the terminal's has registered, the card is a terminal chat
+    reg_cli = {**reg, "sessionId": TC, "entrypoint": "cli", "pid": 6, "cwd": home}
+    S._read_registry = lambda d: [dict(reg_cli)]
+    S.wsl_exe = lambda pid, started: "/home/you/.local/share/claude/versions/current"
+    rows[:] = []
+    alive.add(6)
+    now_term = next(s for s in real_live_sessions() if s["sessionId"] == TC)
+    check("open in terminal: once its terminal registers, the card is a terminal chat (no editor)",
+          now_term["editor"] is None and now_term["entrypoint"] == "cli" and not now_term["background"], now_term)
+finally:
+    for n, value in ide_saved.items():
+        setattr(S, n, value)
+    S.os.kill = real_kill
+    sessions[:] = []
 
 # ------------------------------------------- Images with a prompt or message
 

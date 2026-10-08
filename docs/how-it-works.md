@@ -132,6 +132,30 @@ started from the app on the model picked in
 chat's first turns start, and the mod names that model on the chat's own
 requests, not its subagents'.
 
+## Moving an editor chat to a terminal
+
+The editor's Claude panel runs a chat as a Claude Code process of its own
+(entrypoint `claude-vscode`, in `~/.claude/sessions/<pid>.json`). Claude Code
+doesn't stop a terminal from resuming a conversation that process still holds;
+both would write its transcript. So **Open in terminal** first closes the one
+in the editor, then opens `claude --resume <id>`.
+
+- **How it is closed:** the process gets SIGINT, once you said yes. In the
+  mode the extension runs it in, Claude Code answers by ending its turn,
+  saving the conversation and exiting with code 0, which is what happens when
+  the extension closes a chat itself (it ends the process's input). SIGTERM
+  would exit with code 143, which the extension reports as an error in the
+  panel, so it isn't used. The app waits up to 10 seconds for the process to
+  go; if it stays, nothing opens in the terminal and the notice says to close
+  the tab in the editor.
+- **What the editor shows:** the extension sees the process end the way it
+  does when you close the tab, with no error. Its panel keeps the
+  conversation and is not started again by itself; a message typed there later
+  starts it, and the extension, which reads the same session files, sees the
+  terminal holds the chat and asks before taking it back.
+- **Which chats:** a chat on this machine whose process was started by the
+  editor. Windows chats can't be signalled from here.
+
 ## Security
 
 The server listens only on 127.0.0.1 and answers only requests addressed to

@@ -1342,7 +1342,8 @@ function nodeDetails(n) {
       class: "btn primary", text: n.live ? "Open in IDE" : "Reopen in IDE",
       title: `Shows this chat in ${n.editor}`,
       onclick: () => { window.location.href = editorLink(n.editor, { session: n.sessionId }); },
-    }), continuable(n) && conversationButton(n, "Continue in", "btn primary")),
+    }), n.editor && !onWindows(n) && terminalButton(n),
+    continuable(n) && conversationButton(n, "Continue in", "btn primary")),
     ...(stuck ? backgroundSection(n) : []),
     ...chatSection(n),
     ...sendSection(n),
@@ -1426,6 +1427,45 @@ function endHereText(n, editor) {
   return `Go on with ${display(n)} in ${editor}?\n\nOnly one place can run a conversation, so it ends here ` +
     `first: it stops running in the background${midway}, and ${shown}. Then it opens in ${editor}, where you ` +
     "go on with it. Its card stays on the board.";
+}
+
+// An editor chat moved to a terminal. Only one place can run a conversation, so
+// one open in the editor is closed there first, after a yes; one that isn't
+// open there just opens in the terminal.
+function terminalButton(n) {
+  const busy = editorBusy[n.sessionId];
+  return el("button", {
+    class: "btn", text: busy ? "Opening…" : "Open in terminal", disabled: !!busy,
+    title: n.live ? `Closes this chat in ${n.editor} (you're asked), then opens it in a terminal window`
+      : "Opens this chat in a terminal window",
+    onclick: async () => {
+      if (n.live && !confirm(moveToTerminalText(n))) return;
+      editorBusy[n.sessionId] = true;
+      if (state.view) render();
+      try {
+        const { result } = await api(`/api/board/${state.boardId}/open-terminal`, { sessionId: n.sessionId, end: n.live });
+        if (!result.opened) toast(`Run this in a terminal: ${result.command}`, "info", 0);
+        else toast(result.closed ? `Closed ${display(n)} in ${n.editor}; it is open in a terminal now.`
+          : `Opened ${display(n)} in a terminal.`, "ok");
+      } catch (e) {
+        toast(failText(e), "error");
+      } finally {
+        delete editorBusy[n.sessionId];
+        if (state.view) render();
+      }
+      poll();
+    },
+  });
+}
+
+// What moving an editor chat to a terminal closes: the chat, and the agents it
+// runs inside its own process.
+function moveToTerminalText(n) {
+  const midway = n.status === "busy" ? " It stops what it is doing." : "";
+  const data = state.agents[n.sessionId], running = data && !data.error ? agentCounts(data).running : 0;
+  const agents = running ? ` Its ${running} running agent${running === 1 ? "" : "s"} stop${running === 1 ? "s" : ""} too.` : "";
+  return `Open ${display(n)} in a terminal?\n\nOnly one place can run a conversation, so the chat closes in ` +
+    `${n.editor} first.${midway}${agents} Then it opens in a terminal window.`;
 }
 
 // The board's own folder in an editor window (the sidebar's Board folder).

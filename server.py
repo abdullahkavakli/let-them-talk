@@ -4062,6 +4062,65 @@ def end_chat(bid, body):
     return {"ended": ended, "resume": f"claude --resume {sid}"}
 
 
+IDE_CLOSE_WAIT = 10  # seconds a chat gets to close in its IDE
+SESSION_ID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
+
+
+def terminal_chat(bid, body):
+    """Move a chat from an IDE to a terminal: `claude --resume <id>` in a new
+    window. Claude Code lets a second place resume a conversation another
+    still holds, and both then write its transcript, so a chat open in the IDE
+    is closed there first, and only with "end" (you said yes to that). It gets
+    SIGINT: the Claude Code an editor's extension runs (stream mode) then
+    finishes saving and exits with code 0, as when the extension closes it
+    itself (SIGTERM would exit with 143, which the editor reports as an
+    error). The editor's panel stays and sees its chat end quietly; a message
+    typed there later asks before taking the chat back from the terminal."""
+    sid = str(body.get("sessionId") or "")
+    if not SESSION_ID.fullmatch(sid):
+        raise ValueError("That isn't a chat's session id.")
+    with lock:
+        board = load_board(bid)
+    node = board["nodes"].get(sid)
+    if node is None:
+        raise ValueError("That chat isn't on this board.")
+    s = next((x for x in live_sessions() if x["sessionId"] == sid), None)
+    if (s or node).get("platform") == "windows":
+        raise ValueError("A chat running on Windows can't be opened in a terminal from here.")
+    if s is not None and s["entrypoint"] != "claude-vscode":
+        raise ValueError("It runs in the background; use its Open in terminal." if s["background"]
+                         else "It already runs in a terminal.")
+    if not has_transcript(sid):
+        raise ValueError("It has no saved conversation yet, so a terminal can't continue it.")
+    editor = (s and s["editor"]) or node.get("editor") or "the IDE"
+    in_ide = s is not None
+    if in_ide:
+        if not body.get("end"):
+            raise ValueError(f"It is open in {editor}, which has to close it first.")
+        try:
+            os.kill(s["pid"], signal.SIGINT)
+        except ProcessLookupError:
+            pass  # it closed by itself meanwhile
+        except OSError as e:
+            raise ValueError(f"Couldn't close it in {editor}: {e.strerror}.")
+        deadline = time.time() + IDE_CLOSE_WAIT
+        while _proc_start(s["pid"]) is not None and time.time() < deadline:
+            time.sleep(0.2)
+        if _proc_start(s["pid"]) is not None:
+            raise ValueError(f"It is still open in {editor}; close its tab there, then try again.")
+    opened = open_terminal(sid, (s or node).get("cwd"), f"claude --resume {sid}")
+    name = label({"sessionId": sid, "name": node.get("name") or sid[:8], "title": node.get("title")}, board)
+    if opened["opened"]:
+        text = f"Closed {name} in {editor} and opened it in a terminal" if in_ide else f"Opened {name} in a terminal"
+    else:
+        text = (f"Closed {name} in {editor}; " if in_ide else "") + f"no terminal could be opened (run {opened['command']})"
+    with lock:
+        board = load_board(bid)
+        add_activity(board, text, "info" if opened["opened"] else "error")
+        save_board(board)
+    return {"closed": in_ide, "editor": editor, **opened}
+
+
 TERM_TOKEN = re.compile(r"\x1b\[([0-9;?<>=]*)[ -/]*([@-~])|\x1b(?:\][^\x07\x1b]*(?:\x07|\x1b\\)|[()][0-9A-B]|.)"
                         r"|([\x00-\x1a\x1c-\x1f\x7f])|([^\x00-\x1f\x7f]+)", re.S)
 
@@ -4422,6 +4481,7 @@ class Handler(BaseHTTPRequestHandler):
                     "agent-attach": lambda: attach_background(bid, body),
                     "open-folder": lambda: open_folder(bid, body),
                     "end": lambda: end_chat(bid, body),
+                    "open-terminal": lambda: terminal_chat(bid, body),
                     "layout": lambda: update_layout(bid, body),
                     "add": lambda: add_node(bid, body),
                     "remove": lambda: remove_node(bid, body),

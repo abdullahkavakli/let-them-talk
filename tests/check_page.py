@@ -224,10 +224,10 @@ def open_page(browser, width=1440, height=900, scheme="light"):
     page = ctx.new_page()
     page.set_default_timeout(5000)
     page.api = FakeAPI()
-    page.errors, page.dialogs = [], []
+    page.errors, page.dialogs, page.dialog_texts = [], [], []
     page.route("**/*", page.api.reply)
     page.on("pageerror", lambda e: page.errors.append(str(e)))
-    page.on("dialog", lambda d: (page.dialogs.append(d.type), d.accept()))
+    page.on("dialog", lambda d: (page.dialogs.append(d.type), page.dialog_texts.append(d.message), d.accept()))
     page.goto(ORIGIN + "/")
     page.wait_for_function("document.querySelectorAll('.node').length === 5")
     return page
@@ -383,6 +383,72 @@ def checks_wide(browser):
         page.wait_for_timeout(200)
         sent = [(b["sessionId"], b["end"]) for p, b in page.api.posts if p.endswith("/open-folder")]
         check(name, quiet and page.dialogs[asked:] == ["confirm"] and sent == [(C, False), (B, True)], sent)
+
+    name = "details: an editor chat has Open in terminal beside Open in IDE, and asks first only while it is open in the IDE"
+    with step(page, name):
+        open_card(page, A)  # alpha: a chat in a terminal
+        terminal = page.locator("#drawer-body button", has_text="Open in terminal").count()
+        ide = {"editor": "Cursor", "entrypoint": "claude-vscode"}
+        page.api.patch = {A: ide, D: ide}  # alpha: open in Cursor; delta: a chat from Cursor that has ended
+        page.api.post_result = {"closed": True, "opened": True, "editor": "Cursor", "command": f"claude --resume {A}"}
+        poll(page)
+        open_card(page, A)
+        beside = page.locator("#drawer-body .drawer-actions", has_text="Open in IDE").locator("button").all_inner_texts()
+        asked = len(page.dialogs)
+        page.locator("#drawer-body button", has_text="Open in terminal").click()  # the confirm is accepted
+        page.wait_for_timeout(300)
+        says = page.dialogs[asked:] == ["confirm"] and "closes in Cursor first" in page.dialog_texts[-1] \
+            and "running agent" not in page.dialog_texts[-1]  # it runs none
+        toast = page.inner_text("#toasts")
+        open_card(page, D)
+        asked = len(page.dialogs)
+        page.locator("#drawer-body button", has_text="Open in terminal").click()
+        page.wait_for_timeout(300)
+        quiet = len(page.dialogs) == asked
+        sent = [b for p, b in page.api.posts if p.endswith("/open-terminal")]
+        page.api.patch = {A: {**ide, "platform": "windows"}}
+        poll(page)
+        open_card(page, A)
+        windows = page.locator("#drawer-body button", has_text="Open in terminal").count()
+        check(name, beside == ["Open in IDE", "Open in terminal"] and says and quiet and terminal == windows == 0
+              and sent == [{"sessionId": A, "end": True}, {"sessionId": D, "end": False}]
+              and "Closed alpha in Cursor" in toast, (beside, says, quiet, sent, terminal, windows, toast))
+
+    name = "details: Open in terminal says when it failed, or what to run when no terminal could open"
+    with step(page, name):
+        page.api.patch = {D: {"editor": "Cursor", "entrypoint": "claude-vscode"}}
+        poll(page)
+        open_card(page, D)
+        page.api.post_status = 400  # the server says why
+        page.locator("#drawer-body button", has_text="Open in terminal").click()
+        page.wait_for_timeout(300)
+        failed = page.inner_text("#toasts")
+        page.api.post_status, page.api.post_result = 200, {"opened": False, "command": f"claude --resume {D}"}
+        page.evaluate("document.querySelectorAll('#toasts .toast').forEach((t) => t.remove())")
+        page.locator("#drawer-body button", has_text="Open in terminal").click()
+        page.wait_for_timeout(300)
+        command = page.inner_text("#toasts")
+        check(name, "It didn't work." in failed and f"Run this in a terminal: claude --resume {D}" in command,
+              (failed, command))
+
+    name = "details: Open in terminal's confirm says how many running agents stop with the chat, and nothing when none run"
+    with step(page, name):
+        page.api.patch = {A: {"editor": "Cursor", "entrypoint": "claude-vscode"}}  # alpha, open in Cursor
+        page.api.post_result = {"closed": True, "opened": True, "editor": "Cursor", "command": f"claude --resume {A}"}
+        texts = []
+        for agents in (AGENTS,  # two workflow agents and a subagent run, a queued one and a failed one don't
+                       {"sessionId": A, "live": True, "workflows": [], "direct": AGENTS["direct"][:1]},
+                       {"sessionId": A, "live": True, "workflows": [], "direct": AGENTS["direct"][1:]}):  # the one that's done
+            page.api.agents = copy.deepcopy(agents)
+            poll(page)
+            open_card(page, A)
+            page.evaluate(f"loadDetails('{A}')")
+            page.locator("#drawer-body button", has_text="Open in terminal").click()  # the confirm is accepted
+            page.wait_for_timeout(300)
+            texts.append(page.dialog_texts[-1])
+            page.evaluate("closeDrawer()")
+        check(name, "Its 3 running agents stop too. Then it opens in a terminal window." in texts[0]
+              and "Its 1 running agent stops too." in texts[1] and "running agent" not in texts[2], texts)
 
     name = "send box: a pasted screenshot shows as a thumbnail and goes with the text"
     with step(page, name):

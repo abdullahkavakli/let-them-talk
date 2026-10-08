@@ -287,6 +287,24 @@ its folder. The editor must
 [trust the folder](limits.md#the-editor-must-trust-the-folder). If the editor
 can't be asked, the notice says what to run instead (`cursor "<folder>"`).
 
+### Open in terminal (an editor chat)
+
+An editor chat's details have **Open in terminal** beside **Open in IDE**:
+`claude --resume <id>` in a new terminal window, in the chat's folder. Only
+one place can run a conversation (Claude Code lets a second one start, and
+both then write to it), so a chat that is open in the editor asks first, then
+closes there, and opens in the terminal; one that isn't open in the editor
+(its card has ended) opens at once. The agents a chat runs (subagents and
+workflows) run inside it and stop with it, so the question says how many are
+running (*Its 2 running agents stop too.*), and leaves that out when none
+are. See
+[Moving an editor chat to a terminal](how-it-works.md#moving-an-editor-chat-to-a-terminal)
+for how it is closed and what the editor shows. The card then shows a chat in
+a terminal. A chat with no saved conversation yet can't be continued in a
+terminal; it is refused before anything closes. If no terminal can be opened,
+the notice says what to run (`claude --resume <id>`); a chat running on
+Windows has no button.
+
 ## Background agents
 
 A background agent's details have these buttons:
@@ -368,7 +386,8 @@ agents*.
 
 For a chat in a terminal: its Claude Code exits as if you closed the window,
 which stays open. The conversation is kept; `claude --resume <id>` continues
-it. Chats in an editor are closed there.
+it. Chats in an editor are closed there (or moved to a terminal with
+[Open in terminal](#open-in-terminal-an-editor-chat)).
 
 ## Hand off to a new agent
 
