@@ -116,6 +116,7 @@ class FakeAPI:
         self.held = []
         self.post_status = 200  # what a POST gets
         self.post_result = {}
+        self.new_board = "b3"   # the board /api/boards answers with (a folder that has one gets that one)
         self.posts = []
         self.asked = 0
         self.ultracode = None   # what the server reads off a running background agent
@@ -155,6 +156,8 @@ class FakeAPI:
         if request.method != "GET":
             self.posts.append((path, request.post_data_json))
             body = {"ok": True, "result": self.post_result} if self.post_status == 200 else {"error": "It didn't work."}
+            if path == "/api/boards":
+                body["id"] = self.new_board
             return route.fulfill(status=self.post_status, content_type="application/json", body=json.dumps(body))
         if path == "/api/state":
             if "board" not in q:
@@ -895,14 +898,20 @@ def checks_wide(browser):
             page.emulate_media(reduced_motion="no-preference")
         check(name, "none" not in moving and still == ["none", "none"], (moving, still))
 
-    name = "dropdowns: still native selects, drawn as the app's fields with its chevron and a focus ring"
+    name = "dropdowns: the other ones are still native selects, drawn as the app's fields with its chevron and a focus ring"
     with step(page, name):
-        looks = page.evaluate("""() => ['board-select', 'ide-pick', 'n-editor', 'n-model'].map(id => { const e = document.getElementById(id), s = getComputedStyle(e);
+        looks = page.evaluate("""() => ['ide-pick', 'n-editor', 'n-model'].map(id => { const e = document.getElementById(id), s = getComputedStyle(e);
             return [e.tagName, s.appearance, s.backgroundImage.startsWith('url(')]; })""")
+        check(name, looks == [["SELECT", "none", True]] * 3, looks)
+
+    name = "board picker: the closed pill reads Board and the board's name, and takes the top bar's focus ring from the keyboard"
+    with step(page, name):
         page.locator("#new-chat").focus()
         page.keyboard.press("Shift+Tab")  # back to the Board picker, from the keyboard
-        ring = page.evaluate("[document.activeElement.id, getComputedStyle(document.activeElement).boxShadow]")
-        check(name, looks == [["SELECT", "none", True]] * 4 and ring[0] == "board-select" and ring[1] != "none", (looks, ring))
+        ring = page.evaluate("""() => { const e = document.activeElement, s = getComputedStyle(e);
+            return [e.id, s.outlineStyle, s.outlineWidth, s.outlineOffset,
+                    e.tagName, getComputedStyle(e, '::after').backgroundImage.startsWith('url('), e.innerText.replace(/\\s+/g, ' ')]; }""")
+        check(name, ring == ["board-select", "solid", "2px", "2px", "BUTTON", True, "Board project board"], ring)
 
     name = "details: buttons in a chat's rows are one height; Background agent's sit in two even columns, the odd last one across the row"
     with step(page, name):
@@ -1358,6 +1367,184 @@ def checks_wide(browser):
         page.wait_for_timeout(300)
         check(name, page.evaluate("state.view?.board.id") == "b2")
 
+    def on_board(bid):
+        page.evaluate(f"selectBoard('{bid}')")
+        page.wait_for_function(f"state.view?.board.id === '{bid}' && document.querySelectorAll('.node').length === {5 if bid == 'b1' else 0}")
+
+    def menu_rows():
+        return page.evaluate("""[...document.querySelectorAll('#board-select-menu .menu-item')].map(r => r.innerText.replace(/\\s+/g, ' '))""")
+
+    def menu_open():
+        return page.evaluate("document.querySelector('#board-select-menu').matches(':popover-open')")
+
+    on_board("b1")
+    name = "board picker: a glass list of the boards, the current one ticked, and New board… under a divider, in light and dark"
+    with step(page, name):
+        page.locator("#board-select").click()
+        page.wait_for_selector("#board-select-menu:popover-open")
+        look = lambda: page.evaluate("""() => { const m = document.querySelector('#board-select-menu'), s = getComputedStyle(m);
+            const rows = [...m.querySelectorAll('.menu-item')], last = rows[rows.length - 1];
+            return { rows: rows.map(r => r.innerText.replace(/\\s+/g, ' ')), current: rows.map(r => r.classList.contains('current')),
+                     divider: last.previousElementSibling.classList.contains('menu-sep'), native: document.querySelectorAll('select#board-select').length,
+                     round: parseFloat(s.borderTopLeftRadius), blur: s.backdropFilter.includes('blur') || s.backdropFilter.startsWith('url('),
+                     alpha: parseFloat(s.backgroundColor.split(',')[3]), tint: s.backgroundColor.match(/\\d+/g).slice(0, 3).join(' '),
+                     lit: s.boxShadow.includes('inset'), expanded: document.querySelector('#board-select').getAttribute('aria-expanded'),
+                     tip: rows[0].title }; }""")
+        light = look()
+        page.emulate_media(color_scheme="dark")
+        try:
+            dark = look()
+        finally:
+            page.emulate_media(color_scheme="light")
+        check(name, light["rows"] == ["project board /home/you/project", "other /home/you/other", "New board…"]
+              and light["current"] == [True, False, False] and light["divider"] and light["native"] == 0 and light["tip"] == FOLDER
+              and light["expanded"] == "true" and all(v["round"] >= 16 and v["blur"] and 0 < v["alpha"] < 1 and v["lit"] for v in (light, dark))
+              and light["tint"] != dark["tint"], (light, dark))
+
+    name = "board picker: with transparency reduced, the same list is drawn solid"
+    with step(page, name):
+        cdp = page.context.new_cdp_session(page)
+        cdp.send("Emulation.setEmulatedMedia", {"features": [{"name": "prefers-reduced-transparency", "value": "reduce"}]})
+        try:
+            page.locator("#board-select").click()
+            page.wait_for_selector("#board-select-menu:popover-open")
+            solid = page.evaluate("(s => [s.backgroundColor, s.backdropFilter])(getComputedStyle(document.querySelector('#board-select-menu')))")
+        finally:
+            cdp.send("Emulation.setEmulatedMedia", {"features": [{"name": "prefers-reduced-transparency", "value": "no-preference"}]})
+        check(name, solid == ["rgb(255, 255, 255)", "none"], solid)
+
+    name = "board picker: a click on a board switches to it; the current one only closes the list"
+    with step(page, name):
+        page.locator("#board-select").click()
+        page.locator("#board-select-menu .menu-item", has_text="project board").click()
+        same = page.evaluate("state.boardId") == "b1" and not menu_open()
+        page.locator("#board-select").click()
+        page.locator("#board-select-menu .menu-item", has_text="other").click()
+        page.wait_for_function("state.view?.board.id === 'b2'")
+        check(name, same and not menu_open() and page.inner_text("#board-select").replace("\n", " ") == "Board other"
+              and page.evaluate("location.hash") == "#board=b2" and page.evaluate("document.querySelector('#board-select').getAttribute('aria-expanded')") == "false")
+        on_board("b1")
+
+    name = "board picker: ↓ opens it on the current board, ↑ ↓ move, Enter picks; Esc closes it and the details stay"
+    with step(page, name):
+        page.locator("#board-select").focus()
+        page.keyboard.press("ArrowDown")
+        page.wait_for_selector("#board-select-menu:popover-open")
+        marked = lambda: page.evaluate("[...document.querySelectorAll('#board-select-menu .menu-item')].map(r => r.classList.contains('active'))")
+        opened = marked()
+        page.keyboard.press("ArrowDown")
+        down = marked()
+        page.keyboard.press("ArrowDown")  # on to New board…
+        last = marked()
+        page.keyboard.press("ArrowDown")  # and round to the first
+        wrapped = marked()
+        page.keyboard.press("ArrowUp")  # and back round to the last
+        back = marked()
+        page.keyboard.press("ArrowUp")
+        up = marked()
+        page.keyboard.press("Enter")
+        page.wait_for_function("state.view?.board.id === 'b2'")
+        shut = not menu_open() and page.evaluate("document.activeElement.id") == "board-select"
+        on_board("b1")
+        open_card(page, A)  # the details are open; Esc on the list closes the list alone
+        page.locator("#board-select").focus()
+        page.keyboard.press("Enter")
+        page.wait_for_selector("#board-select-menu:popover-open")
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(100)
+        esc = not menu_open() and is_open(page, "#drawer")
+        page.keyboard.press("Escape")  # the next one closes the details, as before
+        page.wait_for_timeout(100)
+        check(name, opened == [True, False, False] and down == [False, True, False] and last == [False, False, True]
+              and wrapped == [True, False, False] and back == last and up == down and shut and esc and not is_open(page, "#drawer"),
+              (opened, down, last, wrapped, back, up, shut, esc))
+
+    name = "board picker: a click elsewhere closes it, and so does the pill again"
+    with step(page, name):
+        page.locator("#board-select").click()
+        page.wait_for_selector("#board-select-menu:popover-open")
+        page.mouse.click(700, 600)  # the board
+        page.wait_for_timeout(100)
+        outside = not menu_open()
+        page.locator("#board-select").click()
+        page.wait_for_selector("#board-select-menu:popover-open")
+        page.locator("#board-select").click()
+        page.wait_for_timeout(100)
+        check(name, outside and not menu_open())
+
+    name = "board picker: a refresh while it is open leaves it as it is, and a new board shows in it"
+    with step(page, name):
+        page.locator("#board-select").click()
+        page.wait_for_selector("#board-select-menu:popover-open")
+        page.mouse.move(420, 120)
+        page.evaluate("window.__swaps = 0; new MutationObserver(m => window.__swaps += m.length).observe(document.querySelector('#board-select-menu'), { childList: true, subtree: true })")
+        poll(page, 3)
+        same = page.evaluate("window.__swaps") == 0 and menu_open()
+        BOARDS.append({"id": "b3", "title": "third", "folder": "/home/you/third"})
+        try:
+            poll(page)
+            rows = menu_rows()
+        finally:
+            BOARDS.pop()
+        poll(page)
+        check(name, same and rows[:3] == ["project board /home/you/project", "other /home/you/other", "third /home/you/third"]
+              and rows[-1] == "New board…" and menu_rows()[-1] == "New board…" and len(menu_rows()) == 3, (same, rows))
+
+    name = "board picker: New board… opens the New board dialog, and the top bar's button still does"
+    with step(page, name):
+        page.locator("#board-select").click()
+        page.locator("#board-select-menu .menu-item", has_text="New board…").click()
+        page.wait_for_selector("#board-dialog[open]")
+        first = not menu_open() and page.inner_text("#b-title") == "New board" and page.evaluate("document.activeElement.id") == "b-folder"
+        page.locator("#board-dialog [data-close]").click()
+        page.locator("#new-board").click()
+        page.wait_for_selector("#board-dialog[open]")
+        check(name, first and page.inner_text("#b-title") == "New board")
+
+    name = "new board: when every folder with running chats has a board, the dialog says so and the list leaves them out"
+    with step(page, name):
+        page.locator("#new-board").click()
+        page.wait_for_selector("#board-dialog[open]")
+        page.wait_for_selector("#b-folder-list:not([hidden])")
+        text = page.inner_text("#b-folder-list")
+        check(name, page.locator("#b-folder-list .combo-item").count() == 0 and "Every folder with running chats already has a board" in text
+              and page.inner_text("#b-suggest") == "", text)
+
+    name = "new board: Create on a folder that has a board opens it and says so; on a new folder it opens the new board"
+    with step(page, name):
+        on_board("b2")
+        page.api.new_board = "b1"
+        page.locator("#new-board").click()
+        page.wait_for_selector("#board-dialog[open]")
+        page.fill("#b-folder", FOLDER)
+        page.locator("#b-submit").click()
+        page.wait_for_function("state.view?.board.id === 'b1'")
+        said = "already has a board" in page.inner_text("#toasts")
+        page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t => t.remove())")
+        page.api.new_board = "b3"
+        page.locator("#new-board").click()
+        page.wait_for_selector("#board-dialog[open]")
+        page.fill("#b-folder", "/home/you/fresh")
+        page.locator("#b-submit").click()
+        page.wait_for_function("state.view?.board.id === 'b3'")
+        check(name, said and "already has a board" not in page.inner_text("#toasts")
+              and [b for p, b in page.api.posts if p == "/api/boards"] == [{"folder": FOLDER}, {"folder": "/home/you/fresh"}])
+        on_board("b1")
+
+    name = "new board: the list and the suggestions offer the folders that have no board yet"
+    with step(page, name):
+        kept = BOARDS[:]
+        BOARDS[:] = kept[:1]  # only the project board: its folder has one, the other doesn't
+        try:
+            page.locator("#new-board").click()
+            page.wait_for_selector("#board-dialog[open]")
+            page.wait_for_selector("#b-folder-list:not([hidden])")
+            listed = page.locator("#b-folder-list .combo-item").all_inner_texts()
+            suggested = page.locator("#b-suggest .btn").all_inner_texts()
+        finally:
+            BOARDS[:] = kept
+        check(name, listed == [OTHER] and suggested == [OTHER], (listed, suggested))
+
     check("page: no script errors", not page.errors, "; ".join(page.errors))
     page.context.close()
 
@@ -1394,6 +1581,24 @@ def checks_narrow(browser):
                         at('label[for="n-effort-0"]').top, at('#n-model-0').top]; })()""")
             check(name, effort_label == model_label and (model_label >= role_end + 8 if w <= 600 else abs(model - role) < 1),
                   (role, role_end, model_label, effort_label, model))
+        name = f"narrow {w} px: the top bar's New board button can be clicked" + (" with the details open" if w == 800 else "")
+        with step(page, name):
+            if w == 800:  # at phone width the details cover the top bar like a sheet
+                open_card(page, A)
+            page.locator("#new-board").click()  # fails if anything covers it
+            page.wait_for_selector("#board-dialog[open]")
+            check(name, True)
+        name = f"narrow {w} px: the Board picker's list" + (" opens over the details, with New board… in reach" if w == 800 else " stays on the screen")
+        with step(page, name):
+            if w == 800:
+                open_card(page, A)
+            page.locator("#board-select").click()
+            page.wait_for_selector("#board-select-menu:popover-open")
+            box = page.evaluate("""(() => { const m = document.querySelector('#board-select-menu').getBoundingClientRect();
+                const r = document.querySelector('#board-select-menu .menu-item.action').getBoundingClientRect();
+                return [m.left >= 0 && m.right <= innerWidth && m.bottom <= innerHeight,
+                        !!document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.closest('.menu-item.action')]; })()""")
+            check(name, box == [True, True], box)
         name = f"narrow {w} px: no sideways scrolling"
         with step(page, name):
             check(name, page.evaluate("document.documentElement.scrollWidth <= innerWidth"))

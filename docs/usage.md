@@ -10,10 +10,16 @@ What each part of the board does, from boards and arrows to a chat's details.
   next to a folder opens [New agent](#new-agent) on that folder.
 - **New board** takes any existing folder (`C:\...`, `/mnt/c/...`, `~/...`),
   typed or picked with **Browse…**, or picked from its drop-down list of
-  folders with running sessions. It suggests those that have no board yet
-  (other chats' worktrees left out). A folder has one board, so **New board**
-  on a folder that has one opens it.
-- Switch boards with **Board** in the top bar.
+  folders with running sessions. The list and the suggestions under it are
+  the folders that have no board yet (other chats' worktrees left out); when
+  every folder with running sessions has one, it says so, and **Browse…** or
+  a typed path reaches any other. A folder has one board, so **New board**
+  on a folder that has one opens that board and says so.
+- Switch boards with **Board** in the top bar: it opens a list of the boards,
+  the current one ticked, each with its folder under its name. Click a board,
+  or move with ↑ ↓ and press Enter; Esc or a click elsewhere closes the list.
+  **New board…**, under the list, and the **New board** button beside **Fit
+  view** both open the New board dialog.
 - Under *Board folder*:
   - **Change folder** points the board at another folder: sessions there
     join it, and the cards and arrows already on it stay.
@@ -415,7 +421,7 @@ instead (once), so the banner only ever means the server.
 
 ## Glass and fonts
 
-The sidebar, the top bar, the details and the dialogs are glass over the
+The sidebar, the top bar, the Board list, the details and the dialogs are glass over the
 board. In Chromium browsers (Chrome, Edge …) the board bends at each panel's
 edge; other browsers show a plain blur. With reduced transparency on in your
 system the panels are solid (in browsers that report that setting, such as

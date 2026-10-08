@@ -123,12 +123,12 @@ h2 { font-size: 12px; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
   display: inline-flex; align-items: center; justify-content: center;
 }
 .icon-btn:hover { color: var(--text); background: var(--panel-2); }
-:is(.btn, .icon-btn, .fold, .browse-item, summary, .node, .wire-label):focus-visible {
+:is(.btn, .icon-btn, .fold, .browse-item, summary, .node, .wire-label, .board-pick):focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
 
 /* Drop-downs stay native selects (the keyboard and the system's own menu work as
-   they do everywhere), drawn as the app's fields: a fill, round corners, the
+   they do everywhere), except the Board picker's (dropMenu in app.js), drawn as the app's fields: a fill, round corners, the
    shared chevron and, focused, the accent halo of the Send box. */
 select {
   -webkit-appearance: none; appearance: none;
@@ -153,8 +153,13 @@ select option { background: var(--panel); color: var(--text); }
   border-bottom: 1px solid var(--border);
 }
 .brand { margin: 0; font-weight: 650; font-size: 15px; }
-.board-pick { display: flex; align-items: center; gap: 6px; color: var(--muted); }
-.board-pick select { max-width: 280px; }
+.board-pick { display: flex; align-items: center; gap: 6px; color: var(--muted); font: inherit; cursor: pointer; }
+.board-pick strong { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-weight: 600; }
+.board-pick::after {  /* the shared chevron, turned up while its list is open */
+  content: ""; flex: none; width: 12px; height: 12px; background: var(--chev) center / 12px no-repeat; transition: transform .15s ease;
+}
+.board-pick[aria-expanded="true"]::after { transform: rotate(180deg); }
+.board-pick:disabled { opacity: .5; cursor: default; }
 .spacer { flex: 1; }
 .hint { color: var(--muted); font-size: 13px; }
 .hint-port { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); vertical-align: -1px; }
@@ -712,7 +717,7 @@ body { position: relative; }
 #empty { left: calc(var(--side) + 24px); }
 
 .sidebar, #drawer, dialog,
-.topbar .board-pick, .topbar .seg, .topbar .hint, #appearance {
+.topbar .board-pick, .topbar .seg, .topbar .hint, #appearance, .menu {
   background: rgb(var(--glass-rgb) / var(--ga));
   border: 1px solid var(--glass-edge);
   /* light from the top left: a bright rim there, a fainter one bottom right,
@@ -755,11 +760,8 @@ body:has(#drawer:not([hidden])) .topbar { right: calc(var(--drawer) + 24px); }
 .topbar .hint { gap: 5px; }  /* a flex row drops the spaces around the handle dot */
 .topbar .hint { pointer-events: none; }  /* only words: the board under it stays draggable */
 #drawer:focus { outline: none; }  /* focused as a whole when opened from the keyboard */
-.topbar .board-pick select {
-  background-color: transparent; border: 0; font-weight: 600; padding: 4px 20px 4px 2px; background-position: right 2px center;
-}
 .topbar .board-pick { transition: background-color .15s ease; }
-.topbar .board-pick:hover { background: rgb(var(--glass-rgb) / calc(var(--ga) * .9)); }
+.topbar .board-pick:hover:not(:disabled), .topbar .board-pick[aria-expanded="true"] { background: rgb(var(--glass-rgb) / calc(var(--ga) * .9)); }
 .topbar .btn.primary { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35), 0 6px 18px rgba(0, 102, 204, .28); }
 @media (max-width: 900px) { .topbar .hint { display: none; } }
 
@@ -932,7 +934,7 @@ details.n-agent[open] :is(.n-agent-peek, .n-agent-model) { display: none; }
 .node.selected { box-shadow: 0 0 0 3px var(--accent-soft), var(--card-shadow); }
 
 @media (prefers-reduced-transparency: reduce) {
-  .sidebar, #drawer, dialog, .topbar .board-pick, .topbar .seg, .topbar .hint, #appearance {
+  .sidebar, #drawer, dialog, .topbar .board-pick, .topbar .seg, .topbar .hint, #appearance, .menu {
     background: var(--panel) !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
   }
 }
@@ -951,6 +953,24 @@ details.n-agent[open] :is(.n-agent-peek, .n-agent-model) { display: none; }
   background: rgb(var(--glass-rgb) / calc(var(--ga) + .3));
 }
 #appearance h2 { margin-bottom: 10px; }
+/* A drop-down as glass (dropMenu in app.js): a small panel under its button, as the gear's, its rows as
+   the app's lists: the one under the pointer or the keys in blue, a tick on the current one, and
+   what isn't a choice (New board…) under a thin divider as the top bar's buttons have. */
+.menu {
+  position: fixed; inset: auto; margin: 0; padding: 6px; box-sizing: border-box; border-radius: 22px; color: var(--text);
+  width: max-content; max-width: min(380px, calc(100vw - 24px)); max-height: min(60vh, 420px); overflow-y: auto;
+  background: rgb(var(--glass-rgb) / calc(var(--ga) + .3));
+}
+.menu-item { position: relative; padding: 8px 14px 8px 34px; border-radius: 16px; cursor: pointer; }
+.menu-item.active { background: var(--accent-soft); }
+.menu-item.current::before, .menu-item.action::before {
+  content: ""; position: absolute; left: 12px; top: 11px; width: 14px; height: 14px; background: var(--accent);
+  -webkit-mask: var(--mark) center / 14px no-repeat; mask: var(--mark) center / 14px no-repeat;
+}
+.menu-item.current { --mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 7.5 5.5 10.5 11.5 3.5'/%3E%3C/svg%3E"); }
+.menu-item.action { --mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M7 2.5v9M2.5 7h9'/%3E%3C/svg%3E"); }
+.menu-sub { display: block; font-size: 12px; line-height: 1.35; color: var(--quiet); }
+.menu-sep { height: 1px; margin: 6px 10px; background: var(--glass-edge); }
 #board-folder { padding: 8px 10px; border-radius: 10px; background: var(--field); color: var(--text); }
 /* Activity sits at the bottom; opened, its list grows downward and the sidebar
    scrolls (anchoring the section's content to the bottom made it spill upward) */
@@ -988,7 +1008,7 @@ dialog h2 { font-size: 22px; font-weight: 700; letter-spacing: -.3px; }
 /* Paths read as text, not code: the UI font, wrapping only between folder
    names (each is a span from app.js), inside one only if it is too long. */
 #board-folder, .folder-name, #drawer dd.path { font-family: inherit; word-break: normal; line-height: 1.4; }
-:is(#board-folder, .folder-name, #drawer dd.path) .seg { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
+:is(#board-folder, .folder-name, #drawer dd.path, .menu-sub) .seg { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
 
 /* ----------------------------------------------------------------- Fonts
    Each system's own UI font: SF Pro on a Mac; Segoe UI Variable on Windows 11
@@ -1035,7 +1055,7 @@ body { font-family: var(--font-ui); }
 @keyframes sub-pulse { 50% { box-shadow: 0 0 0 5px var(--accent-soft); } }
 @media (prefers-reduced-motion: reduce) {
   .sub, .sub .dot, .running-now i, .state-icon .arc, .sub-step.now.running::before { animation: none; }
-  select, details > summary::before, .agents-line::after, .combo-toggle::before, .agent-row, .conn-row, .chip-link, .topbar .board-pick { transition: none; }
+  select, details > summary::before, .agents-line::after, .combo-toggle::before, .agent-row, .conn-row, .chip-link, .topbar .board-pick, .board-pick::after { transition: none; }
 }
 .sub.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft), var(--card-shadow); }
 /* a subagent's details: how it stands and what it ran on, as a short list of

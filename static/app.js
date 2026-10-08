@@ -228,11 +228,107 @@ async function start() {
   selectBoard(ids.includes(wanted) ? wanted : ids[0]);
 }
 
+// A drop-down drawn as glass, in place of a native <select> (the browser draws
+// that list flat and square). `button` opens it and keeps the focus: ↑ ↓ Home
+// End move through the rows, Enter or Space picks, Esc or a click elsewhere
+// closes. fill() sets the rows: items ({ value, text, sub, title, current };
+// sub is a quiet second line, a folder wrapping between its names; picking the
+// current one only closes the list) and, under a thin divider, actions
+// ({ text, run }). onpick(value) gets the item picked.
+function dropMenu(button, onpick) {
+  const menu = el("div", { id: `${button.id}-menu`, class: "menu", role: "listbox", popover: "auto" });
+  button.setAttribute("popovertarget", menu.id);
+  document.body.append(menu);
+  let list = [], rows = [], active = -1, shape = "", lensed = false, spaceKept = false;
+  const isOpen = () => menu.matches(":popover-open");
+  const mark = (i) => {
+    active = i;
+    rows.forEach((row, k) => row.classList.toggle("active", k === i));
+    if (rows[i]) button.setAttribute("aria-activedescendant", rows[i].id);
+    else button.removeAttribute("aria-activedescendant");
+  };
+  const pick = (i) => {
+    menu.hidePopover();
+    if (!list[i].current) list[i].pick();
+  };
+  menu.addEventListener("beforetoggle", (e) => {
+    button.setAttribute("aria-expanded", String(e.newState === "open"));
+    if (e.newState !== "open") return;
+    if (!lensed) { lensed = true; glass(menu, { scale: 14, blur: 6 }); }
+    const r = button.getBoundingClientRect();
+    menu.style.minWidth = `${Math.round(r.width)}px`;
+    menu.style.display = "block";  // measured before it is drawn, to keep it on screen
+    const w = menu.offsetWidth;
+    menu.style.display = "";
+    menu.style.left = `${Math.max(12, Math.min(r.left, innerWidth - w - 12))}px`;
+    menu.style.top = `${Math.round(r.bottom + 8)}px`;
+    mark(Math.max(0, list.findIndex((o) => o.current)));
+  });
+  menu.addEventListener("toggle", (e) => {
+    if (e.newState === "open") rows[active]?.scrollIntoView({ block: "nearest" });
+    else mark(-1);
+  });
+  button.setAttribute("aria-expanded", "false");
+  button.addEventListener("keydown", (e) => {
+    if (e.isComposing || e.altKey || e.ctrlKey || e.metaKey) return;
+    const open = isOpen();
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!open) menu.showPopover();
+      else if (rows.length) mark((active + (e.key === "ArrowDown" ? 1 : rows.length - 1)) % rows.length);
+    } else if (open && (e.key === "Home" || e.key === "End")) {
+      e.preventDefault();
+      mark(e.key === "Home" ? 0 : rows.length - 1);
+    } else if (open && (e.key === "Enter" || e.key === " ")) {
+      e.preventDefault();  // not a press of the button, which would close it unpicked
+      spaceKept = e.key === " ";
+      if (rows[active]) pick(active);
+      else menu.hidePopover();
+    } else if (open && e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();  // closes the list only, not the details behind it
+      menu.hidePopover();
+    } else if (open && e.key === "Tab") {
+      menu.hidePopover();
+    }
+  });
+  button.addEventListener("keyup", (e) => {
+    if (e.key === " " && spaceKept) { spaceKept = false; e.preventDefault(); }  // a Space press clicks on release
+  });
+  addEventListener("resize", () => { if (isOpen()) menu.hidePopover(); });
+  return {
+    fill({ items, actions = [] }) {
+      list = [...items.map((o) => ({ ...o, pick: () => onpick(o.value) })), ...actions.map((o) => ({ ...o, pick: o.run, action: true }))];
+      const next = JSON.stringify([items, actions.map((o) => o.text)]);
+      if (next === shape) return;  // a refresh that changes nothing leaves the open list as it is
+      shape = next;
+      menu.replaceChildren(...list.flatMap((o, i) => [
+        ...(o.action && i > 0 && !list[i - 1].action ? [el("div", { class: "menu-sep", role: "separator" })] : []),
+        el("div", {
+          id: `${menu.id}-${i}`, role: "option", class: `menu-item${o.current ? " current" : ""}${o.action ? " action" : ""}`,
+          title: o.title, "aria-selected": String(!!o.current),
+          onpointerdown: (e) => e.preventDefault(),  // the focus stays on the button
+          onpointermove: () => { if (active !== i) mark(i); },
+          onclick: () => pick(i),
+        }, el("span", { text: o.text }), o.sub && el("span", { class: "menu-sub" }, pathNodes(o.sub))),
+      ]));
+      rows = [...menu.querySelectorAll(".menu-item")];
+      if (active >= 0) mark(Math.min(active, rows.length - 1));
+    },
+  };
+}
+
+// The top bar's Board picker: the boards (the current one ticked) and, under
+// them, New board….
+const boardMenu = dropMenu($("#board-select"), (id) => selectBoard(id));
+
 function fillBoardSelect(boards) {
-  const sel = $("#board-select");
-  sel.replaceChildren(...boards.map((b) =>
-    el("option", { value: b.id, text: b.title, title: b.folder, selected: b.id === state.boardId })));
-  sel.disabled = boards.length === 0;
+  $("#board-name").textContent = boards.find((b) => b.id === state.boardId)?.title || "";
+  $("#board-select").disabled = boards.length === 0;
+  boardMenu.fill({
+    items: boards.map((b) => ({ value: b.id, text: b.title, sub: b.folder, title: b.folder, current: b.id === state.boardId })),
+    actions: [{ text: "New board…", run: newBoard }],
+  });
 }
 
 function selectBoard(id) {
@@ -2012,7 +2108,7 @@ function folderCombo(ui) {
       }))
       : [el("li", { class: "combo-empty muted small", text: ui.choices.length
         ? "No folder here matches; type the whole path or use Browse…."
-        : "No folders with running chats; type one or use Browse…." })]));
+        : ui.none || "No folders with running chats; type one or use Browse…." })]));
     list.hidden = false;
     expanded(true);
     mark();
@@ -2078,7 +2174,8 @@ function openBoardDialog(folders, boards, places = [], board = null) {
   folders = ownFolders(folders);
   const have = new Set(boards.map((b) => b.folder));
   const free = folders.filter((f) => !have.has(f));
-  pickers.board.choices = folders;
+  pickers.board.choices = free;  // a folder that has a board would only open that board
+  pickers.board.none = folders.length ? "Every folder with running chats already has a board; type another or use Browse…." : null;
   pickers.board.close();
   $("#b-places").replaceChildren(...placeButtons(places, pickers.board));
   $("#b-suggest").replaceChildren(
@@ -2122,14 +2219,16 @@ async function browse(path, ui = pickers.board) {
 $("#b-browse").addEventListener("click", () => browse($("#b-folder").value.trim()));
 $("#n-browse").addEventListener("click", () => browse(nd.folder.value.trim(), pickers.agent));
 
-$("#new-board").addEventListener("click", async () => {
+// New board: the top bar's button, and the Board picker's last row.
+async function newBoard() {
   try {
     const data = await api("/api/state");
     openBoardDialog(data.folders, data.boards, data.places);
   } catch (e) {
     toast(failText(e), "error");
   }
-});
+}
+$("#new-board").addEventListener("click", newBoard);
 
 $("#change-folder").addEventListener("click", async () => {
   const board = state.view?.board;
@@ -2156,6 +2255,7 @@ $("#board-form").addEventListener("submit", async (evt) => {
     }
     const res = await api("/api/boards", { folder });
     $("#board-dialog").close();
+    if (state.view?.boards.some((b) => b.id === res.id)) toast("That folder already has a board, so it's open.", "ok");
     selectBoard(res.id);
   } catch (e) {
     $("#b-error").textContent = failText(e);
@@ -2163,7 +2263,6 @@ $("#board-form").addEventListener("submit", async (evt) => {
   }
 });
 
-$("#board-select").addEventListener("change", (evt) => selectBoard(evt.target.value));
 for (const btn of document.querySelectorAll("[data-close]")) {
   btn.addEventListener("click", () => btn.closest("dialog").close());
 }
