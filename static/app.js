@@ -996,6 +996,7 @@ function renderAgentsPop() {
   if (!n) return closeAgentsPop();
   const data = state.agents[n.sessionId];
   const { count, running } = data && !data.error ? agentCounts(data) : {};
+  const moveFocusTo = data && !data.error ? leaveGone(p, data) : undefined;
   // the title above the list stays; under it the chat, how many agents and how many run
   const note = [display(n), count != null && `${count} agent${count === 1 ? "" : "s"}`, running && `${running} running`]
     .filter(Boolean).join(" · ");
@@ -1003,6 +1004,36 @@ function renderAgentsPop() {
   $("#agents-pop").dataset.pane = p.pane;
   swapChildren($("#agents-pop-list"), agentsPopList(n).filter(Boolean));
   swapChildren($("#agents-pop-detail"), agentsPopDetail(data).filter(Boolean));
+  if (moveFocusTo != null) {
+    (moveFocusTo ? document.getElementById(`agent-row-${moveFocusTo}`) : $("#agents-pop-list"))?.focus({ preventScroll: true });
+  }
+}
+
+// An agent that has dropped out of its chat's list (a workflow retried it) can't
+// stay picked or hold the keyboard: the pick and the focus go to the next row in
+// view, else the one before. With none left, nothing is picked and the focus goes
+// to the list (the arrows go on from there). Returns the id of the row the focus
+// should go to after the redraw ("" for the list), or nothing when it needn't move.
+function leaveGone(p, data) {
+  const listed = new Set(everyAgent(data).map((a) => a.id));
+  const held = document.activeElement?.closest?.("#agents-pop-list .agent-row")?.dataset.agent;
+  const pickGone = p.sub && !listed.has(p.sub.id), heldGone = held && !listed.has(held);
+  if (!pickGone && !heldGone) return;
+  const left = [...document.querySelectorAll("#agents-pop-list .agent-row")]
+    .filter((r) => listed.has(r.dataset.agent) && !r.closest("details:not([open])"));
+  const near = (id) => {
+    const gone = document.getElementById(`agent-row-${id}`);
+    const side = (bit) => left.filter((r) => gone?.compareDocumentPosition(r) & bit);
+    return side(Node.DOCUMENT_POSITION_FOLLOWING)[0] || side(Node.DOCUMENT_POSITION_PRECEDING).at(-1);
+  };
+  if (pickGone) {
+    const to = near(p.sub.id);
+    clearTimeout(p.loadTimer);  // a pick by key may still be waiting to ask for it
+    p.sub = to ? { id: to.dataset.agent, label: to.querySelector(".agent-label").textContent } : null;
+    if (to) loadPopSub();
+    else p.pane = "list";
+  }
+  if (heldGone) return near(held)?.dataset.agent ?? "";
 }
 
 function closeAgentsPop() {
@@ -1076,6 +1107,7 @@ $("#agents-pop-list").addEventListener("keydown", (e) => {
   if (!rows.length || !["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key) || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
   const from = document.activeElement, on = rows.indexOf(from);
   const after = rows.findIndex((r) => from.compareDocumentPosition(r) & Node.DOCUMENT_POSITION_FOLLOWING);
+  if (e.key === "ArrowDown" && on < 0 && after < 0) return;  // a header below the last row: nowhere further down
   const at = on >= 0 ? on : (after < 0 ? rows.length : after) - (e.key === "ArrowDown" ? 1 : 0);
   const to = { ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: rows.length - 1 }[e.key];
   e.preventDefault();
@@ -1085,7 +1117,9 @@ $("#agents-pop-list").addEventListener("keydown", (e) => {
 });
 
 async function loadPopSub() {
-  const p = state.popAgents;
+  const p = state.popAgents, data = p && state.agents[p.sid];
+  // not for an agent that is no longer in its chat's list
+  if (!p?.sub || (data && !data.error && !everyAgent(data).some((a) => a.id === p.sub.id))) return;
   await loadSub({ parent: p.sid, ...p.sub });
   renderAgentsPop();
 }
@@ -1440,7 +1474,6 @@ const fmtDur = (ms) => {
   return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 };
 const fmtCount = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
-const fmtTok = (n) => n == null ? null : `${fmtCount(n)} tokens`;
 
 function modelName(m) {
   const hit = /claude-(opus|sonnet|haiku|fable)-(\d+)-(\d+)/.exec(m || "");

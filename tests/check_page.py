@@ -97,7 +97,9 @@ AGENTS = {"sessionId": B, "live": True,
 def subagent(agents, aid):
     """What /api/subagent says about one of those agents."""
     flat = [(a, r) for r in agents["workflows"] for a in r["agents"]] + [(d, None) for d in agents["direct"]]
-    a, run = next(x for x in flat if x[0]["id"] == aid)
+    a, run = next((x for x in flat if x[0]["id"] == aid), (None, None))
+    if not a:
+        return None  # the server says 404: no such agent
     now = int(time.time() * 1000)
     return {"id": aid, "label": a.get("label") or a["description"], "state": a["state"], "model": a["model"],
             "durationMs": a["durationMs"], "tokens": a["tokens"], "workflow": run and run["name"], "phase": a.get("phase"),
@@ -122,6 +124,7 @@ class FakeAPI:
         self.arrows = []        # more arrows on the project board
         self.agents = None      # every chat's agents (like AGENTS above); none by default
         self.hold_sub = False   # an agent's details wait in .held until the check sends them
+        self.sub_asked = []     # the agents whose details were asked for
 
     def chat(self, sid):
         self.asked += 1
@@ -164,8 +167,11 @@ class FakeAPI:
         elif path == "/api/agents":
             data = self.agents or {"sessionId": q.get("session"), "live": True, "direct": [], "workflows": []}
         elif path == "/api/subagent":
+            self.sub_asked.append(q.get("agent"))
             if self.agents:
                 data = subagent(self.agents, q.get("agent"))
+                if not data:
+                    return route.fulfill(status=404, content_type="application/json", body=json.dumps({"error": "No such agent"}))
                 if self.hold_sub:
                     return self.held.append((route, data))
             else:  # no made-up agents: the one fixed subagent
@@ -236,6 +242,7 @@ def open_agents(page, sid=B, agents=None):
     """A chat's details with the made-up agents (AGENTS, or the ones given), then the pop-up that lists them."""
     page.api.agents = copy.deepcopy(agents or AGENTS)
     open_card(page, sid)
+    page.evaluate(f"loadDetails('{sid}')")  # the agents of this card, not those of the check before
     page.locator("#drawer-body .agents-line").click()
     page.wait_for_selector("#agents-pop[open] .agent-row")
 
@@ -641,6 +648,52 @@ def checks_wide(browser):
         page.keyboard.press("ArrowDown")
         down = picked_agent(page)
         check(name, stops == ["agent-row-d1"] == [reached] and down == "Fix the poll loop", (stops, reached, down))
+
+    name = "agents: ↓ on the header of a folded last card leaves the pick where it is, ↑ goes to the row above"
+    with step(page, name):
+        page.evaluate("state.runOpen = {}")  # no card folded by an earlier check
+        open_agents(page)
+        page.locator("#agents-pop details.run > summary").nth(1).click()  # folds Subagents, the last card
+        page.wait_for_function("document.querySelectorAll('#agents-pop details.run')[1].open === false")
+        page.locator("#agents-pop details.run > summary").nth(1).focus()
+        start = picked_agent(page)
+        page.keyboard.press("ArrowDown")
+        page.wait_for_timeout(300)  # longer than a pick by key waits to ask for details
+        down = (picked_agent(page), page.evaluate("document.activeElement.tagName"))
+        page.keyboard.press("ArrowUp")
+        up = picked_agent(page)
+        page.evaluate("state.runOpen = {}")
+        check(name, start == down[0] == "review:perf" and down[1] == "SUMMARY" and up == "verify:app.js", (start, down, up))
+
+    name = "agents: an agent that drops out of the list leaves its pick and its focus to the next row, else the one before, else the list"
+    with step(page, name):
+        page.evaluate("state.runOpen = {}")
+        open_agents(page)  # picked and focused: review:perf
+        page.wait_for_function("document.activeElement.id === 'agent-row-a2'")
+        del page.api.agents["workflows"][0]["agents"][1]  # a workflow retried it
+        poll(page)
+        page.wait_for_function("document.activeElement.id === 'agent-row-a3'")
+        page.wait_for_function("document.querySelector('#agents-pop-detail h3')?.textContent === 'review:security'")
+        page.wait_for_timeout(200)  # the poll that found it gone may have asked once more
+        page.api.sub_asked.clear()
+        poll(page, 2)
+        page.wait_for_timeout(200)
+        asked = list(page.api.sub_asked)
+        forward = (picked_agent(page), page.evaluate("document.activeElement.id"))
+        page.keyboard.press("ArrowDown")  # the keys go on from there
+        next_one = picked_agent(page)
+        page.keyboard.press("End")  # the last row picked, then gone: the one before it
+        del page.api.agents["direct"][1]
+        poll(page)
+        page.wait_for_function("document.activeElement.id === 'agent-row-d1'")
+        before_last = picked_agent(page)
+        page.api.agents["workflows"].clear()  # and the rest
+        page.api.agents["direct"].clear()
+        poll(page)
+        page.wait_for_function("document.activeElement.id === 'agents-pop-list'")
+        page.wait_for_function("document.querySelector('#agents-pop-detail')?.textContent.includes('No agents to show')")
+        check(name, forward == ("review:security", "agent-row-a3") and set(asked) == {"a3"} and next_one == "verify:server.py"
+              and before_last == "Fix the poll loop", (forward, asked, next_one, before_last))
 
     name = "agents: a card folded earlier unfolds for the running agent the pop-up opens on, and the keyboard is there"
     with step(page, name):

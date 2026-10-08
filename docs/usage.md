@@ -260,7 +260,10 @@ the pop-up.
 
 With the keyboard: Tab enters the list at the picked row, ↑ and ↓ move the
 pick (also from a card's header or its button), Home and End go to the first
-and last row in view, and Enter or Space pick the row in focus.
+and last row in view, and Enter or Space pick the row in focus. If the agent
+picked (or the one in focus) drops out of the list, say because a workflow
+started it over, the pick and the focus move to the next agent, else the one
+before, and the arrows go on from there.
 
 ### Continue in IDE
 
