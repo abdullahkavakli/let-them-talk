@@ -5,3 +5,4 @@
 - `WINDOW_MS` in `hooks/register.ts` (milliseconds) must be the same length of time as `MOD_WINDOW` in `server.py` (seconds).
 - Validate, from the repo root: `claude plugin validate mods/let-them-talk-suggestions`. Its warning that `CLAUDE.md` isn't loaded as plugin context is expected: that file is for chats editing this folder, so keep it. (Its tests are in the root `AGENTS.md`.)
 - `tsconfig.json` and `.claude-plugin/types/` are written by Claude Code when it loads the mod (gitignored): don't edit or commit them.
+- People install it from the repo's plugin marketplace (`.claude-plugin/marketplace.json` at the repo root, which lists this mod only: the app loads the handoff mod itself). Validate it from the repo root: `claude plugin validate .`.

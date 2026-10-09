@@ -1,5 +1,9 @@
 {
   "name": "let-them-talk-suggestions",
   "version": "0.1.0",
-  "description": "Sends Claude Code's suggested next prompt to Let Them Talk, so its Send box shows the same suggestion, runs a Chat in IDE started from it on the model picked there, and in a background agent runs /effort status after an ultracode switch made while it works, so the app can read it."
+  "description": "Sends Claude Code's suggested next prompt to Let Them Talk, so its Send box shows the same suggestion, runs a Chat in IDE started from it on the model picked there, and in a background agent runs /effort status after an ultracode switch made while it works, so the app can read it.",
+  "author": { "name": "Abdullah KAVAKLI" },
+  "homepage": "https://github.com/abdullahkavakli/let-them-talk",
+  "repository": "https://github.com/abdullahkavakli/let-them-talk",
+  "license": "Apache-2.0"
 }

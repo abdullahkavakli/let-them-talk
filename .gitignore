@@ -12,3 +12,5 @@ mods/*/.claude-plugin/types/
 mods/*/tsconfig.json
 # The page checks' browser (tests/setup.sh)
 tests/.venv/
+# Built packages (uv build)
+dist/

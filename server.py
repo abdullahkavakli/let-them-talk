@@ -8,11 +8,20 @@ sends them prompts and messages. Messages go through a short headless Claude
 run, the relay, which calls SendMessage. Standard library only.
 
 Run:  python3 server.py      then open http://localhost:8765
+      let-them-talk          (the installed package) also opens the page
 """
+import sys
+
+if sys.platform == "win32":  # before fcntl and termios, which Windows doesn't have
+    sys.exit("Let Them Talk runs inside WSL on Windows: open a WSL terminal and run it there.")
+
+import argparse
 import base64
 import csv
+import errno
 import fcntl
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -29,16 +38,33 @@ import time
 import traceback
 import unicodedata
 import uuid
+import webbrowser
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-APP_DIR = Path(__file__).resolve().parent
+
+def data_dir(app_dir, installed, env, home):
+    """Where the app keeps what it writes (boards/, logs/): LTT_DATA when set;
+    else, for the installed package, a folder of the user's own (XDG_DATA_HOME,
+    else ~/.local/share, on macOS too); else, in a checkout or a copy run with
+    python3 server.py, the app's own folder."""
+    if env.get("LTT_DATA"):
+        return Path(os.path.abspath(Path(env["LTT_DATA"]).expanduser()))
+    if installed:
+        xdg = env.get("XDG_DATA_HOME") or ""
+        return (Path(xdg) if os.path.isabs(xdg) else home / ".local" / "share") / "let-them-talk"
+    return app_dir
+
+
+APP_DIR = Path(__file__).resolve().parent  # the code: static/ and mods/ are read from here
+INSTALLED = __package__ == "let_them_talk"  # imported from the PyPI package, not run as a file
+DATA_DIR = data_dir(APP_DIR, INSTALLED, os.environ, Path.home())  # what is written goes here
 STATIC_DIR = APP_DIR / "static"
-BOARDS_DIR = APP_DIR / "boards"
-LOG_FILE = APP_DIR / "logs" / "relay.jsonl"
+BOARDS_DIR = DATA_DIR / "boards"
+LOG_FILE = DATA_DIR / "logs" / "relay.jsonl"
 
 
 
@@ -451,7 +477,7 @@ def ultracode_state(s):
 # process: it counts only while that pid runs the chat (a running chat's
 # registry file always names its pid), and ultracode_state drops one from
 # before that process started (a pid used again).
-ULTRA_FILE = APP_DIR / "logs" / "ultracode.json"
+ULTRA_FILE = DATA_DIR / "logs" / "ultracode.json"
 ULTRA_KEEP = 30 * 86400  # seconds a switch is kept: a background agent can run for days
 ultra_switched = {}  # sessionId -> (on, at, pid): its newest one, and the process that had it
 ultra_file_lock = threading.Lock()
@@ -476,7 +502,7 @@ def _ultra_switch(sid, on, at, pid):
         for old in [k for k, v in ultra_switched.items() if v[1] < cutoff]:
             del ultra_switched[old]
         try:
-            ULTRA_FILE.parent.mkdir(exist_ok=True)
+            ULTRA_FILE.parent.mkdir(parents=True, exist_ok=True)
             tmp = ULTRA_FILE.with_suffix(".tmp")
             tmp.write_text(json.dumps({k: list(v) for k, v in ultra_switched.items()}), encoding="utf-8")
             tmp.replace(ULTRA_FILE)
@@ -722,7 +748,7 @@ def _ask_haiku(cache, key, system, text, name):
             proc = run_claude(["-p", "--model", RELAY_MODEL, "--name", f"{RELAY_NAME}-{name}",
                                "--tools", "", "--no-session-persistence", "--output-format", "json",
                                "--system-prompt", system],
-                              cwd=APP_DIR, timeout=TLDR_TIMEOUT, input_text=text)
+                              cwd=DATA_DIR, timeout=TLDR_TIMEOUT, input_text=text)
             res = json.loads(proc.stdout)
             out = str(res.get("result") or "").replace("`", "").replace("**", "").strip()
             if out and not res.get("is_error"):
@@ -751,7 +777,7 @@ def _tldr_for(reply):
                          f"<reply>\n{_clip(reply['text'])}\n</reply>", "tldr")
 
 
-SUGGEST_FILE = APP_DIR / "logs" / "suggestions.json"  # so a server restart loses none
+SUGGEST_FILE = DATA_DIR / "logs" / "suggestions.json"  # so a server restart loses none
 SUGGEST_KEEP = 86400  # seconds an entry is kept on disk
 suggest_lock = threading.Lock()
 
@@ -772,7 +798,7 @@ def _save_suggestions():
             for sid in [k for k, v in table.items() if when(v) < cutoff]:
                 del table[sid]
         try:
-            SUGGEST_FILE.parent.mkdir(exist_ok=True)
+            SUGGEST_FILE.parent.mkdir(parents=True, exist_ok=True)
             tmp = SUGGEST_FILE.with_suffix(".tmp")
             tmp.write_text(json.dumps({"own": own_suggest, "mod": has_mod}), encoding="utf-8")
             tmp.replace(SUGGEST_FILE)
@@ -804,7 +830,7 @@ def mod_hello(body):
     return {"ok": True}
 
 
-MODELS_FILE = APP_DIR / "logs" / "models.json"
+MODELS_FILE = DATA_DIR / "logs" / "models.json"
 MODELS_KEEP = 7 * 86400  # a chat resumed within a week still runs on it
 chat_models = {}  # sessionId -> {"model", "at"}: a Chat in IDE started with a model (see the mod)
 MODEL_RE = re.compile(r"[\w.\[\]-]{1,60}")
@@ -825,7 +851,7 @@ def set_chat_model(sid, model):
             del chat_models[old]
         chat_models[sid] = {"model": model, "at": time.time()}
         try:
-            MODELS_FILE.parent.mkdir(exist_ok=True)
+            MODELS_FILE.parent.mkdir(parents=True, exist_ok=True)
             tmp = MODELS_FILE.with_suffix(".tmp")
             tmp.write_text(json.dumps(chat_models), encoding="utf-8")
             tmp.replace(MODELS_FILE)
@@ -851,7 +877,7 @@ def resolve_model(model):
     try:
         proc = subprocess.Popen([CLAUDE_BIN, "-p", "--model", model, "--output-format", "stream-json", "--verbose",
                                  "--no-session-persistence", "--tools", ""],
-                                cwd=str(APP_DIR), env=claude_env(), stdin=subprocess.PIPE,
+                                cwd=str(DATA_DIR), env=claude_env(), stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     except OSError:
         return None
@@ -2207,7 +2233,7 @@ def relay_send(items):
     states = [{"state": "failed", "detail": "the relay made no SendMessage call"} for _ in items]
     meta = {"cost_usd": None, "seconds": None, "error": None}
     try:
-        proc = subprocess.Popen(cmd, cwd=APP_DIR, stdin=subprocess.DEVNULL, env=claude_env(),
+        proc = subprocess.Popen(cmd, cwd=DATA_DIR, stdin=subprocess.DEVNULL, env=claude_env(),
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     except OSError as e:
         meta["error"] = f"could not start claude: {e}"
@@ -2274,7 +2300,7 @@ def relay_send(items):
             elif proc.returncode:
                 states[i]["detail"] = (err or "").strip()[:400] or f"claude exited {proc.returncode}"
 
-    LOG_FILE.parent.mkdir(exist_ok=True)
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     with LOG_FILE.open("a", encoding="utf-8") as log:
         log.write(json.dumps({"t": time.time(), "items": items, "states": states,
                               "meta": meta}, ensure_ascii=False) + "\n")
@@ -2723,6 +2749,13 @@ def open_in_editor(editor, folder):
         return {"opened": False, "command": command}
 
 
+def windows_link_opener():
+    """The command that opens a link through Windows, from WSL. Windows' own
+    link handler takes it whole; explorer.exe drops a link with a query
+    (?session=) without a word, and cmd's start would split it at &."""
+    return [shutil.which("rundll32.exe") or "/mnt/c/Windows/System32/rundll32.exe", "url.dll,FileProtocolHandler"]
+
+
 def open_editor_link(editor, **params):
     """Open <editor>://anthropic.claude-code/open (?session=, ?prompt=) in the
     editor window in front, as a click on the link would. Each value is encoded
@@ -2730,10 +2763,7 @@ def open_editor_link(editor, **params):
     reads it). Returns whether it could."""
     query = "&".join(f"{k}={quote(quote(str(v), safe=''), safe='')}" for k, v in params.items() if v)
     url = f"{EDITOR_SCHEMES.get(editor, 'vscode')}://anthropic.claude-code/open" + (f"?{query}" if query else "")
-    # Windows' own link handler takes it whole; explorer.exe drops a link with a
-    # query (?session=) without a word, and cmd's start would split it at &
-    opener = ([shutil.which("rundll32.exe") or "/mnt/c/Windows/System32/rundll32.exe",
-               "url.dll,FileProtocolHandler"] if ON_WSL
+    opener = (windows_link_opener() if ON_WSL
               else ["open"] if HOST_LABEL == "macOS" else [shutil.which("xdg-open") or "xdg-open"])
     try:
         subprocess.Popen(opener + [url], cwd="/mnt/c" if ON_WSL else None, stdin=subprocess.DEVNULL,
@@ -4576,17 +4606,91 @@ class Handler(BaseHTTPRequestHandler):
         self._send(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
 
-def main():
-    BOARDS_DIR.mkdir(exist_ok=True)
+def open_page(url):
+    """Open the board in the browser, for the let-them-talk command. From WSL
+    through Windows (the browser you use there), as an editor link is opened;
+    elsewhere with Python's webbrowser, but not on Linux with no display, where
+    it would start a text browser in this terminal. Returns whether it could."""
+    try:
+        if ON_WSL:
+            subprocess.Popen(windows_link_opener() + [url], cwd="/mnt/c", stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            return True
+        if HOST_LABEL == "Linux" and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+            return False
+        return webbrowser.open(url)
+    except (OSError, webbrowser.Error):
+        return False
+
+
+def is_this_app(port):
+    """Whether what answers on this local port is Let Them Talk: its Server
+    header, in the answer to a request with the Host header it requires."""
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+        try:
+            conn.request("GET", "/", headers={"Host": f"localhost:{port}"})
+            return conn.getresponse().getheader("Server", "").startswith("LetThemTalk/")
+        finally:
+            conn.close()
+    except (OSError, http.client.HTTPException):
+        return False
+
+
+def port_unavailable(error, no_open):
+    """The let-them-talk command couldn't listen: if this app already runs on
+    the port, open its page; if not, say what holds the port. Returns the exit code."""
+    url = f"http://localhost:{PORT}"
+    if error.errno == errno.EADDRINUSE and is_this_app(PORT):
+        print(f"{APP_NAME} is already running at {url}")
+        if not no_open and not open_page(url):
+            print("Open that address in your browser.")
+        return 0
+    what = (f"Port {PORT} is already used by another program, not {APP_NAME}."
+            if error.errno == errno.EADDRINUSE else f"{APP_NAME} can't listen on port {PORT} ({error.strerror}).")
+    print(f"{what} Stop that program, or use another port: LTT_PORT={PORT + 1} let-them-talk", file=sys.stderr)
+    return 1
+
+
+def main(command=False, no_open=False):
+    """Run the server. python3 server.py is the default: it prints the address
+    and you open it. command is the let-them-talk command: it also opens the
+    page (unless no_open) and handles a port that is taken. Returns the exit code."""
+    try:
+        BOARDS_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        if not command:
+            raise
+        print(f"{APP_NAME} can't use its folder {DATA_DIR} ({e.strerror}). Use another one: "
+              "LTT_DATA=<a folder> let-them-talk", file=sys.stderr)
+        return 1
     load_suggestions()
     load_models()
     load_ultracode()
-    httpd = ThreadingHTTPServer((HOST, PORT), Handler)
-    print(f"{APP_NAME} running at http://localhost:{PORT}  (Ctrl+C to stop)")
+    try:
+        httpd = ThreadingHTTPServer((HOST, PORT), Handler)
+    except OSError as e:
+        if not command:
+            raise
+        return port_unavailable(e, no_open)
+    url = f"http://localhost:{PORT}"
+    print(f"{APP_NAME} running at {url}  (Ctrl+C to stop)", flush=True)
+    # it listens already: a browser that comes first waits for serve_forever
+    if command and not no_open and not open_page(url):
+        print("Open that address in your browser.")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
+    return 0
+
+
+def cli(argv=None):
+    """The let-them-talk command of the installed package."""
+    parser = argparse.ArgumentParser(prog="let-them-talk",
+                                     description="Start Let Them Talk and open the board in your browser.")
+    parser.add_argument("--no-open", action="store_true", help="print the address, but don't open the browser")
+    return main(command=True, no_open=parser.parse_args(argv).no_open)
 
 
 if __name__ == "__main__":

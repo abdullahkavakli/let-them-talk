@@ -200,7 +200,16 @@ show it in a frame.
 
 ## What is stored where
 
-- `boards/` (in the app's folder): the boards, a card's name included.
+The first group lives in the app's *data folder*. Run from a copy of the
+repository (`./start.sh`), that is the app's own folder. Installed with `uvx`
+or `pipx`, it is `~/.local/share/let-them-talk` (`$XDG_DATA_HOME/let-them-talk`
+if that is set; the same on macOS), so nothing is written next to the
+installed code. [`LTT_DATA`](configuration.md#environment-settings) picks
+another folder in both cases. The app's own short `claude -p` runs (notes,
+TL;DRs, looking up a model's full id) start in the data folder too, and save
+no conversation.
+
+- `boards/`: the boards, a card's name included.
 - `logs/relay.jsonl`: every note and message sent through the headless run.
 - `logs/suggestions.json`: the mod's latest suggestions, kept for a day.
 - `logs/models.json`: the model picked for each Chat in IDE, kept a week, so
@@ -208,6 +217,9 @@ show it in a frame.
 - `logs/ultracode.json`: each chat's latest ultracode switch the app made or
   saw in its Effort panel, with the pid of the process that had it, kept 30
   days.
+
+Elsewhere:
+
 - `let-them-talk-handoffs` in the system's temp folder (`/tmp` on Linux and
   WSL): the handoffs.
 - Images you send: see [Images](#images).

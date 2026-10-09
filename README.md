@@ -16,8 +16,9 @@ A visual board for your agents. Each running Claude Code session is a card, and 
 
 Needs Python 3.12+ and Claude Code (on Windows, both inside WSL).
 
-- Windows: double-click `Start Let Them Talk.bat`.
-- macOS, Linux, WSL: `./start.sh`, then open <http://localhost:8765>.
+- One line: `uvx let-them-talk` (needs [uv](https://docs.astral.sh/uv/); or `pipx run let-them-talk`). It starts the board and opens it in your browser; `--no-open` skips that. Its boards are kept in `~/.local/share/let-them-talk`.
+- From a copy of this repository, on Windows: double-click `Start Let Them Talk.bat`.
+- From a copy of this repository, on macOS, Linux or WSL: `./start.sh`, then open <http://localhost:8765>.
 
 Click **New board** and pick a project folder: its running chats appear as cards. Drag the blue handle from one card onto another, then click **Connect**.
 

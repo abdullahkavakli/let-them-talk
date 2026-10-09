@@ -1,0 +1,12 @@
+{
+  "name": "let-them-talk",
+  "owner": { "name": "Abdullah KAVAKLI" },
+  "description": "Plugins for Let Them Talk, a visual board for your Claude Code sessions.",
+  "plugins": [
+    {
+      "name": "let-them-talk-suggestions",
+      "source": "./mods/let-them-talk-suggestions",
+      "description": "Shows Claude Code's suggested next prompt in Let Them Talk's Send box, and runs a Chat in IDE on the model you pick there. Needs the app running."
+    }
+  ]
+}

@@ -1,0 +1,79 @@
+# Packs the app for PyPI (uvx let-them-talk) without moving any file: the wheel
+# puts server.py, static/ and mods/ inside a let_them_talk package. The app itself
+# imports only Python's standard library; the two build tools below run only
+# when building the package. How to release: AGENTS.md.
+
+[build-system]
+requires = ["hatchling", "hatch-fancy-pypi-readme"]
+build-backend = "hatchling.build"
+
+[project]
+name = "let-them-talk"
+version = "0.1.0"
+description = "A visual board for your agents: see your Claude Code sessions, subagents and background agents as cards, and draw arrows so they talk to each other."
+dynamic = ["readme"]
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE", "static/fonts/LICENSE-Selawik.txt", "mods/let-them-talk-handoff/skills/handoff/LICENSE"]
+authors = [{ name = "Abdullah KAVAKLI" }]
+keywords = ["claude", "claude-code", "agents", "multi-agent", "subagents", "dashboard", "board"]
+classifiers = [
+  "Environment :: Web Environment",
+  "Intended Audience :: Developers",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/abdullahkavakli/let-them-talk"
+Issues = "https://github.com/abdullahkavakli/let-them-talk/issues"
+Documentation = "https://github.com/abdullahkavakli/let-them-talk/blob/main/docs/usage.md"
+
+[project.scripts]
+let-them-talk = "let_them_talk.server:cli"
+
+# The package description is README.md, with its relative links made absolute
+# (PyPI can't follow them): the demo GIF from raw.githubusercontent.com, any
+# other link to the repository's files on github.com.
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '(\]\()docs/demo/'
+replacement = '\1https://raw.githubusercontent.com/abdullahkavakli/let-them-talk/main/docs/demo/'
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '(\]\()(?!https?://|#|mailto:)([^)\s]+)\)'
+replacement = '\1https://github.com/abdullahkavakli/let-them-talk/blob/main/\2)'
+
+# What the wheel holds: the app's files under a let_them_talk folder, and the
+# package's __init__.py from pypi/. Left out: what Claude Code writes into a mod
+# when it loads it, its tests, and the notes for chats editing it.
+[tool.hatch.build.targets.wheel]
+only-include = ["server.py", "static", "mods"]
+exclude = [
+  "__pycache__", "*.pyc", "mods/*/tsconfig.json", "mods/*/.claude-plugin/types",
+  "*.test.ts", "mods/*/AGENTS.md", "mods/*/CLAUDE.md",
+]
+
+[tool.hatch.build.targets.wheel.sources]
+"" = "let_them_talk"
+
+[tool.hatch.build.targets.wheel.force-include]
+"pypi/__init__.py" = "__init__.py"
+
+# The source package: only what the wheel is made from, no demo media, no tests' browser.
+[tool.hatch.build.targets.sdist]
+include = [
+  "/pypi", "/server.py", "/static", "/mods", "/docs/*.md", "/tests/*.py", "/tests/*.sh",
+  "/README.md", "/LICENSE", "/pyproject.toml",
+]
+exclude = ["__pycache__", "*.pyc", "mods/*/tsconfig.json", "mods/*/.claude-plugin/types"]

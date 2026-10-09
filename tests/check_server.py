@@ -2,15 +2,21 @@
 """Checks parts of server.py without a server: where new cards go, New
 agent → Chat in IDE in a folder, renaming a card, images sent with a prompt, switching
 ultracode or looking it up, compacting a background agent, moving an editor chat
-to a terminal, and New workflow's teams.
+to a terminal, New workflow's teams, and the let-them-talk command of the installed
+package (where it keeps its data, opening the page, a port that is taken).
 Every program launch, session list and message is faked, so nothing opens and
 nothing is sent. Needs only Python.
 
 Run:  python3 tests/check_server.py      Exit 0: all passed. 1: a check failed.
 """
+import contextlib
+import errno
 import http.client
+import importlib.util
+import io
 import json
 import os
+import runpy
 import sys
 import tempfile
 import threading
@@ -19,7 +25,8 @@ import types
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 import server as S  # noqa: E402
 
 S.ULTRA_FILE = Path(tempfile.mkdtemp()) / "ultracode.json"  # switches kept on disk: never the app's own
@@ -1284,6 +1291,256 @@ check("team: the server takes a team from the page at /launch-team, images and a
 server.shutdown()
 S.start_team = real_start_team
 S.shutil.rmtree(S.CLAUDE_TMP.parent)
+
+# ------------------------- the installed package: its data folder, the command
+
+scratch = Path(tempfile.mkdtemp())
+home, app, share, chosen = (scratch / n for n in ("home", "app", "share", "chosen"))
+
+
+def data(installed, **env):
+    return S.data_dir(app, installed, env, home)
+
+
+check("data folder: a checkout or a copy run as a file keeps boards/ and logs/ in the app's own folder",
+      data(False) == app and data(False, XDG_DATA_HOME=str(share)) == app)
+check("data folder: the installed package uses ~/.local/share/let-them-talk",
+      data(True) == home / ".local" / "share" / "let-them-talk")
+check("data folder: or $XDG_DATA_HOME/let-them-talk, but not from a relative XDG_DATA_HOME",
+      data(True, XDG_DATA_HOME=str(share)) == share / "let-them-talk"
+      and data(True, XDG_DATA_HOME="somewhere/else") == home / ".local" / "share" / "let-them-talk")
+check("data folder: LTT_DATA wins everywhere (an empty one counts as not set)",
+      data(False, LTT_DATA=str(chosen)) == chosen and data(True, LTT_DATA=str(chosen), XDG_DATA_HOME=str(share)) == chosen
+      and data(True, LTT_DATA="") == home / ".local" / "share" / "let-them-talk"
+      and data(False, LTT_DATA="here") == Path(os.path.abspath("here")))
+
+
+def load_copy(name, **env):
+    """A second copy of server.py under the given module name, as `import` makes it:
+    let_them_talk.server is how the installed package imports it. HOME is the scratch
+    one, and nothing runs that touches the real machine (LTT_WINDOWS_HOME is set)."""
+    keys = ("HOME", "XDG_DATA_HOME", "LTT_DATA", "LTT_WINDOWS_HOME")
+    saved = {k: os.environ.get(k) for k in keys}
+    for k in keys:
+        os.environ.pop(k, None)
+    os.environ.update(HOME=str(home), LTT_WINDOWS_HOME=str(scratch), **env)
+    if "." in name:
+        package = types.ModuleType(name.split(".")[0])
+        package.__path__ = [str(ROOT)]
+        sys.modules[package.__name__] = package
+    try:
+        spec = importlib.util.spec_from_file_location(name, ROOT / "server.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+        for n in (name, name.split(".")[0]):
+            sys.modules.pop(n, None)
+
+
+def written(m):
+    return (m.BOARDS_DIR, m.LOG_FILE, m.SUGGEST_FILE, m.MODELS_FILE, m.ULTRA_FILE)
+
+
+as_file, as_package = load_copy("server_copy"), load_copy("let_them_talk.server", XDG_DATA_HOME=str(share))
+check("installed: a server.py imported as let_them_talk.server is the installed one, a copy is not",
+      as_package.INSTALLED and not as_file.INSTALLED and not S.INSTALLED)
+check("installed: everything written (boards, relay log, suggestions, models, ultracode) goes under the data folder",
+      as_package.DATA_DIR == share / "let-them-talk"
+      and all(p.is_relative_to(share / "let-them-talk") for p in written(as_package)), written(as_package))
+check("installed: static/ and mods/ are still read from the code's own folder",
+      as_package.STATIC_DIR == ROOT / "static" and as_package.HANDOFF_PLUGIN == ROOT / "mods" / "let-them-talk-handoff")
+check("copy: a copy run as a file keeps everything next to server.py, as before",
+      as_file.DATA_DIR == ROOT and all(p.is_relative_to(ROOT) for p in written(as_file)), written(as_file))
+copy_elsewhere = load_copy("server_copy", LTT_DATA=str(chosen))
+check("copy: LTT_DATA moves a copy's writing too, not its code",
+      copy_elsewhere.DATA_DIR == chosen and all(p.is_relative_to(chosen) for p in written(copy_elsewhere))
+      and copy_elsewhere.STATIC_DIR == ROOT / "static")
+
+# the app's own claude -p runs (notes, TL;DR, a model's full id) start in the data folder
+spawned = []
+real_spawn = S.subprocess.Popen
+
+
+def refuse(args, **kw):
+    spawned.append(kw.get("cwd"))
+    raise OSError("not run")
+
+
+S.subprocess.Popen = refuse
+for m in (as_package, as_file):
+    spawned.clear()
+    m.relay_send([{"to": "x", "text": "y"}])
+    m._ask_haiku({}, "k", "system", "text", "tldr")
+    m.resolve_model("sonnet")
+    check(f"{'installed' if m.INSTALLED else 'copy'}: the app's own claude -p runs start in the data folder",
+          [Path(c) for c in spawned] == [m.DATA_DIR] * 3, spawned)
+S.subprocess.Popen = real_spawn
+
+# the let-them-talk command
+real_server = S.ThreadingHTTPServer
+S.ThreadingHTTPServer = lambda addr, handler: types.SimpleNamespace(serve_forever=lambda: None)
+S.BOARDS_DIR, S.SUGGEST_FILE, S.MODELS_FILE = scratch / "boards", scratch / "suggestions.json", scratch / "models.json"
+opened = []
+real_open_page = S.open_page
+S.open_page = lambda url: opened.append(url) or True
+
+
+def run_command(**kw):
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = S.main(**kw)
+    return code, out.getvalue(), err.getvalue()
+
+
+url = f"http://localhost:{S.PORT}"
+code, out, err = run_command(command=True)
+check("command: it says its address and opens the page", code == 0 and url in out and opened == [url], (out, opened))
+opened.clear()
+code, out, err = run_command(command=True, no_open=True)
+check("command: with --no-open it still says its address but opens nothing", url in out and not opened, (out, opened))
+code, out, err = run_command()
+check("python3 server.py: it says its address and never opens a browser", url in out and not opened, (out, opened))
+S.open_page = lambda url: False
+code, out, err = run_command(command=True)
+check("command: when no browser can be opened it tells you to open the address", "Open that address" in out, out)
+S.open_page = real_open_page
+boards_dir, S.BOARDS_DIR = S.BOARDS_DIR, scratch / "a-file" / "boards"
+(scratch / "a-file").write_text("not a folder")
+code, out, err = run_command(command=True)
+S.BOARDS_DIR = boards_dir
+check("command: a data folder it can't write to is said plainly, with LTT_DATA to change it",
+      code == 1 and "LTT_DATA" in err and str(S.DATA_DIR) in err, err)
+
+mains, real_main = [], S.main
+S.main = lambda **kw: mains.append(kw) or 0
+S.cli([])
+S.cli(["--no-open"])
+S.main = real_main
+check("command: --no-open is passed on, and the command is told it is the command",
+      mains == [{"command": True, "no_open": False}, {"command": True, "no_open": True}], mains)
+
+# opening the page: through Windows from WSL, Python's webbrowser elsewhere
+by_browser, by_windows = [], []
+real_webbrowser_open = S.webbrowser.open
+S.webbrowser.open = lambda url: by_browser.append(url) or True
+S.subprocess.Popen = lambda args, **kw: by_windows.append((list(args), kw.get("cwd"))) or types.SimpleNamespace()
+saved = {k: os.environ.get(k) for k in ("DISPLAY", "WAYLAND_DISPLAY")}
+os.environ.pop("WAYLAND_DISPLAY", None)
+os.environ["DISPLAY"] = ":0"
+real_label, real_wsl = S.HOST_LABEL, S.ON_WSL
+
+
+def open_where(label, wsl):
+    S.HOST_LABEL, S.ON_WSL = label, wsl
+    by_browser.clear()
+    by_windows.clear()
+    return S.open_page("http://localhost:8765")
+
+
+ok = open_where("WSL", True)
+check("open page: from WSL through Windows' link handler, as editor links are, not a browser in Linux",
+      ok and by_windows == [(["/win/rundll32.exe", "url.dll,FileProtocolHandler", "http://localhost:8765"], "/mnt/c")]
+      and not by_browser, (by_windows, by_browser))
+S.subprocess.Popen = refuse
+check("open page: from WSL with no Windows link handler to run says no, and starts no Linux browser",
+      not open_where("WSL", True) and not by_browser)
+S.subprocess.Popen = lambda args, **kw: by_windows.append((list(args), kw.get("cwd"))) or types.SimpleNamespace()
+for label in ("macOS", "Linux"):
+    ok = open_where(label, False)
+    check(f"open page: on {label} with Python's webbrowser",
+          ok and by_browser == ["http://localhost:8765"] and not by_windows)
+del os.environ["DISPLAY"]
+os.environ["WAYLAND_DISPLAY"] = "wayland-0"
+check("open page: on Linux a Wayland display is enough", open_where("Linux", False) and by_browser)
+del os.environ["WAYLAND_DISPLAY"]
+check("open page: on Linux with no display nothing opens (webbrowser would start a text browser here)",
+      not open_where("Linux", False) and not by_browser and not by_windows)
+S.HOST_LABEL, S.ON_WSL = real_label, real_wsl
+S.webbrowser.open = real_webbrowser_open
+S.subprocess.Popen = real_spawn
+for k, v in saved.items():
+    os.environ.pop(k, None)
+    if v is not None:
+        os.environ[k] = v
+
+# a port that is taken
+S.ThreadingHTTPServer = real_server
+
+
+class Stranger(S.BaseHTTPRequestHandler):
+    server_version = "SomethingElse/2"
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
+def listen(handler):
+    held = S.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=held.serve_forever, daemon=True).start()
+    S.PORT = held.server_address[1]
+    return held
+
+
+real_port = S.PORT
+S.open_page = lambda url: opened.append(url) or True
+opened.clear()
+held = listen(S.Handler)
+url = f"http://localhost:{S.PORT}"
+code, out, err = run_command(command=True)
+check("port taken by Let Them Talk: the command opens its page, says so, and ends well",
+      code == 0 and opened == [url] and url in out and "already running" in out and not err, (code, out, err, opened))
+opened.clear()
+code, out, err = run_command(command=True, no_open=True)
+check("port taken by Let Them Talk: with --no-open nothing opens, but the address is said",
+      code == 0 and not opened and url in out, (code, out, opened))
+held.shutdown()
+held.server_close()
+held = listen(Stranger)
+code, out, err = run_command(command=True)
+check("port taken by another program: said plainly with LTT_PORT, nothing opens, exit code 1",
+      code == 1 and not opened and str(S.PORT) in err and "another program" in err and f"LTT_PORT={S.PORT + 1}" in err,
+      (code, err, opened))
+try:
+    run_command()
+    check("python3 server.py: a port that is taken still stops it with the error, as before", False)
+except OSError as e:
+    check("python3 server.py: a port that is taken still stops it with the error, as before",
+          e.errno == errno.EADDRINUSE and not opened)
+held.shutdown()
+held.server_close()
+S.PORT, S.open_page = real_port, real_open_page
+
+# native Windows has no fcntl or termios: a plain message comes first
+real_platform = sys.platform
+real_modules = {n: sys.modules.get(n) for n in ("fcntl", "termios")}
+sys.platform, sys.modules["fcntl"], sys.modules["termios"] = "win32", None, None
+try:
+    runpy.run_path(str(ROOT / "server.py"), run_name="on_windows")
+    said = "it ran"
+except SystemExit as e:
+    said = str(e.code)
+except ImportError as e:
+    said = f"ImportError: {e}"
+finally:
+    sys.platform = real_platform
+    for n, m in real_modules.items():
+        sys.modules.pop(n, None)
+        if m is not None:
+            sys.modules[n] = m
+check("windows: native Windows gets a plain message about WSL, not an ImportError",
+      said == "Let Them Talk runs inside WSL on Windows: open a WSL terminal and run it there.", said)
+S.shutil.rmtree(scratch)
 
 failed = [r for r in results if not r[1]]
 for name, ok, detail in results:

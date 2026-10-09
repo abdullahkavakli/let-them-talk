@@ -10,6 +10,14 @@ Set these for the server before you start it.
 - `LTT_PORT`: the port it listens on (default `8765`). The Windows `.bat`
   always opens the page on port 8765; for the suggestions mod, see
   [below](#suggestions-mod).
+- `LTT_DATA`: the folder where the app keeps its boards and logs. By
+  default the app's own folder when you run `./start.sh` or
+  `python3 server.py` from a copy of the repository, and
+  `$XDG_DATA_HOME/let-them-talk` (`~/.local/share/let-them-talk` if that isn't
+  set, on macOS too) when you installed it with `uvx` or `pipx`. It is also the
+  folder the app's own short `claude -p` runs start in. To carry boards over
+  to another folder, copy `boards/` and `logs/` there. See
+  [What is stored where](how-it-works.md#what-is-stored-where).
 - `LTT_MODEL`: the model for notes and TL;DRs (default `haiku`).
 - `LTT_CLAUDE`: the path to the `claude` binary. By default `claude` on the
   PATH, else `~/.local/bin/claude`.
@@ -34,15 +42,30 @@ it runs `/effort status` so the app can read the switch (see
 [Ultracode](how-it-works.md#ultracode)). In other chats it runs nothing
 for ultracode.
 
-To load it in every chat started from then on, add its absolute path to the
-`env` block of `~/.claude/settings.json`:
+To install it, add this repository as a plugin marketplace and install the
+plugin from it:
+
+```
+claude plugin marketplace add abdullahkavakli/let-them-talk
+claude plugin install let-them-talk-suggestions@let-them-talk
+```
+
+Or, in a chat:
+`/plugin install let-them-talk-suggestions --marketplace abdullahkavakli/let-them-talk`.
+
+If you run a copy of the repository and want the mod to follow it, load it
+from there instead. To load it in every chat started from then on, add its
+absolute path to the `env` block of `~/.claude/settings.json`:
 
 ```json
-{ "env": { "CLAUDE_CODE_PLUGIN_DIRS": "/path/to/agent-organizer/mods/let-them-talk-suggestions" } }
+{ "env": { "CLAUDE_CODE_PLUGIN_DIRS": "/path/to/let-them-talk/mods/let-them-talk-suggestions" } }
 ```
 
 For a single chat:
-`claude --plugin-dir /path/to/agent-organizer/mods/let-them-talk-suggestions`.
+`claude --plugin-dir /path/to/let-them-talk/mods/let-them-talk-suggestions`.
+
+A copy loaded this way (`CLAUDE_CODE_PLUGIN_DIRS` or `--plugin-dir`) takes the
+place of an installed one with the same name, so having both is fine.
 
 - Chats started before the mod was loaded show no suggestion until
   restarted, and an ultracode switch made while they work shows only at
@@ -51,4 +74,6 @@ For a single chat:
   Cursor or VS Code connected to WSL reads the same `~/.claude/settings.json`;
   one on Windows has its own.
 - It talks to port 8765. If you changed `LTT_PORT`, edit `APP` in
-  `mods/let-them-talk-suggestions/hooks/register.ts` to match.
+  `mods/let-them-talk-suggestions/hooks/register.ts` to match, in a copy of the
+  repository loaded as above: Claude Code keeps an installed copy itself and
+  may replace it when the plugin updates.
