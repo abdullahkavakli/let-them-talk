@@ -1,0 +1,64 @@
+name: Bug report
+description: Something doesn't work as it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before you post, remove anything private: chat text, folder paths, names.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps
+      description: What you clicked or ran, in order.
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: system
+    attributes:
+      label: System
+      options:
+        - Windows with WSL
+        - macOS
+        - Linux
+    validations:
+      required: true
+  - type: checkboxes
+    id: chats
+    attributes:
+      label: Which chats were involved
+      options:
+        - label: Terminal chat
+        - label: Cursor chat
+        - label: Background agent
+        - label: Workflow or team
+  - type: input
+    id: claude-version
+    attributes:
+      label: Claude Code version
+      description: Run `claude --version` and paste what it says.
+  - type: input
+    id: browser
+    attributes:
+      label: Browser
+      description: The browser you have the board open in.
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshot or log text (optional)
+      description: Drag a screenshot in, or paste text from the terminal where the server runs.
