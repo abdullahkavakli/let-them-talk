@@ -10,7 +10,7 @@ build-backend = "hatchling.build"
 [project]
 name = "let-them-talk"
 version = "0.1.0"
-description = "A visual board for your agents: see your Claude Code sessions, subagents and background agents as cards, and draw arrows so they talk to each other."
+description = "A visual board for your Claude Code agents: see sessions, subagents and background agents as cards, and draw arrows so they talk to each other."
 dynamic = ["readme"]
 requires-python = ">=3.12"
 license = "Apache-2.0"
