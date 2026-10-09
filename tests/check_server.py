@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Checks parts of server.py without a server: where new cards go, New
 agent → Chat in IDE in a folder, renaming a card, images sent with a prompt, switching
-ultracode, looking it up or hearing it from the suggestions mod, compacting a background
-agent, moving an editor chat to a terminal, and New workflow's teams.
+ultracode or looking it up, compacting a background agent, moving an editor chat
+to a terminal, and New workflow's teams.
 Every program launch, session list and message is faked, so nothing opens and
 nothing is sent. Needs only Python.
 
@@ -181,7 +181,7 @@ remind = lambda kind, at: note({"type": "attachment", "attachment": {"type": f"u
 answer = lambda text, at: prompt(f"<local-command-stdout>{text}</local-command-stdout>", at)  # a command's output
 t0 = time.time() - 100
 uc = {"sessionId": UC, "name": "uc", "platform": "wsl", "background": True, "running": True,
-      "jobId": "abcdef12", "startedAt": t0 * 1000}
+      "jobId": "abcdef12", "pid": 4242, "startedAt": t0 * 1000}
 prompt("fix it", t0 + 1)
 check("ultracode: a chat that never had it reads off", S.ultracode_state(uc) is False)
 answer("Ultracode on (this session only): dynamic workflows on every task. Effort stays high.", t0 + 2)
@@ -198,10 +198,12 @@ check("ultracode: after a restart, at its next prompt it reads from the last rem
 note({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text":
      "<local-command-stdout>Ultracode off</local-command-stdout>"}]}}, t0 + 12)
 check("ultracode: a reply quoting an answer isn't a switch", S.ultracode_state(restarted) is True)
-answer("Current effort level: high (Comprehensive implementation with extensive testing)", t0 + 13)
+note({"type": "system", "subtype": "local_command",  # the other way Claude Code notes a command's output
+      "content": "<local-command-stdout>Current effort level: high (Comprehensive implementation)</local-command-stdout>"},
+     t0 + 13)
 status_off = S.ultracode_state(restarted)
 answer("Effort level: auto (currently high) · Ultracode on", t0 + 14)
-check("ultracode: /effort status (as the mod runs it) reads off without Ultracode in it, on with it",
+check("ultracode: /effort status (as the suggestions mod runs it) reads off without Ultracode in it, on with it",
       status_off is False and S.ultracode_state(restarted) is True, status_off)
 
 typed[:] = []
@@ -278,46 +280,44 @@ try:
 except ValueError:
     check("ultracode: an asleep agent isn't typed into", True)
 
-# ------------------ Ultracode told by the suggestions mod (its reports faked)
+# ------------------ Ultracode switches kept here: each the fact of one process
+
+
+def keep(sid, on, at, pid):  # a switch seen from here (main kept it for whatever process ran the chat)
+    if hasattr(S, "_ultra_switch"):
+        S._ultra_switch(sid, on, at, pid)
+    else:
+        S.ultra_switched[sid] = (on, at)
+
 
 me = os.getpid()
 real_sleep(0.01)  # the transcript's last record is older than this process
 here = {**uc, "pid": me, "startedAt": time.time() * 1000, "status": "busy"}
 sessions[:] = [here]
-
-
-def told(**body):
-    """The mod's report of an answer, as POST /api/mod/ultracode takes it; the error, if refused."""
-    body = {"sessionId": UC, "pid": me, "procStart": S._proc_start(me), "at": time.time() * 1000, **body}
-    try:
-        S.take_mod_ultracode(body)
-    except (ValueError, AttributeError) as e:
-        return str(e) or type(e).__name__
-    return None
-
-
+S.ultra_switched.clear()
 unknown = S.ultracode_state(here)
-error = told(on=True)
-check("ultracode mod: a switch it reports (one answered on its screen only, while it works) is read at once",
-      unknown is None and error is None and S.ultracode_state(here) is True, (unknown, error))
-refusals = [told(on=False, pid=os.getppid(), procStart=S._proc_start(os.getppid())),  # another process
-            told(on=False, procStart="1"),  # its pid, but another process's start (a pid used again)
-            told(on=False, sessionId="not an id"), told(on="off")]
-check("ultracode mod: a report from another process, or without a session or on, is refused",
-      all(refusals) and S.ultracode_state(here) is True, refusals)
-told(on=False, at=(time.time() - 60) * 1000)
-check("ultracode mod: a report older than the newest switch (one sent late) changes nothing",
-      S.ultracode_state(here) is True)
-told(on=False)
+keep(UC, True, time.time(), me + 1)  # another process ran it then (resumed in a terminal meanwhile)
+other = S.ultracode_state(here)
+S.ultra_switched[UC] = (True, time.time(), None)  # one without a pid
+no_pid = S.ultracode_state(here)
+check("ultracode: a switch kept here counts only for the process that had it, never for one without a pid",
+      unknown is None and other is None and no_pid is None, (unknown, other, no_pid))
+S.ultra_switched.clear()
+keep(UC, True, time.time() - 30, me)  # its pid, but from before it started: a pid used again
+reused = S.ultracode_state(here)
+keep(UC, True, time.time(), me)
+keep(UC, False, time.time() - 1, me)  # an older one that comes in late
+check("ultracode: one with its pid counts only from when its process started (a pid used again is another), "
+      "and the newest wins", reused is None and S.ultracode_state(here) is True, reused)
+S.ULTRA_FILE.write_text(json.dumps({"x1": [True, "yesterday", me], "x2": "junk", "x3": [True, time.time(), None],
+                                    UC: [False, time.time(), me]}))
 restart_server()
-after_restart = S.ultracode_state(here)
-prompt("next", time.time() + 0.01); remind("enter", time.time() + 0.01)
-check("ultracode mod: what it told is kept across a server restart, until a later prompt's reminder tells",
-      after_restart is False and S.ultracode_state(here) is True, after_restart)
-fresh = {**here, "sessionId": "0c0c0c0c-0000-4000-8000-0000000000ff"}  # no transcript yet
-sessions[:] = [fresh]
-told(on=True, sessionId=fresh["sessionId"])
-check("ultracode mod: one told before its chat has a transcript is read too", S.ultracode_state(fresh) is True)
+loaded = dict(S.ultra_switched)
+S.ultra_switched["x4"] = (True, time.time() - getattr(S, "ULTRA_KEEP", 0) - 60, me)
+keep(UC, True, time.time(), me)
+saved = json.loads(S.ULTRA_FILE.read_text())
+check("ultracode: the kept file is read back without a malformed or pid-less entry, and drops one over 30 days old",
+      set(loaded) == {UC} and set(saved) == {UC}, (loaded, saved))
 
 
 def rec(text, at, **extra):
@@ -1281,20 +1281,6 @@ big = {**BODY, "images": [{"data": "A" * (2 << 20)}]}
 check("team: the server takes a team from the page at /launch-team, images and all",
       post("launch-team", big) == 200 and taken_bodies and taken_bodies[-1]["agents"] == TEAM
       and post("no-such-thing", big, send=False) == 413, taken_bodies[-1:] and taken_bodies[-1]["prompt"])
-
-
-def post_mod(body, header=True):  # the suggestions mod's report, as it sends it
-    conn = http.client.HTTPConnection("127.0.0.1", S.PORT, timeout=10)
-    conn.request("POST", "/api/mod/ultracode", json.dumps(body),
-                 {"Content-Type": "application/json", **({S.CSRF_HEADER: "1"} if header else {})})
-    return conn.getresponse().status
-
-
-sessions[:] = [{**uc, "startedAt": time.time() * 1000}]
-real_sleep(0.01)
-statuses = (post_mod({"sessionId": UC, "on": False}, header=False), post_mod({"sessionId": UC, "on": False}))
-check("ultracode mod: the server takes its report at /api/mod/ultracode, with the app's own header only",
-      statuses == (403, 200) and S.ultracode_state(sessions[0]) is False, (statuses, S.ultra_switched.get(UC)))
 server.shutdown()
 S.start_team = real_start_team
 S.shutil.rmtree(S.CLAUDE_TMP.parent)

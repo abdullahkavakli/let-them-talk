@@ -365,8 +365,9 @@ the line follows at once. While it works, Claude Code shows its answer only
 on that screen, so the line keeps what it said until Claude Code tells:
 
 - With the [suggestions mod](configuration.md#suggestions-mod) loaded in the
-  agent, once its turn ends: the mod then runs `/effort status` in it (you
-  see that line in its terminal) and tells the app the answer.
+  agent, once its turn ends: the mod then runs `/effort status` in it, and
+  the app reads its answer. You see that line in the agent's terminal, not
+  in its messages here.
 - Without the mod, at its next prompt.
 
 A switch Claude Code turns down, and the panel opened only to look and closed

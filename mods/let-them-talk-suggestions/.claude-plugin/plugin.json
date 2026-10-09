@@ -1,5 +1,5 @@
 {
   "name": "let-them-talk-suggestions",
   "version": "0.1.0",
-  "description": "Sends Claude Code's suggested next prompt to Let Them Talk, so its Send box shows the same suggestion, runs a Chat in IDE started from it on the model picked there, and tells it when ultracode is switched in a chat."
+  "description": "Sends Claude Code's suggested next prompt to Let Them Talk, so its Send box shows the same suggestion, runs a Chat in IDE started from it on the model picked there, and in a background agent runs /effort status after an ultracode switch made while it works, so the app can read it."
 }

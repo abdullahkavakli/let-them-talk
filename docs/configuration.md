@@ -29,8 +29,10 @@ Claude Code's reply suggestion for terminal chats (see
 [Reply suggestions](how-it-works.md#reply-suggestions)), it runs a
 **Chat in IDE** on the model picked in **New agent** (see
 [The model of a Chat in IDE](how-it-works.md#the-model-of-a-chat-in-ide)),
-and it tells the app when ultracode is switched in a chat, also while it
-works (see [Ultracode](how-it-works.md#ultracode)).
+and in a background agent, after an ultracode switch made while it works,
+it runs `/effort status` so the app can read the switch (see
+[Ultracode](how-it-works.md#ultracode)). In other chats it runs nothing
+for ultracode.
 
 To load it in every chat started from then on, add its absolute path to the
 `env` block of `~/.claude/settings.json`:

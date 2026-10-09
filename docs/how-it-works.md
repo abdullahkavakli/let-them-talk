@@ -139,25 +139,30 @@ Whether ultracode is on in a background agent (see
 notes each `/effort` answered while the agent is idle ("Ultracode on …",
 "Ultracode off …", or for `/effort status` a line that names ultracode only
 while it is on), and at each prompt a reminder when it changed since the last
-one. The newest of these counts, with what the app saw itself (a **Turn on**
-or **Turn off**, a look in its Effort panel) and what the
-[suggestions mod](configuration.md#suggestions-mod) told it.
+one. The newest of these counts, with what the app saw itself: a **Turn on**
+or **Turn off**, or a look in its Effort panel.
 
 - **While it works:** an `/effort` answers only on the agent's screen, and
-  its transcript gets nothing. The mod sees the command run but not the
-  answer, so it doesn't count what was typed (Claude Code may have turned it
-  down). After `/effort ultracode …` or the Effort panel (not after an effort
-  level, which leaves ultracode as it was), it runs `/effort status` in the
-  agent, which Claude Code queues until the agent is idle, and tells the app
-  what that says. The app shows neither that line nor its queued entry in
-  the agent's messages.
-- **What the mod sends:** each answer that says on or off, with the chat's
-  id and the pid and start time of its process (from `/proc`). The app takes
-  it only from the process running that chat now, and keeps the newest one
-  per chat. One the app missed (it was down) is sent again every 2 seconds.
+  its transcript gets nothing. In a background agent that loads the
+  [suggestions mod](configuration.md#suggestions-mod), the mod sees the
+  command run but not its answer. When `/effort ultracode …` or the Effort
+  panel gets no answer (an effort level alone leaves ultracode as it was, so
+  it doesn't count), it runs `/effort status` in the agent, once. Claude
+  Code queues it until the agent is idle, then notes its answer in the
+  transcript, where the app reads it like any other. The mod sends the app
+  nothing about it, and the app shows neither that line nor its queued entry
+  in the agent's messages. Without the mod, the agent's next prompt tells.
+- **Only in background agents:** Claude Code starts one with
+  `CLAUDE_CODE_SESSION_KIND=bg`, which also makes its registry file's kind
+  `bg`, the kind the app reads. The mod runs `/effort status` only where that
+  variable says `bg`, so never in an ordinary terminal or IDE chat.
 - **The app's own Turn on or off while it works:** the app reads Claude
-  Code's answer off the agent's screen, so it is in no transcript either;
-  the app keeps it on disk, so a restart of the app loses none.
+  Code's answer off the agent's screen, so it is in no transcript either.
+  The app keeps it on disk, as it does what a look in the Effort panel
+  showed, so a restart of the app loses neither.
+- **Which process:** a switch the app keeps counts only while the process
+  that had it (by its pid) runs the agent, and only from when that process
+  started, so a later process that gets the same pid doesn't inherit it.
 - **The panel opened only to look:** closed with Esc, Claude Code notes
   "Cancelled", which changes nothing. Opened while the agent works, the mod's
   `/effort status` reads what it left once the agent is idle.
@@ -200,8 +205,9 @@ show it in a frame.
 - `logs/suggestions.json`: the mod's latest suggestions, kept for a day.
 - `logs/models.json`: the model picked for each Chat in IDE, kept a week, so
   a chat resumed within a week still runs on it.
-- `logs/ultracode.json`: each chat's latest ultracode switch the app made, saw
-  or was told by the mod, kept 30 days.
+- `logs/ultracode.json`: each chat's latest ultracode switch the app made or
+  saw in its Effort panel, with the pid of the process that had it, kept 30
+  days.
 - `let-them-talk-handoffs` in the system's temp folder (`/tmp` on Linux and
   WSL): the handoffs.
 - Images you send: see [Images](#images).

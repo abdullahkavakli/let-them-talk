@@ -359,11 +359,11 @@ def session_permission_mode(sid):
 # when it differs from the last one (ultra_effort_enter / ultra_effort_exit),
 # so at each prompt it is on exactly when the last reminder is an enter.
 # An /effort run while the chat works (typed, or Tab in its Effort panel)
-# answers on its screen only, and nothing of it reaches the transcript. The
-# suggestions mod, in a chat that loads it, then has Claude Code run
-# `/effort status` once the chat is idle, and tells the app each answer that
-# says on or off (see take_mod_ultracode); without the mod, its next prompt
-# tells. A panel opened only to look changes nothing here.
+# answers on its screen only, and nothing of it reaches the transcript. In a
+# background agent that loads the suggestions mod, the mod then has Claude
+# Code run `/effort status` once the agent is idle, and its answer is read
+# here like any other; without the mod, the agent's next prompt tells. A
+# panel opened only to look ("Cancelled") changes nothing here.
 ultra_lock = threading.Lock()
 ultra_cache = {}  # transcript path -> read offset, latest reminder, switch and typed prompt
 ULTRA_SCAN = (b'"ultra_effort_', b"Ultracode o", b"ffort level", b'"role":"user","content":"')
@@ -407,9 +407,8 @@ def ultracode_state(s):
     the last call are read."""
     session_title(s["sessionId"])  # finds the transcript
     path = title_cache.get(s["sessionId"], {}).get("path")
-    if path is None:  # no transcript yet: only a switch seen from here tells
-        here = _switched_here(s)
-        return here[0] if here and here[1] >= (s.get("startedAt") or 0) / 1000 else None
+    if path is None:
+        return None
     with ultra_lock:
         c = ultra_cache.setdefault(str(path), {"offset": 0, "reminder": None, "switch": None, "prompt": 0})
         try:
@@ -438,8 +437,7 @@ def ultracode_state(s):
         reminder, switch = c["reminder"], c["switch"]
         prompt = max(c["prompt"], reminder[1] if reminder else 0)
     # a switch from here while it worked is in no transcript (see set_ultracode),
-    # nor is what its Effort panel showed (see look_up_ultracode), nor one the
-    # mod saw answered on its screen only (see take_mod_ultracode)
+    # nor is what its Effort panel showed (see look_up_ultracode)
     switch = max(filter(None, (switch, _switched_here(s))), key=lambda n: n[1], default=None)
     started = (s.get("startedAt") or 0) / 1000
     if prompt >= started:
@@ -447,9 +445,12 @@ def ultracode_state(s):
     return switch[0] if switch and switch[1] >= started else None
 
 
-# Switches seen outside the transcript: Turn on or off from here, a look in
-# its Effort panel, or an answer the mod reported. Kept on disk too, so a
-# server restart loses none (a Turn on while it works is in no transcript).
+# Switches seen outside the transcript: Turn on or off from here, or a look
+# in its Effort panel. Kept on disk too, so a server restart loses none (a
+# Turn on while it works is in no transcript). Each is the fact of one
+# process: it counts only while that pid runs the chat (a running chat's
+# registry file always names its pid), and ultracode_state drops one from
+# before that process started (a pid used again).
 ULTRA_FILE = APP_DIR / "logs" / "ultracode.json"
 ULTRA_KEEP = 30 * 86400  # seconds a switch is kept: a background agent can run for days
 ultra_switched = {}  # sessionId -> (on, at, pid): its newest one, and the process that had it
@@ -458,16 +459,14 @@ ultra_file_lock = threading.Lock()
 
 def _switched_here(s):
     """A running chat's newest switch seen outside its transcript, as (on,
-    at), unless another process had it (ultracode_state also drops one from
-    before the process started)."""
+    at), only if the process running it now had it."""
     got = ultra_switched.get(s["sessionId"])
-    if not got or (got[2] is not None and s.get("pid") is not None and got[2] != s["pid"]):
-        return None
-    return got[0], got[1]
+    return (got[0], got[1]) if got and got[2] == s["pid"] else None
 
 
-def _ultra_switch(sid, on, at, pid=None):
-    """Keep a switch seen outside the transcript, unless one newer is kept."""
+def _ultra_switch(sid, on, at, pid):
+    """Keep a switch seen outside the transcript in the process with that
+    pid, unless one newer is kept."""
     with ultra_file_lock:
         last = ultra_switched.get(sid)
         if last and last[1] > at:
@@ -492,32 +491,8 @@ def load_ultracode():
         return
     for sid, v in saved.items() if isinstance(saved, dict) else ():
         if (isinstance(v, list) and len(v) == 3 and isinstance(v[0], bool) and isinstance(v[1], (int, float))
-                and (v[2] is None or type(v[2]) is int)):
+                and type(v[2]) is int):
             ultra_switched[sid] = (v[0], float(v[1]), v[2])
-
-
-def take_mod_ultracode(body):
-    """POST /api/mod/ultracode from the suggestions mod: Claude Code answered
-    an /effort in its chat with ultracode on or off. The mod sends the pid and
-    start time (field 22 of /proc/<pid>/stat) of the process it runs in, which
-    must be the one running that chat now (none where it has no /proc);
-    ultracode_state counts it for that process only."""
-    sid, on, pid = str(body.get("sessionId") or ""), body.get("on"), body.get("pid")
-    if not SID_RE.fullmatch(sid) or not isinstance(on, bool):
-        raise ValueError("needs a sessionId and on")
-    s = find_session(sid)
-    if pid is not None:
-        if type(pid) is not int or pid <= 0:
-            raise ValueError("pid isn't a process id")
-        running = _proc_start(pid)
-        if running is None or (running and str(body.get("procStart") or running) != running):
-            raise ValueError("that process isn't running")
-        if s.get("pid") is not None and pid != s["pid"]:
-            raise ValueError("that isn't the process running this chat")
-    now, at = time.time(), body.get("at")  # when the mod saw the answer, in ms (it may send it late)
-    at = min(at / 1000, now) if type(at) in (int, float) and at / 1000 > now - ULTRA_KEEP else now
-    _ultra_switch(sid, on, at, pid)
-    return {"stored": True}
 
 
 def label(s, board=None):
@@ -4551,8 +4526,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(HTTPStatus.OK, take_suggestion(body))
             if parts == ["api", "suggestion", "hello"]:
                 return self._send(HTTPStatus.OK, mod_hello(body))
-            if parts == ["api", "mod", "ultracode"]:
-                return self._send(HTTPStatus.OK, take_mod_ultracode(body))
             if parts == ["api", "dirs"]:
                 return self._send(HTTPStatus.OK, list_dirs(str(body.get("path") or "")))
             if len(parts) == 4 and parts[:2] == ["api", "board"]:
