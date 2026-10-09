@@ -54,8 +54,9 @@ Or, in a chat:
 `/plugin install let-them-talk-suggestions --marketplace abdullahkavakli/let-them-talk`.
 
 The plugin is the mod of the latest release, the same release as the app
-`uvx let-them-talk` runs, so the two always match. A new release brings both:
-update the plugin with
+`uvx let-them-talk` runs, so the two always match. A change made to the mod
+after that release reaches the plugin only with the next release, which brings
+both: update the plugin with
 `claude plugin update let-them-talk-suggestions@let-them-talk`.
 
 If you run a copy of the repository and want the mod to follow it, load it

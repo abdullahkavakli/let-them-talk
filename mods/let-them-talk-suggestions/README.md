@@ -17,6 +17,8 @@ claude plugin install let-them-talk-suggestions@let-them-talk
 
 Or, inside a chat: `/plugin install let-them-talk-suggestions --marketplace abdullahkavakli/let-them-talk`.
 
+The plugin is the mod of the latest release, the same release as the app `uvx let-them-talk` runs, so the two match. A change made to the mod since then reaches you with the next release.
+
 Chats started before the plugin was installed show no suggestion until they are restarted.
 
-More, including how to load it from a copy of the repository and what to do if the app runs on another port: [Configuration](https://github.com/abdullahkavakli/let-them-talk/blob/main/docs/configuration.md#suggestions-mod).
+More, including how to load it from a copy of the repository (which then follows that copy, not the release) and what to do if the app runs on another port: [Configuration](https://github.com/abdullahkavakli/let-them-talk/blob/main/docs/configuration.md#suggestions-mod).
