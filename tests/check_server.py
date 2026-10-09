@@ -3,7 +3,8 @@
 agent → Chat in IDE in a folder, renaming a card, images sent with a prompt, switching
 ultracode or looking it up, compacting a background agent, moving an editor chat
 to a terminal, New workflow's teams, and the let-them-talk command of the installed
-package (where it keeps its data, opening the page, a port that is taken).
+package (where it keeps its data, opening the page, a port that is taken), and
+that the package, the mod and the plugin marketplace name one release.
 Every program launch, session list and message is faked, so nothing opens and
 nothing is sent. Needs only Python.
 
@@ -1541,6 +1542,24 @@ finally:
 check("windows: native Windows gets a plain message about WSL, not an ImportError",
       said == "Let Them Talk runs inside WSL on Windows: open a WSL terminal and run it there.", said)
 S.shutil.rmtree(scratch)
+
+
+# ------------------------- one release number: the package, the mod, the marketplace
+# The installed app (PyPI) and the installed mod (the plugin marketplace) talk
+# to each other, so the marketplace fetches the mod from the release's tag, not
+# from main: the three must name the same release.
+
+import tomllib  # noqa: E402
+
+package = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+mod = json.loads((ROOT / "mods/let-them-talk-suggestions/.claude-plugin/plugin.json").read_text()).get("version")
+entry = next(p for p in json.loads((ROOT / ".claude-plugin/marketplace.json").read_text())["plugins"]
+             if p["name"] == "let-them-talk-suggestions")
+source = entry["source"] if isinstance(entry["source"], dict) else {}
+check("release: the mod's version is the package's", mod == package, f"plugin.json {mod}, pyproject.toml {package}")
+check("release: the marketplace fetches the mod from that release's tag",
+      source.get("source") == "git-subdir" and source.get("path") == "mods/let-them-talk-suggestions"
+      and source.get("ref") == f"v{package}", json.dumps(entry["source"]))
 
 failed = [r for r in results if not r[1]]
 for name, ok, detail in results:

@@ -34,7 +34,9 @@ More depth: `docs/usage.md` (what the app does), `docs/how-it-works.md`, `docs/c
 
 Publishing to PyPI is done by hand, by the user, never by an agent chat. The package is `pyproject.toml` (hatchling): the wheel puts `server.py`, `static/` and `mods/` inside a `let_them_talk` package, and the repo layout stays as it is.
 
-- Bump `version` in `pyproject.toml`, then `uv build` (files go to `dist/`, which is ignored; delete it afterwards).
+- One release number in three places, in one commit: `version` in `pyproject.toml`, `version` in `mods/let-them-talk-suggestions/.claude-plugin/plugin.json`, and `ref` (`v<version>`) in `.claude-plugin/marketplace.json`. The marketplace fetches the mod from that tag, so the mod people install matches the app on PyPI; a server check fails if the three differ.
+- After that commit is on main: tag it `v<version>` and push the tag (until then the marketplace points at a tag that doesn't exist).
+- `uv build` (files go to `dist/`, which is ignored; delete it afterwards).
 - Check the wheel's file list (`python3 -m zipfile -l dist/*.whl`): no `__pycache__`, `tsconfig.json`, `*.test.ts` or `docs/demo/`; the three license files are there. Read the built `METADATA`: the README's GIF and doc links must be absolute (`https://...`).
 - Try it: `uv tool run --from dist/*.whl let-them-talk --no-open` on a free port, with a scratch `HOME`, `LTT_CLAUDE` and `LTT_WINDOWS_HOME` (see the test-server rule above).
 - `uv publish`. After the first upload, replace the account-wide PyPI token with one scoped to this project, so a leaked token can't touch other projects.
