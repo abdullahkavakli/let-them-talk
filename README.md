@@ -1,5 +1,7 @@
 # Let Them Talk
 
+[![Latest release](https://img.shields.io/github/v/release/abdullahkavakli/let-them-talk)](https://github.com/abdullahkavakli/let-them-talk/releases/latest)
+
 A visual board for your agents. Each running Claude Code session is a card, and an arrow from one card to another tells both chats who they work with and why.
 
 ![Let Them Talk: cards for Claude Code chats, an arrow between two of them, and their conversation](docs/demo/demo.gif)
