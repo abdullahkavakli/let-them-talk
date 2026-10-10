@@ -14,6 +14,12 @@ A visual board for your agents. Each running Claude Code session is a card, and 
 - Terminal chats, Cursor chats and background agents share one board, with the subagents they run.
 - Local and small: the server is one Python file that uses only Python's standard library, and nothing is installed into Claude Code.
 
+## Use cases
+
+- You want your agents to communicate with each other.
+- Your Claude CLI (or extension) sessions need to be aware of one another and exchange messages.
+- You're working on a project where you need to stay on top of everything (not necessarily code-related).
+
 ## Start
 
 Needs Python 3.12+ and Claude Code (on Windows, both inside WSL).
