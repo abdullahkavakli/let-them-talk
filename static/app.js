@@ -60,13 +60,18 @@ function el(tag, attrs = {}, ...children) {
 // focused or turning there stays as it is.
 function swapChildren(box, children) {
   const next = el("div", {}, children);
-  if (next.innerHTML === box.innerHTML || retime(box, next)) return;
-  const active = document.activeElement, picked = document.getSelection();
-  const inBox = active && active !== box && box.contains(active);
-  if (picked && !picked.isCollapsed && box.contains(picked.anchorNode) && !inBox) return;
-  const keep = inBox ? focusKey(box, active) : null;
-  box.replaceChildren(...next.childNodes);
-  if (keep) refocus(box, keep);
+  const taken = tips.lend(box);  // the title of what the pointer is on is back while the two are compared
+  try {
+    if (next.innerHTML === box.innerHTML || retime(box, next)) return;
+    const active = document.activeElement, picked = document.getSelection();
+    const inBox = active && active !== box && box.contains(active);
+    if (picked && !picked.isCollapsed && box.contains(picked.anchorNode) && !inBox) return;
+    const keep = inBox ? focusKey(box, active) : null;
+    box.replaceChildren(...next.childNodes);
+    if (keep) refocus(box, keep);
+  } finally {
+    taken();
+  }
 }
 
 function retime(box, next) {
@@ -95,6 +100,178 @@ function refocus(box, k) {
   e.focus({ preventScroll: true });
   if (k.id) try { e.setSelectionRange(k.start, k.end); } catch { /* not a text box */ }
 }
+
+// ---------------------------------------------------------------- tooltips
+//
+// What the browser draws for a title="" is its own square box. Ours is one
+// small glass label (#tip), shown in the top layer, so over an open dialog too:
+// a moment after the pointer rests on an item that has a title, or when a Tab
+// reaches it (next to one that has just closed, it shows at once, as on a Mac).
+// The titles stay in the page's code as they are. While the pointer or the focus
+// is on an item its title is taken off, so the browser draws nothing of its own,
+// and it goes back when the pointer leaves. The details, the lists and the cards
+// are redrawn every few seconds under the pointer, so: swapChildren puts the
+// title back for its compare (a missing one would look like a change and rebuild
+// the panel every time), a title the page sets again is taken off again, and an
+// item redrawn under the pointer is followed (the label stays, with no blink).
+const tips = (() => {
+  const SHOW_MS = 600, QUICK_MS = 300, GAP = 8, EDGE = 8;
+  const tip = el("div", { id: "tip", class: "tip", popover: "manual" });
+  document.body.append(tip);
+  // held: what the pointer or the focus is on: { el, titles: [[element, its title], ...], by, x, y, quiet }.
+  // el is the item with the nearest title; titles also has the ones above it that would show instead (they
+  // go off with it). quiet: the label was dismissed (a click, a scroll, Esc): none again till the pointer
+  // or the focus leaves, and the titles stay off meanwhile, or the browser's own box would show.
+  let held = null, timer = 0, closedAt = -Infinity;
+  const observer = new MutationObserver((records) => settle(records));
+  const isShown = () => tip.matches(":popover-open");
+
+  function titled(from) {
+    const list = [];
+    for (let e = from.closest("[title]"); e; e = e.parentElement?.closest("[title]")) {
+      const t = e.getAttribute("title");
+      if (!t.trim()) break;  // an empty title says there is none, for what is above it too
+      list.push([e, t]);
+    }
+    return list;
+  }
+  const strip = () => { for (const [e] of held.titles) e.removeAttribute("title"); };
+  const putBack = () => { for (const [e, t] of held.titles) e.setAttribute("title", t); };
+  const flush = () => settle(observer.takeRecords());
+
+  // where the label goes under: the item; a long label wrapped over lines, the line the pointer is on;
+  // something big, the pointer
+  function target() {
+    let { left, right, top, bottom } = held.el.getBoundingClientRect();
+    if (held.by === "pointer") {
+      const line = [...held.el.getClientRects()].find((q) => held.x >= q.left && held.x <= q.right && held.y >= q.top && held.y <= q.bottom);
+      if (line) ({ left, right, top, bottom } = line);
+      if (bottom - top > 80) [top, bottom] = [held.y, held.y + 14];
+      if (right - left > 480) [left, right] = [held.x, held.x];
+    }
+    return { left: Math.max(0, left), right: Math.min(innerWidth, right), top: Math.max(0, top), bottom: Math.min(innerHeight, bottom) };
+  }
+  // centred under the item, above it when there is no room below, and inside the window
+  function place() {
+    const w = tip.offsetWidth, h = tip.offsetHeight, r = target();
+    const x = Math.max(EDGE, Math.min((r.left + r.right) / 2 - w / 2, innerWidth - w - EDGE));
+    let y = r.bottom + GAP;
+    if (y + h + EDGE > innerHeight) y = r.top - GAP - h;
+    y = Math.max(EDGE, Math.min(y, innerHeight - h - EDGE));
+    tip.style.left = `${Math.round(x)}px`;
+    tip.style.top = `${Math.round(y)}px`;
+  }
+  function show() {
+    timer = 0;
+    if (!held || held.quiet || !held.el.isConnected) return;
+    tip.textContent = held.titles[0][1];
+    if (!isShown()) {
+      tip.style.left = tip.style.top = "0px";
+      tip.showPopover();
+    }
+    place();
+  }
+  function hide() {
+    clearTimeout(timer);
+    timer = 0;
+    if (held) held.quiet = true;
+    if (isShown()) {
+      tip.hidePopover();
+      closedAt = performance.now();
+    }
+  }
+  function leave() {
+    hide();
+    if (!held) return;
+    putBack();
+    observer.disconnect();
+    held = null;
+  }
+  const track = (e) => { if (held && e && e.clientX != null) { held.x = e.clientX; held.y = e.clientY; } };
+
+  function enter(item, by, e) {
+    if (held && held.el.contains(item)) {
+      const d = item.closest("[title]");
+      if (!d || !held.el.contains(d)) return track(e);  // still on it
+    }
+    leave();
+    const list = titled(item);
+    if (!list.length) return;
+    held = { el: list[0][0], titles: list, by, x: e?.clientX ?? 0, y: e?.clientY ?? 0, quiet: false };
+    strip();
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["title"] });
+    if (performance.now() - closedAt < QUICK_MS) show();
+    else timer = setTimeout(show, SHOW_MS);
+  }
+
+  // The item was drawn again (it is gone from the page): the label goes on to the new one under the pointer, if any.
+  function moved() {
+    if (held.by === "pointer") {
+      for (const [e, t] of held.titles) if (e.isConnected) e.setAttribute("title", t);
+      const under = document.elementFromPoint(held.x, held.y), list = under ? titled(under) : [];
+      if (list.length) {
+        held.el = list[0][0];
+        held.titles = list;
+        strip();
+        if (isShown()) { tip.textContent = list[0][1]; place(); }
+        return;
+      }
+    }
+    leave();
+  }
+  // What changed in the page under the pointer: the item got a title again (the cards and some buttons are
+  // set on every refresh), which goes off again, or it was drawn again.
+  function settle(records) {
+    let again = false;
+    for (const r of records) {
+      if (!held) return;
+      if (r.type !== "attributes") continue;
+      const entry = held.titles.find(([e]) => e === r.target), now = r.target.getAttribute("title");
+      if (!entry || now === null) continue;
+      entry[1] = now;
+      r.target.removeAttribute("title");
+      again = again || entry === held.titles[0];
+    }
+    if (!held) return;
+    if (!held.el.isConnected) return moved();
+    if (again && isShown()) {
+      if (held.titles[0][1].trim()) { tip.textContent = held.titles[0][1]; place(); } else hide();
+    }
+  }
+
+  document.addEventListener("pointerover", (e) => {
+    if (e.pointerType !== "touch" && e.target instanceof Element) enter(e.target, "pointer", e);
+  });
+  document.addEventListener("pointermove", (e) => { if (held?.by === "pointer") track(e); });
+  document.addEventListener("pointerout", (e) => {
+    if (held?.by === "pointer" && held.el.contains(e.target) && !held.el.contains(e.relatedTarget)) leave();
+  });
+  document.addEventListener("focusin", (e) => {
+    if (e.target instanceof Element && e.target.matches(":focus-visible")) enter(e.target, "focus");
+  });
+  document.addEventListener("focusout", (e) => { if (held?.by === "focus" && held.el.contains(e.target)) leave(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hide(); });
+  for (const type of ["pointerdown", "click", "wheel", "scroll"]) document.addEventListener(type, hide, { capture: true, passive: true });
+  addEventListener("resize", hide);
+  addEventListener("blur", leave);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) leave(); });
+
+  return {
+    // For swapChildren: the title of what the pointer is on goes back while a panel's old and new contents are
+    // compared; the function returned takes it off again, or follows the item if the panel was rebuilt.
+    lend(box) {
+      if (held) flush();
+      if (!held || !box.contains(held.el)) return () => {};
+      const mine = held;
+      putBack();
+      return () => {
+        if (held !== mine) return;
+        if (held.el.isConnected) strip();
+        else moved();
+      };
+    },
+  };
+})();
 
 function svg(tag, attrs = {}) {
   const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
@@ -2007,7 +2184,7 @@ canvas.addEventListener("pointerup", async (evt) => {
 
 document.addEventListener("keydown", (evt) => {
   if (evt.key !== "Escape") return;
-  if (document.querySelector(":popover-open")) return;  // this Esc closes the popover (Appearance) only
+  if (document.querySelector(":popover-open:not(#tip)")) return;  // this Esc closes the popover (Appearance) only
   if (state.connecting) stopConnecting();
   else if (state.selected && !document.querySelector("dialog[open]")) closeDrawer();
 });

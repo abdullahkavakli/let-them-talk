@@ -298,6 +298,46 @@ def is_open(page, sel):
     return page.evaluate(f"(e => !!e && !e.hidden && !!e.offsetHeight)(document.querySelector('{sel}'))")
 
 
+def tip(page):
+    """The glass tooltip (#tip): whether it shows, its words and where it is."""
+    return page.evaluate("""() => { const t = document.querySelector('#tip'), r = t.getBoundingClientRect();
+        return { open: t.matches(':popover-open'), text: t.textContent, left: r.left, top: r.top, right: r.right, bottom: r.bottom }; }""")
+
+
+def park(page):
+    """The pointer on a bare spot of the board, long enough for a label that was open to be well closed (a
+    neighbour's shows at once for 300 ms after one closes)."""
+    page.mouse.move(700, 700)
+    page.wait_for_timeout(350)
+
+
+def hover_tip(page, sel, waits=1500):
+    """The pointer rests on what sel finds, from a bare spot of the board, until the tooltip shows."""
+    park(page)
+    page.hover(sel)
+    page.wait_for_selector("#tip:popover-open", timeout=waits)
+    return tip(page)
+
+
+def title_of(page, sel):
+    return page.evaluate("(s => document.querySelector(s).getAttribute('title'))", sel)
+
+
+def stray_share(page, box, colour="255, 0, 0"):
+    """What share of the pixels in the box (a screenshot of it) is not the one solid colour it is painted in."""
+    import base64
+    png = base64.b64encode(page.screenshot(clip=box)).decode()
+    return page.evaluate("""async ([b64, colour]) => {
+        const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+        const img = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+        const c = new OffscreenCanvas(img.width, img.height), g = c.getContext('2d');
+        g.drawImage(img, 0, 0);
+        const d = g.getImageData(0, 0, img.width, img.height).data, want = colour.split(',').map(Number);
+        let other = 0;
+        for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - want[0]) + Math.abs(d[i + 1] - want[1]) + Math.abs(d[i + 2] - want[2]) > 12) other++;
+        return other / (d.length / 4); }""", [png, colour])
+
+
 # Text against the first background behind it, with any fading (opacity) on the
 # way up mixed in, as the eye sees it.
 CONTRAST = """(sel) => {
@@ -1974,6 +2014,190 @@ def checks_wide(browser):
         finally:
             BOARDS[:] = kept
         check(name, listed == [OTHER] and suggested == [OTHER], (listed, suggested))
+
+    # A title is drawn as our own small glass label, not the browser's square box (tips in app.js). While the
+    # pointer or the focus is on an item the browser's title is off (or its box would show too); it is back after.
+    name = "tooltips: a title shows as a small glass label after a short hover, centred under it with its exact words; the browser's own title is off meanwhile and back after"
+    with step(page, name):
+        park(page)
+        words = title_of(page, "#fit-view")
+        page.hover("#fit-view")
+        page.wait_for_timeout(250)
+        early = tip(page)["open"]
+        off = title_of(page, "#fit-view")
+        page.wait_for_selector("#tip:popover-open")
+        shown, anchor = tip(page), page.locator("#fit-view").bounding_box()
+        page.mouse.move(700, 700)
+        page.wait_for_function("!document.querySelector('#tip').matches(':popover-open')")
+        check(name, words == "Bring every card into view" and not early and off is None and shown["text"] == words
+              and 4 <= shown["top"] - (anchor["y"] + anchor["height"]) <= 12
+              and abs((shown["left"] + shown["right"]) / 2 - (anchor["x"] + anchor["width"] / 2)) <= 2
+              and title_of(page, "#fit-view") == words, (words, early, off, shown, anchor))
+
+    name = "tooltips: the label is glass like the notices and the Board list, in light and dark, never takes the pointer, and is solid with transparency reduced"
+    with step(page, name):
+        hover_tip(page, "#fit-view")
+        look = lambda: page.evaluate("""() => { const s = getComputedStyle(document.querySelector('#tip'));
+            return { blur: s.backdropFilter.includes('blur'), alpha: parseFloat(s.backgroundColor.split(',')[3]),
+                     tint: s.backgroundColor.match(/\\d+/g).slice(0, 3).join(' '), round: parseFloat(s.borderTopLeftRadius),
+                     lit: s.boxShadow.includes('inset'), size: s.fontSize, wide: parseFloat(s.maxWidth), pointer: s.pointerEvents,
+                     open: document.querySelector('#tip').matches(':popover-open') }; }""")
+        light = look()
+        page.emulate_media(color_scheme="dark")
+        try:
+            dark = look()
+        finally:
+            page.emulate_media(color_scheme="light")
+        cdp = page.context.new_cdp_session(page)
+        cdp.send("Emulation.setEmulatedMedia", {"features": [{"name": "prefers-reduced-transparency", "value": "reduce"}]})
+        try:
+            solid = page.evaluate("(s => [s.backgroundColor, s.backdropFilter])(getComputedStyle(document.querySelector('#tip')))")
+        finally:
+            cdp.send("Emulation.setEmulatedMedia", {"features": [{"name": "prefers-reduced-transparency", "value": "no-preference"}]})
+        check(name, all(v["open"] and v["blur"] and 0 < v["alpha"] < 1 and v["round"] >= 12 and v["lit"] and v["size"] == "12px"
+                        and v["wide"] <= 260 and v["pointer"] == "none" for v in (light, dark))
+              and light["tint"] != dark["tint"] and solid == ["rgb(255, 255, 255)", "none"], (light, dark, solid))
+
+    name = "tooltips: the label hides when the pointer leaves, on a click, on Esc and on scrolling; the title is back once the pointer has left"
+    with step(page, name):
+        park(page)
+        words = title_of(page, "#fit-view")
+        gone = lambda: not tip(page)["open"]
+        hover_tip(page, "#fit-view")
+        page.mouse.move(700, 700)
+        page.wait_for_timeout(50)
+        left = gone() and title_of(page, "#fit-view") == words
+        hover_tip(page, "#fit-view")
+        page.keyboard.press("Escape")
+        esc = gone()
+        page.mouse.move(700, 700)
+        hover_tip(page, "#fit-view")
+        page.mouse.wheel(0, 60)
+        page.wait_for_timeout(50)
+        wheel = gone()
+        page.mouse.move(700, 700)
+        hover_tip(page, "#fit-view")
+        page.locator("#fit-view").click()
+        page.wait_for_timeout(50)
+        clicked = gone() and title_of(page, "#fit-view") is None  # still on it: no label, and no browser box either
+        page.mouse.move(700, 700)
+        page.wait_for_timeout(50)
+        check(name, left and esc and wheel and clicked and title_of(page, "#fit-view") == words, (left, esc, wheel, clicked))
+
+    name = "tooltips: the label of a neighbour shows at once after one closes, but only after the delay when none has just closed"
+    with step(page, name):
+        hover_tip(page, "#fit-view")
+        page.hover("#show-subagents")
+        page.wait_for_timeout(120)
+        quick = tip(page)
+        page.mouse.move(700, 700)
+        page.wait_for_timeout(450)
+        page.hover("#fit-view")
+        page.wait_for_timeout(250)
+        slow = tip(page)["open"]
+        check(name, quick["open"] and quick["text"].startswith("Show the subagents") and not slow, (quick, slow))
+
+    name = "tooltips: near the window's right and bottom edges the label stays inside the window, above the item when there is no room below"
+    with step(page, name):
+        page.evaluate("""() => { const add = (id, css) => { const b = document.createElement('button'); b.id = id; b.textContent = 'Edge';
+              b.title = 'A long explanation that wraps over a few lines, because it is a lot longer than a label may be.\\nWith a second line and a folder: /home/you/some/very/long/path/name';
+              b.style.cssText = 'position: fixed; z-index: 50; ' + css; document.body.append(b); };
+            add('edge-corner', 'right: 0; bottom: 0'); add('edge-right', 'right: 0; top: 300px'); add('edge-left', 'left: 0; top: 600px'); }""")
+        try:
+            seen = {}
+            for edge in ("edge-corner", "edge-right", "edge-left"):
+                seen[edge] = (hover_tip(page, f"#{edge}"), page.locator(f"#{edge}").bounding_box())
+            wh = page.evaluate("[innerWidth, innerHeight]")
+        finally:
+            page.evaluate("document.querySelectorAll('[id^=edge-]').forEach(b => b.remove())")
+        inside = all(t["left"] >= 7.5 and t["top"] >= 7.5 and t["right"] <= wh[0] - 7.5 and t["bottom"] <= wh[1] - 7.5 and t["right"] - t["left"] <= 260.5
+                     for t, _ in seen.values())
+        corner, right = seen["edge-corner"], seen["edge-right"]
+        check(name, inside and corner[0]["bottom"] <= corner[1]["y"] and right[0]["top"] >= right[1]["y"] + right[1]["height"],
+              (seen, wh))
+
+    name = "tooltips: the label shows above an open dialog"
+    with step(page, name):
+        page.locator("#new-chat").click()
+        page.wait_for_selector("#chat-dialog[open]")
+        # the dialog painted one solid colour: whatever isn't that colour over it is above it
+        page.evaluate("""() => { const d = document.querySelector('#chat-dialog');
+            d.style.setProperty('background', 'rgb(255, 0, 0)', 'important'); d.style.setProperty('backdrop-filter', 'none', 'important'); }""")
+        try:
+            t = hover_tip(page, "#chat-dialog .btn.place >> nth=0")
+            clip = {"x": t["left"] + 2, "y": t["top"] + 2, "width": t["right"] - t["left"] - 4, "height": t["bottom"] - t["top"] - 4}
+            above = stray_share(page, clip)
+            page.evaluate("document.querySelector('#tip').hidePopover()")
+            bare = stray_share(page, clip)  # the same spot without the label: the dialog's own fields and words
+        finally:
+            page.evaluate("""() => { const d = document.querySelector('#chat-dialog');
+                d.style.removeProperty('background'); d.style.removeProperty('backdrop-filter'); }""")
+        check(name, t["open"] and above > 0.9 and above > bare + 0.5, (t, above, bare))
+
+    name = "tooltips: Tab onto an item shows its label after the delay, and moving on hides it; the title is off meanwhile and back after"
+    with step(page, name):
+        park(page)
+        words = title_of(page, "#new-workflow")
+        page.focus("#new-chat")
+        page.keyboard.press("Tab")
+        on = page.evaluate("document.activeElement.id")
+        early = tip(page)["open"]
+        page.wait_for_selector("#tip:popover-open")
+        shown, off = tip(page), title_of(page, "#new-workflow")
+        page.keyboard.press("Tab")
+        page.wait_for_function("!document.querySelector('#tip').matches(':popover-open')")
+        check(name, on == "new-workflow" and not early and shown["text"] == words and off is None
+              and title_of(page, "#new-workflow") == words, (on, early, shown, off))
+
+    name = "tooltips: a title with a line break keeps it, on two lines"
+    with step(page, name):
+        t = hover_tip(page, f'.node[data-id="{A}"] .meta >> nth=0')
+        check(name, t["text"].startswith("Address: @alpha\nFolder: ") and t["bottom"] - t["top"] > 40, t)
+
+    name = "tooltips: polls while the pointer rests on an item in the details keep the label, rebuild nothing and let no browser title back"
+    with step(page, name):
+        open_card(page, A)
+        page.evaluate("""() => { window.__swaps = 0; new MutationObserver(m => window.__swaps += m.length)
+            .observe(document.querySelector('#drawer-body'), { childList: true, subtree: true }); }""")
+        hover_tip(page, "#drawer .rename")
+        poll(page, 3)
+        inside, off = tip(page), title_of(page, "#drawer .rename")
+        swaps = page.evaluate("window.__swaps")
+        # the board's folder gets its title set again on every poll
+        hover_tip(page, "#board-folder")
+        poll(page, 2)
+        folder, folder_off = tip(page), title_of(page, "#board-folder")
+        check(name, inside["open"] and inside["text"] == "Rename (F2)" and off is None and swaps == 0
+              and folder["open"] and folder["text"] == FOLDER and folder_off is None, (inside, off, swaps, folder, folder_off))
+
+    name = "tooltips: an item redrawn under the pointer keeps the label, with no title stuck off, and has its title back once the pointer leaves"
+    with step(page, name):
+        open_card(page, A)
+        hover_tip(page, "#drawer h3")
+        page.api.patch = {A: {"title": "alpha two", "name": "alpha"}}  # its heading is redrawn with other words
+        poll(page)
+        redrawn = page.evaluate("document.querySelector('#drawer h3').textContent")
+        during = tip(page), title_of(page, "#drawer h3")
+        page.mouse.move(700, 700)
+        page.wait_for_timeout(100)
+        check(name, redrawn == "alpha two" and during[0]["open"] and during[0]["text"] == "Double-click to rename" and during[1] is None
+              and not tip(page)["open"] and title_of(page, "#drawer h3") == "Double-click to rename", (redrawn, during))
+
+    name = "tooltips: when the details close under the pointer, the label goes and the title is back"
+    with step(page, name):
+        open_card(page, A)
+        hover_tip(page, "#drawer .rename")
+        page.evaluate("closeDrawer()")
+        page.wait_for_function("!document.querySelector('#tip').matches(':popover-open')", timeout=3000)
+        check(name, title_of(page, "#drawer .rename") == "Rename (F2)")
+
+    name = "tooltips: Esc still closes the details while a label shows"
+    with step(page, name):
+        open_card(page, A)
+        hover_tip(page, "#drawer .rename")
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(50)
+        check(name, not is_open(page, "#drawer") and not tip(page)["open"])
 
     check("page: no script errors", not page.errors, "; ".join(page.errors))
     page.context.close()

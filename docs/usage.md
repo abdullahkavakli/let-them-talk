@@ -539,6 +539,12 @@ browser's own pop-up). Esc and **Cancel** say no. A red button means it can't
 be undone, and then the box starts on **Cancel**, so Enter can't confirm it by
 accident.
 
+The short explanations that go with buttons, cards, folders and more are small
+glass labels too, not the browser's own square box. One shows under an item
+after you rest the pointer on it for a moment (at once when you move on to the
+one next to it), and also when you Tab to it; it goes when you move off, click,
+scroll or press Esc, and it stays inside the window and above any open box.
+
 Text uses your system's font: Segoe UI Variable on Windows 11, Segoe UI on
 Windows 10 (Segoe UI Variable once you
 [install it from Microsoft](https://aka.ms/SegoeUIVariable)), SF Pro on a
