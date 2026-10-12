@@ -1310,8 +1310,9 @@ function wireDetails(c, close = closeDrawer) {
       el("button", {
         class: "btn danger", text: "Disconnect",
         onclick: async () => {
-          const told = notify.checked ? " Both agents will be told." : "";
-          if (!confirm(`Disconnect ${a ? display(a) : "?"} → ${b ? display(b) : "?"}?${told}`)) return;
+          if (!await confirmBox(`Disconnect ${a ? display(a) : "?"} → ${b ? display(b) : "?"}?`,
+            notify.checked ? "Both agents will be told." : "Neither agent will be told.",
+            { ok: "Disconnect", danger: true })) return;
           if (await act("disconnect", { id: c.id, notify: notify.checked })) close();
         },
       })),
@@ -1417,8 +1418,9 @@ function conversationButton(n, verb, cls) {
     class: cls, text: busy ? "Opening…" : `${verb} IDE`, disabled: !!busy,
     title: `Opens its folder in ${editor}, then this conversation in ${editor}'s Claude panel there, where you ` +
       `go on with it.${end ? " It ends here first (you're asked)." : ""} ${trustNote(editor)}`,
-    onclick: () => {
-      if (end && !confirm(endHereText(n, editor))) return;
+    onclick: async () => {
+      if (end && !await confirmBox(`Go on with ${display(n)} in ${editor}?`, endHereText(n, editor),
+        { ok: `Open in ${editor}` })) return;
       openInEditor(n.sessionId, { sessionId: n.sessionId, editor, continue: true, end },
         (r) => sentToEditor(n, editor, !!r.ended));
     },
@@ -1440,9 +1442,9 @@ function endHereText(n, editor) {
   const midway = n.status === "busy" ? ", in the middle of what it is doing" : "";
   const shown = n.shownIn ? `its ${n.shownIn === "Terminal" ? "terminal" : n.shownIn} window and any other ` +
     "terminal showing it close" : "any terminal window showing it closes";
-  return `Go on with ${display(n)} in ${editor}?\n\nOnly one place can run a conversation, so it ends here ` +
-    `first: it stops running in the background${midway}, and ${shown}. Then it opens in ${editor}, where you ` +
-    "go on with it. Its card stays on the board.";
+  return `Only one place can run a conversation, so it ends here first: it stops running in the ` +
+    `background${midway}, and ${shown}. Then it opens in ${editor}, where you go on with it. Its card stays ` +
+    "on the board.";
 }
 
 // An editor chat moved to a terminal. Only one place can run a conversation, so
@@ -1455,7 +1457,8 @@ function terminalButton(n) {
     title: n.live ? `Closes this chat in ${n.editor} (you're asked), then opens it in a terminal window`
       : "Opens this chat in a terminal window",
     onclick: async () => {
-      if (n.live && !confirm(moveToTerminalText(n))) return;
+      if (n.live && !await confirmBox(`Open ${display(n)} in a terminal?`, moveToTerminalText(n),
+        { ok: "Open in terminal" })) return;
       editorBusy[n.sessionId] = true;
       if (state.view) render();
       try {
@@ -1480,8 +1483,8 @@ function moveToTerminalText(n) {
   const midway = n.status === "busy" ? " It stops what it is doing." : "";
   const data = state.agents[n.sessionId], running = data && !data.error ? agentCounts(data).running : 0;
   const agents = running ? ` Its ${running} running agent${running === 1 ? "" : "s"} stop${running === 1 ? "s" : ""} too.` : "";
-  return `Open ${display(n)} in a terminal?\n\nOnly one place can run a conversation, so the chat closes in ` +
-    `${n.editor} first.${midway}${agents} Then it opens in a terminal window.`;
+  return `Only one place can run a conversation, so the chat closes in ${n.editor} first.${midway}${agents} ` +
+    "Then it opens in a terminal window.";
 }
 
 // The board's own folder in an editor window (the sidebar's Board folder).
@@ -1601,8 +1604,9 @@ function endControls(n) {
     class: "btn danger", text: "End this chat", title: "Its Claude Code exits; the terminal window stays open",
     onclick: async () => {
       const midway = n.status === "busy" ? " It stops in the middle of what it is doing." : "";
-      if (!confirm(`End ${display(n)}?${midway} Claude Code in its terminal exits; the window stays open. ` +
-        `The conversation is kept: claude --resume ${n.sessionId} continues it.`)) return;
+      if (!await confirmBox(`End ${display(n)}?`, `${midway} Claude Code in its terminal exits; the window stays ` +
+        `open. The conversation is kept: claude --resume ${n.sessionId} continues it.`,
+      { ok: "End chat", danger: true })) return;
       try {
         const { result } = await api(`/api/board/${state.boardId}/end`, { sessionId: n.sessionId });
         if (result.ended) toast(`Ended ${display(n)}. To continue it: ${result.resume}`, "ok", 0);
@@ -1632,7 +1636,8 @@ function removeControls(n, conns) {
       class: "btn danger",
       text: conns.length ? `Remove from board with ${arrows}` : "Remove from board",
       onclick: async () => {
-        if (conns.length && !confirm(`Remove ${display(n)} and ${arrows} from the board?`)) return;
+        if (conns.length && !await confirmBox(`Remove ${display(n)} from the board?`,
+          `It and ${arrows} come off the board.`, { ok: "Remove", danger: true })) return;
         if (await act("remove", { sessionId: n.sessionId, notify: liveEnds > 0 && notify.checked })) closeDrawer();
       },
     })),
@@ -2331,6 +2336,30 @@ for (const btn of document.querySelectorAll("[data-close]")) {
   btn.addEventListener("click", () => btn.closest("dialog").close());
 }
 
+// Asking before something that stops agents or can't be undone: Apple's alert, a
+// small glass panel with two round buttons, in place of the browser's own popup.
+// Resolves true on the sure button, false on Cancel or Esc. One that can't be
+// undone (danger) has a red button and starts on Cancel, so Enter can't confirm it.
+const ask = { dialog: $("#ask"), title: $("#ask-title"), text: $("#ask-text"), no: $("#ask-no"), yes: $("#ask-yes") };
+let asking = null;  // resolves the open question
+ask.dialog.addEventListener("close", () => {
+  const answer = asking;
+  asking = null;
+  answer?.(ask.dialog.returnValue === "yes");
+});
+function confirmBox(title, text, { ok = "OK", danger = false } = {}) {
+  asking?.(false);  // a question still open gets its "no"
+  ask.title.textContent = title;
+  ask.text.textContent = text.trim();
+  ask.text.hidden = !text.trim();
+  ask.yes.textContent = ok;
+  ask.yes.className = danger ? "btn danger" : "btn primary";
+  ask.dialog.returnValue = "";  // Esc closes without setting one
+  if (!ask.dialog.open) ask.dialog.showModal();
+  (danger ? ask.no : ask.yes).focus();
+  return new Promise((resolve) => { asking = resolve; });
+}
+
 // The server may not be up yet: say so and keep trying until it answers.
 function boot() {
   start().then(() => reachable(true), (e) => {
@@ -2371,8 +2400,9 @@ new ResizeObserver(placeHint).observe($(".topbar"));
 // Delete the board on screen, then show another (or ask for a new one).
 $("#delete-board").addEventListener("click", async () => {
   const board = state.view?.board;
-  if (!board || !confirm(`Delete the board "${board.title}"? Its cards and arrows go; ` +
-    "the sessions keep running and no agent is told.")) return;
+  if (!board || !await confirmBox(`Delete the board "${board.title}"?`,
+    "Its cards and arrows go; the sessions keep running and no agent is told.",
+    { ok: "Delete board", danger: true })) return;
   try {
     await api(`/api/board/${board.id}/delete`, {});
   } catch (e) {
@@ -3356,9 +3386,12 @@ function backgroundSection(n) {
           : agentAction(n, "agent-logs", (r) => { state.logs[n.sessionId] = r.text; renderDrawer(); }) }),
       !restart && compactButton(n),
       n.running && n.status !== "idle" && el("button", { class: "btn", text: "Stop",
-        onclick: () => confirm(`Stop ${display(n)}? It stops whatever it is doing now, as Esc does ` +
-          "in its terminal. It keeps running, and its terminal stays open.")
-          && agentAction(n, "agent-stop", () => toast(`Stopped ${display(n)}. It's waiting for you.`, "ok")) })),
+        onclick: async () => {
+          if (await confirmBox(`Stop ${display(n)}?`, "It stops whatever it is doing now, as Esc does in its " +
+            "terminal. It keeps running, and its terminal stays open.", { ok: "Stop" })) {
+            agentAction(n, "agent-stop", () => toast(`Stopped ${display(n)}. It's waiting for you.`, "ok"));
+          }
+        } })),
     state.logs[n.sessionId] && el("pre", { class: "logs mono", text: state.logs[n.sessionId] }),
     ...(restart ? [] : ultracodeRow(n)),
   ];
@@ -3422,8 +3455,9 @@ function compactButton(n) {
     title: waits || "Types /compact into it, as in its terminal: Claude Code sums up its conversation so far, " +
       `so it goes on with its context freed.${wakes}`,
     onclick: async () => {
-      if (!confirm(`Compact ${display(n)}? Claude Code replaces its conversation so far with a summary: its ` +
-        `context is freed, but details the summary leaves out are gone for it.${wakes}`)) return;
+      if (!await confirmBox(`Compact ${display(n)}?`, "Claude Code replaces its conversation so far with a " +
+        `summary: its context is freed, but details the summary leaves out are gone for it.${wakes}`,
+      { ok: "Compact" })) return;
       state.compacting.add(n.sessionId);
       renderDrawer();
       try {
@@ -3447,16 +3481,19 @@ function deleteControls(n) {
   return el("div", { class: "drawer-actions" },
     n.running && el("button", { class: "btn", text: "End agent",
       title: "claude stop: it stops and its terminal windows close; it stays here, and a prompt wakes it",
-      onclick: () => {
+      onclick: async () => {
         const midway = n.status === "busy" ? " It stops in the middle of what it is doing." : "";
-        if (confirm(`End ${display(n)}?${midway} It stops and its terminal windows close. ` +
-          "It stays on the board: send it a prompt to wake it.")) {
+        if (await confirmBox(`End ${display(n)}?`, `${midway} It stops and its terminal windows close. ` +
+          "It stays on the board: send it a prompt to wake it.", { ok: "End agent" })) {
           agentAction(n, "agent-end", () => toast(`Ended ${display(n)}. Send it a prompt to wake it.`, "ok"));
         }
       } }),
     el("button", { class: "btn danger", text: "Delete agent",
       title: "claude rm: removes it from Claude Code's list, with its own worktree if it has one (its conversation stays on disk)",
-      onclick: () => confirm(`Delete the background agent ${display(n)}? It's removed for good, with its own ` +
-        "worktree if it has one. Its conversation stays on disk.")
-        && agentAction(n, "agent-delete", () => { toast(`Deleted ${display(n)}.`, "ok"); closeDrawer(); }) }));
+      onclick: async () => {
+        if (await confirmBox(`Delete the background agent ${display(n)}?`, "It's removed for good, with its own " +
+          "worktree if it has one. Its conversation stays on disk.", { ok: "Delete agent", danger: true })) {
+          agentAction(n, "agent-delete", () => { toast(`Deleted ${display(n)}.`, "ok"); closeDrawer(); });
+        }
+      } }));
 }

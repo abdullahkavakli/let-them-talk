@@ -475,6 +475,13 @@ edge; other browsers show a plain blur. With reduced transparency on in your
 system the panels are solid (in browsers that report that setting, such as
 Chrome and Edge).
 
+Before something that stops an agent or can't be undone (Disconnect, End,
+Stop, Compact, Remove, Delete …), the page asks in a small glass box over the
+dimmed board, with **Cancel** and a button named for the action (not the
+browser's own pop-up). Esc and **Cancel** say no. A red button means it can't
+be undone, and then the box starts on **Cancel**, so Enter can't confirm it by
+accident.
+
 Text uses your system's font: Segoe UI Variable on Windows 11, Segoe UI on
 Windows 10 (Segoe UI Variable once you
 [install it from Microsoft](https://aka.ms/SegoeUIVariable)), SF Pro on a

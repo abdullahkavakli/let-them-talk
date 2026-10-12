@@ -224,10 +224,10 @@ def open_page(browser, width=1440, height=900, scheme="light"):
     page = ctx.new_page()
     page.set_default_timeout(5000)
     page.api = FakeAPI()
-    page.errors, page.dialogs, page.dialog_texts = [], [], []
+    page.errors, page.dialogs, page.asked = [], [], []  # dialogs: the browser's own popups (the page uses none)
     page.route("**/*", page.api.reply)
     page.on("pageerror", lambda e: page.errors.append(str(e)))
-    page.on("dialog", lambda d: (page.dialogs.append(d.type), page.dialog_texts.append(d.message), d.accept()))
+    page.on("dialog", lambda d: (page.dialogs.append(d.type), d.accept()))
     page.goto(ORIGIN + "/")
     page.wait_for_function("document.querySelectorAll('.node').length === 5")
     return page
@@ -244,6 +244,24 @@ def open_card(page, sid):
     page.locator(f'.node[data-id="{sid}"] .name').click()
     page.wait_for_function("!document.querySelector('#drawer').hidden")
     poll(page)
+
+
+def answer(page, yes=True):
+    """The question the page is asking (its glass dialog `#ask`): what it says, then the button pressed."""
+    page.wait_for_selector("#ask[open]")
+    said = page.evaluate("""() => ({ title: document.querySelector('#ask-title').textContent,
+        text: document.querySelector('#ask-text').textContent, ok: document.querySelector('#ask-yes').textContent,
+        danger: document.querySelector('#ask-yes').classList.contains('danger'),
+        focus: document.activeElement.id })""")
+    page.click("#ask-yes" if yes else "#ask-no")
+    page.wait_for_selector("#ask[open]", state="detached")
+    page.asked.append(said)
+    return said
+
+
+def asking(page):
+    """Whether the glass question is on screen."""
+    return page.locator("#ask[open]").count() == 1
 
 
 def open_agents(page, sid=B, agents=None):
@@ -410,23 +428,25 @@ def checks_wide(browser):
         open_card(page, C)  # gamma: its process ended
         ended = page.locator("#drawer-body button", has_text="End agent").count()
         open_card(page, B)  # beta: running
-        page.locator("#drawer-body button", has_text="End agent").click()  # the confirm is accepted
+        page.locator("#drawer-body button", has_text="End agent").click()
+        said = answer(page)
         page.wait_for_timeout(200)
         sent = [b for p, b in page.api.posts if p.endswith("/agent-end")]
-        check(name, ended == 0 and "confirm" in page.dialogs and sent == [{"jobId": "abcdef12"}])
+        check(name, ended == 0 and said["ok"] == "End agent" and sent == [{"jobId": "abcdef12"}], said)
 
     name = "details: Open in IDE ends a running background agent only after a yes, an asleep one isn't asked"
     with step(page, name):
-        asked = len(page.dialogs)
         open_card(page, C)  # gamma: its process ended
         page.locator("#drawer-body button", has_text="Open in IDE").click()
         page.wait_for_timeout(200)
-        quiet = len(page.dialogs) == asked
-        open_card(page, B)  # beta: running; the confirm is accepted
+        quiet = not asking(page)
+        open_card(page, B)  # beta: running
         page.locator("#drawer-body button", has_text="Open in IDE").click()
+        said = answer(page)
         page.wait_for_timeout(200)
         sent = [(b["sessionId"], b["end"]) for p, b in page.api.posts if p.endswith("/open-folder")]
-        check(name, quiet and page.dialogs[asked:] == ["confirm"] and sent == [(C, False), (B, True)], sent)
+        check(name, quiet and said["title"].startswith("Go on with beta in ") and said["ok"].startswith("Open in ")
+              and not said["danger"] and sent == [(C, False), (B, True)], (said, sent))
 
     name = "details: after Open in IDE the notice says where to find the chat if nothing opened, and can copy the link"
     with step(page, name):  # the editor never says whether the link opened anything
@@ -435,7 +455,8 @@ def checks_wide(browser):
                       "{value: {writeText: (t) => { window.copied = t; }}, configurable: true})")
         page.api.post_result = {"ended": "abcdef12"}
         open_card(page, B)
-        page.locator("#drawer-body button", has_text="Open in IDE").click()  # the confirm is accepted
+        page.locator("#drawer-body button", has_text="Open in IDE").click()
+        answer(page)
         page.wait_for_function("document.querySelector('#toasts')?.textContent.includes('past conversations')")
         said = page.inner_text("#toasts")
         page.locator("#toasts button", has_text="Copy link").click()
@@ -454,17 +475,15 @@ def checks_wide(browser):
         poll(page)
         open_card(page, A)
         beside = page.locator("#drawer-body .drawer-actions", has_text="Open in IDE").locator("button").all_inner_texts()
-        asked = len(page.dialogs)
-        page.locator("#drawer-body button", has_text="Open in terminal").click()  # the confirm is accepted
+        page.locator("#drawer-body button", has_text="Open in terminal").click()
+        said = answer(page)
         page.wait_for_timeout(300)
-        says = page.dialogs[asked:] == ["confirm"] and "closes in Cursor first" in page.dialog_texts[-1] \
-            and "running agent" not in page.dialog_texts[-1]  # it runs none
+        says = "closes in Cursor first" in said["text"] and "running agent" not in said["text"]  # it runs none
         toast = page.inner_text("#toasts")
         open_card(page, D)
-        asked = len(page.dialogs)
         page.locator("#drawer-body button", has_text="Open in terminal").click()
         page.wait_for_timeout(300)
-        quiet = len(page.dialogs) == asked
+        quiet = not asking(page)
         sent = [b for p, b in page.api.posts if p.endswith("/open-terminal")]
         page.api.patch = {A: {**ide, "platform": "windows"}}
         poll(page)
@@ -503,9 +522,9 @@ def checks_wide(browser):
             poll(page)
             open_card(page, A)
             page.evaluate(f"loadDetails('{A}')")
-            page.locator("#drawer-body button", has_text="Open in terminal").click()  # the confirm is accepted
+            page.locator("#drawer-body button", has_text="Open in terminal").click()
+            texts.append(answer(page)["text"])
             page.wait_for_timeout(300)
-            texts.append(page.dialog_texts[-1])
             page.evaluate("closeDrawer()")
         check(name, "Its 3 running agents stop too. Then it opens in a terminal window." in texts[0]
               and "Its 1 running agent stops too." in texts[1] and "running agent" not in texts[2], texts)
@@ -670,11 +689,11 @@ def checks_wide(browser):
         page.api.patch = {B: {"status": "idle", "agentState": "idle", "waitingFor": None}}
         poll(page)
         open_card(page, B)
-        asked = len(page.dialogs)
-        page.locator("#drawer-body button", has_text="Compact").click()  # the confirm is accepted
+        page.locator("#drawer-body button", has_text="Compact").click()
+        said = answer(page)
         page.wait_for_timeout(300)
         sent = [b for p, b in page.api.posts if p.endswith("/compact")]
-        check(name, page.dialogs[asked:] == ["confirm"] and sent == [{"sessionId": B}], (page.dialogs[asked:], sent))
+        check(name, said["ok"] == "Compact" and sent == [{"sessionId": B}], (said, sent))
 
     name = "compact: while it compacts the button waits, saying so; a notice says when it's done"
     with step(page, name):
@@ -699,17 +718,17 @@ def checks_wide(browser):
         poll(page)
         editor = page.locator("#drawer-body button", has_text="Compact").count()
         open_card(page, B)  # beta: asking you something
-        asking = page.locator("#drawer-body button", has_text="Compact").is_disabled()
+        waits = page.locator("#drawer-body button", has_text="Compact").is_disabled()
         open_card(page, C)  # gamma: its process ended
-        asked = len(page.dialogs)
         page.locator("#drawer-body button", has_text="Compact").click()
+        said = answer(page)
         page.wait_for_timeout(300)
         woken = [b for p, b in page.api.posts if p.endswith("/compact")]
         page.api.patch = {C: {"resumable": False}}
         poll(page)
         restart = page.locator("#drawer-body button", has_text="Compact").count()
-        check(name, terminal == editor == restart == 0 and asking and page.dialogs[asked:] == ["confirm"]
-              and woken == [{"sessionId": C}], (terminal, editor, restart, asking, woken))
+        check(name, terminal == editor == restart == 0 and waits and "It wakes up for it." in said["text"]
+              and woken == [{"sessionId": C}], (terminal, editor, restart, waits, said, woken))
 
     name = "ultracode: New agent can start a background agent with it, not a Chat in IDE"
     with step(page, name):
@@ -1162,9 +1181,43 @@ def checks_wide(browser):
         page.locator(".wire-label").first.click()
         page.wait_for_function("!document.querySelector('#drawer').hidden")
         page.get_by_role("button", name="Disconnect").click()
+        answer(page)
         page.wait_for_timeout(400)
         check(name, page.locator("#toasts .toast.error").count() == 1 and is_open(page, "#drawer")
               and "alert" not in page.dialogs)
+
+    name = "asking first: a glass alert with two round buttons side by side; Cancel and Esc say no; one that can't be undone is red and starts on Cancel"
+    with step(page, name):
+        open_card(page, B)  # beta: running
+        delete = page.locator("#drawer-body button", has_text="Delete agent")
+        deleted = lambda: [1 for p, _ in page.api.posts if p.endswith("/agent-delete")]
+        delete.click()
+        page.wait_for_selector("#ask[open]")
+        page.wait_for_function("document.querySelector('#ask').getAnimations().length === 0")
+        look = page.evaluate("""() => {
+            const box = (s) => document.querySelector(s).getBoundingClientRect(), css = (s) => getComputedStyle(document.querySelector(s));
+            const no = box('#ask-no'), yes = box('#ask-yes'), alert = box('#ask');
+            const [r, g] = css('#ask-yes').backgroundColor.match(/\\d+/g).map(Number);
+            return { side: no.right <= yes.left && Math.abs(no.top - yes.top) < 1, equal: Math.abs(no.width - yes.width) < 1,
+                     tall: no.height >= 44 && yes.height >= 44, small: alert.width <= 380 && alert.height < 400,
+                     glass: css('#ask').backdropFilter !== 'none', red: r > 180 && g < 120,
+                     centred: css('#ask-title').textAlign === 'center', focus: document.activeElement.id };
+        }""")
+        page.keyboard.press("Escape")
+        page.wait_for_selector("#ask[open]", state="detached")
+        esc = not deleted() and is_open(page, "#drawer")  # Esc doesn't close the details behind it
+        delete.click()
+        cancelled = answer(page, yes=False)
+        delete.click()
+        said = answer(page)
+        page.wait_for_timeout(200)
+        open_card(page, B)
+        page.locator("#drawer-body button", has_text="End agent").click()
+        plain = answer(page, yes=False)
+        check(name, all(v for k, v in look.items() if k != "focus") and look["focus"] == "ask-no"
+              and esc and cancelled["danger"] and len(deleted()) == 1 and said["ok"] == "Delete agent"
+              and said["title"] == "Delete the background agent beta?" and plain["focus"] == "ask-yes" and not plain["danger"]
+              and page.dialogs == [], (look, esc, cancelled, said, plain, page.dialogs))
 
     name = "new agent: Chat in IDE has the folder box, on the board's folder"
     with step(page, name):

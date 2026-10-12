@@ -267,6 +267,17 @@
   </form>
 </dialog>
 
+<dialog id="ask" aria-labelledby="ask-title" aria-describedby="ask-text">
+  <form method="dialog" id="ask-form">
+    <h2 id="ask-title"></h2>
+    <p id="ask-text"></p>
+    <div class="ask-actions">
+      <button value="no" class="btn" id="ask-no">Cancel</button>
+      <button value="yes" class="btn primary" id="ask-yes"></button>
+    </div>
+  </form>
+</dialog>
+
 <div id="toasts" aria-live="polite"></div>
 
 <script src="/static/app.js"></script>
