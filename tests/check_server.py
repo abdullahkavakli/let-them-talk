@@ -89,8 +89,9 @@ sessions[:] = [fake("other", elsewhere), fake("mine", folder)]
 job = finish(r["launchId"])
 check("IDE chat: the folder opens in the editor, then the chat link, from the server",
       r["opensChat"] and launched[:1] == [["/bin/code", folder]] and "anthropic.claude-code/open" in " ".join(launched[1]))
-check("IDE chat: the chat in that folder gets the prompt, not one elsewhere",
-      job["session"] and job["session"]["sessionId"] == "mine" and sent and sent[-1][0]["to"] == "mine", job["detail"])
+check("IDE chat: the chat in that folder gets the prompt, not one elsewhere, and the page isn't told to say so",
+      job["session"] and job["session"]["sessionId"] == "mine" and sent and sent[-1][0]["to"] == "mine"
+      and job["state"] == "done" and not job.get("warn"), job["detail"])
 
 launched.clear(); sessions.clear()
 r = S.start_editor_chat("b", {"prompt": "", "editor": "VS Code"})
@@ -104,8 +105,8 @@ r = S.start_editor_chat("b", {"prompt": "", "editor": "Cursor", "folder": folder
 sessions[:] = [fake("stray", elsewhere)]
 S.launches[r["launchId"]]["at"] -= S.LAUNCH_WAIT / 3 + 1
 job = finish(r["launchId"])
-check("IDE chat: one that opens in another folder is kept, and the notice says where",
-      job["session"]["sessionId"] == "stray" and elsewhere in job["detail"], job["detail"])
+check("IDE chat: one that opens in another folder is kept, and the notice says where (warn: the page shows it)",
+      job["session"]["sessionId"] == "stray" and elsewhere in job["detail"] and job.get("warn"), job["detail"])
 
 for body, why in (({"editor": "Windsurf", "folder": folder}, "its tool missing"),
                   ({"editor": "Notepad", "folder": folder}, "an unknown editor"),

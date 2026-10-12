@@ -448,24 +448,21 @@ def checks_wide(browser):
         check(name, quiet and said["title"].startswith("Go on with beta in ") and said["ok"].startswith("Open in ")
               and not said["danger"] and sent == [(C, False), (B, True)], (said, sent))
 
-    name = "details: after Open in IDE the notice says where to find the chat if nothing opened, and can copy the link"
-    with step(page, name):  # the editor never says whether the link opened anything
-        page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t => t.remove())")
-        page.evaluate("Object.defineProperty(navigator, 'clipboard', "
-                      "{value: {writeText: (t) => { window.copied = t; }}, configurable: true})")
+    name = "details: Open in IDE leaves no notice once the editor was asked; a failure still gets one"
+    with step(page, name):
         page.api.post_result = {"ended": "abcdef12"}
         open_card(page, B)
         page.locator("#drawer-body button", has_text="Open in IDE").click()
         answer(page)
-        page.wait_for_function("document.querySelector('#toasts')?.textContent.includes('past conversations')")
-        said = page.inner_text("#toasts")
-        page.locator("#toasts button", has_text="Copy link").click()
-        copied = page.evaluate("window.copied") or ""
-        page.api.post_result = {}
-        check(name, "Ended beta here and asked" in said and "Claude panel" in said
-              and copied.endswith(f"://anthropic.claude-code/open?session={B}"), (said, copied))
+        page.wait_for_timeout(300)
+        quiet = page.locator("#toasts .toast").all_inner_texts()
+        page.api.post_status = 400  # the server says why
+        page.locator("#drawer-body button", has_text="Open in IDE").click()
+        answer(page)
+        page.wait_for_timeout(300)
+        check(name, not quiet and page.locator("#toasts .toast.error").count() == 1, (quiet, page.inner_text("#toasts")))
 
-    name = "details: an editor chat has Open in terminal beside Open in IDE, and asks first only while it is open in the IDE"
+    name = "details: an editor chat has Open in terminal beside Open in IDE, and asks first only while it is open in the IDE; no notice once it opened"
     with step(page, name):
         open_card(page, A)  # alpha: a chat in a terminal
         terminal = page.locator("#drawer-body button", has_text="Open in terminal").count()
@@ -491,7 +488,7 @@ def checks_wide(browser):
         windows = page.locator("#drawer-body button", has_text="Open in terminal").count()
         check(name, beside == ["Open in IDE", "Open in terminal"] and says and quiet and terminal == windows == 0
               and sent == [{"sessionId": A, "end": True}, {"sessionId": D, "end": False}]
-              and "Closed alpha in Cursor" in toast, (beside, says, quiet, sent, terminal, windows, toast))
+              and not toast.strip(), (beside, says, quiet, sent, terminal, windows, toast))
 
     name = "details: Open in terminal says when it failed, or what to run when no terminal could open"
     with step(page, name):
@@ -658,7 +655,7 @@ def checks_wide(browser):
         check(name, hint == "Run the tests  (Tab or →)" and page.input_value("#send-box") == "Run the tests", hint)
         page.evaluate("state.drafts = {}")
 
-    name = "ultracode: a running agent shows its state with the one button that changes it, and asks the server"
+    name = "ultracode: a running agent shows its state with the one button that changes it, and asks the server; no notice once switched"
     with step(page, name):
         page.api.ultracode = False
         page.api.post_result = {"ultracode": True, "said": "Ultracode on (this session only): dynamic workflows on every task."}
@@ -669,7 +666,7 @@ def checks_wide(browser):
         page.wait_for_timeout(300)
         sent = [b for p, b in page.api.posts if p.endswith("/ultracode")]
         check(name, "Ultracode is off" in shown and "Turn off" not in shown and sent == [{"sessionId": B, "on": True}]
-              and "Ultracode on (this session only)" in page.inner_text("#toasts"), (shown, sent))
+              and page.locator("#toasts .toast").count() == 0, (shown, sent, page.inner_text("#toasts")))
 
     name = "ultracode: unknown says so, with both buttons and a note on when it shows, and the page sends nothing to find out; a stopped agent has none"
     with step(page, name):
@@ -695,7 +692,7 @@ def checks_wide(browser):
         sent = [b for p, b in page.api.posts if p.endswith("/compact")]
         check(name, said["ok"] == "Compact" and sent == [{"sessionId": B}], (said, sent))
 
-    name = "compact: while it compacts the button waits, saying so; a notice says when it's done"
+    name = "compact: while it compacts the button waits, saying so; no notice when it's done (Activity says it)"
     with step(page, name):
         page.api.patch = {B: {"status": "idle", "agentState": "idle", "waitingFor": None}}
         page.api.launches = [{"id": "k1", "board": "b1", "at": 1, "kind": "compact", "from": B, "state": "compacting",
@@ -708,7 +705,20 @@ def checks_wide(browser):
                               "detail": "Compacted \"beta\": its context went from 39k to 3k tokens."}]
         poll(page)
         check(name, during == ("Compacting…", True) and (button.inner_text(), button.is_disabled()) == ("Compact", False)
-              and "from 39k to 3k tokens" in page.inner_text("#toasts"), (during, page.inner_text("#toasts")))
+              and page.locator("#toasts .toast").count() == 0, (during, page.inner_text("#toasts")))
+
+    name = "notices: a launch shows one only when it failed or came up other than asked, not its steps or a plain success"
+    with step(page, name):
+        def launch(i, **kw):
+            return {"id": f"n{i}", "board": "b1", "at": 1, "kind": "editor", "prompt": "hi", **kw}
+        page.api.launches = [launch(1, state="waiting", detail="Opening the folder in Cursor…"),
+                             launch(2, state="done", detail="The new chat got your prompt."),
+                             launch(3, state="done", warn=True, detail="The new chat got your prompt. Its model couldn't be set."),
+                             launch(4, state="failed", detail="No new chat appeared.")]
+        poll(page)
+        shown = page.locator("#toasts .toast").all_inner_texts()
+        check(name, len(shown) == 2 and "model couldn't be set" in shown[0] and "No new chat appeared" in shown[1]
+              and "Copy prompt" in shown[1] and page.locator("#toasts .toast.error").count() == 1, shown)
 
     name = "compact: only background agents have it; it waits while one asks you, and an ended one is woken for it"
     with step(page, name):

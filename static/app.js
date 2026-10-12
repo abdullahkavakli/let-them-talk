@@ -838,9 +838,7 @@ function subActions(sel, d, n) {
   const key = `${sel.parent}:${sel.id}`, name = d.label || sel.label || "it";
   const attach = n.background && n.jobId && n.resumable !== false && el("button", {
     class: "btn", text: "Open in terminal", title: `${display(n)}'s terminal: pick "${name}" with ↑/↓ under its prompt box`,
-    onclick: () => agentAction(n, "agent-attach", (r) => r.opened
-      ? toast(`Opened ${display(n)}'s terminal: pick "${name}" with ↑/↓ under its prompt box.`, "ok")
-      : toast(`Run this in a terminal: ${r.command}`, "info", 0)),
+    onclick: () => agentAction(n, "agent-attach", runYourself),
   });
   const inside = !attach && (n.editor ? `It runs inside ${display(n)} in ${n.editor}.`
     : n.entrypoint === "cli" ? `It runs inside ${display(n)}'s terminal window: pick it there with ↑/↓ under the prompt box.` : "");
@@ -1394,12 +1392,11 @@ const editorBusy = {};  // sessionId, or "board" -> a folder is being opened (ke
 const trustNote = (editor) =>
   `If ${editor} asks whether you trust the folder, say yes: in Restricted Mode, Claude Code is off there.`;
 
-async function openInEditor(key, body, done) {
+async function openInEditor(key, body) {
   editorBusy[key] = true;
   if (state.view) render();
   try {
-    const res = await api(`/api/board/${state.boardId}/open-folder`, body);
-    if (done) done(res.result || {});
+    await api(`/api/board/${state.boardId}/open-folder`, body);
   } catch (e) {
     toast(failText(e), "error");
   } finally {
@@ -1421,20 +1418,9 @@ function conversationButton(n, verb, cls) {
     onclick: async () => {
       if (end && !await confirmBox(`Go on with ${display(n)} in ${editor}?`, endHereText(n, editor),
         { ok: `Open in ${editor}` })) return;
-      openInEditor(n.sessionId, { sessionId: n.sessionId, editor, continue: true, end },
-        (r) => sentToEditor(n, editor, !!r.ended));
+      openInEditor(n.sessionId, { sessionId: n.sessionId, editor, continue: true, end });
     },
   });
-}
-
-// The editor takes the link and never says whether the conversation opened, so
-// the notice says where to find it if it didn't, and offers the link itself.
-function sentToEditor(n, editor, ended) {
-  const link = editorLink(editor, { session: n.sessionId }), name = display(n);
-  const t = toast(`${ended ? `Ended ${name} here and asked` : "Asked"} ${editor} to open it. If nothing opened ` +
-    `there, open ${editor}'s Claude panel, click its list of past conversations and pick it.`, "info", 20000);
-  t.insertBefore(el("button", { class: "btn", text: "Copy link",
-    onclick: () => navigator.clipboard?.writeText(link) }), t.lastChild);
 }
 
 // What ending a running background agent closes, so you can go on with it in the IDE.
@@ -1463,9 +1449,7 @@ function terminalButton(n) {
       if (state.view) render();
       try {
         const { result } = await api(`/api/board/${state.boardId}/open-terminal`, { sessionId: n.sessionId, end: n.live });
-        if (!result.opened) toast(`Run this in a terminal: ${result.command}`, "info", 0);
-        else toast(result.closed ? `Closed ${display(n)} in ${n.editor}; it is open in a terminal now.`
-          : `Opened ${display(n)} in a terminal.`, "ok");
+        runYourself(result);
       } catch (e) {
         toast(failText(e), "error");
       } finally {
@@ -1609,8 +1593,7 @@ function endControls(n) {
       { ok: "End chat", danger: true })) return;
       try {
         const { result } = await api(`/api/board/${state.boardId}/end`, { sessionId: n.sessionId });
-        if (result.ended) toast(`Ended ${display(n)}. To continue it: ${result.resume}`, "ok", 0);
-        else toast(`${display(n)} hasn't ended yet; close its terminal window instead.`, "error");
+        if (!result.ended) toast(`${display(n)} hasn't ended yet; close its terminal window instead.`, "error");
       } catch (e) {
         toast(failText(e), "error");
       }
@@ -2318,7 +2301,6 @@ $("#board-form").addEventListener("submit", async (evt) => {
     if (movingBoard) {
       const res = await api(`/api/board/${movingBoard.id}/folder`, { folder });
       $("#board-dialog").close();
-      if (res.result.folder !== movingBoard.folder) toast(`This board now uses ${res.result.folder}.`, "ok");
       poll();
       return;
     }
@@ -2412,7 +2394,6 @@ $("#delete-board").addEventListener("click", async () => {
     localStorage.removeItem(`ltt.pan.${board.id}`);
     localStorage.removeItem(`ltt.zoom.${board.id}`);
   } catch { /* storage off */ }
-  toast(`Deleted the board "${board.title}".`, "ok");
   // Clear it off the page first: if it was the last board, start() only opens
   // New board, and the old cards (and polling) must not linger behind it.
   clearTimeout(state.pollTimer);
@@ -2921,8 +2902,6 @@ $("#chat-form").addEventListener("submit", async (evt) => {
         permissionMode: nd.mode.value, model, openTerminal: nd.terminal.checked, ultracode: nd.ultra.checked,
       });
       nd.ultra.checked = false;  // it costs more: the next agent asks again
-      toast(`Started ${wf ? "workflow" : "background agent"} "${res.result.name}". ` +
-        "It will appear on this board in a moment.", "ok");
     } else {
       const editor = nd.editor.value;
       // With a folder, the server opens it in the editor and then the new chat
@@ -2959,10 +2938,12 @@ function toast(text, level = "info", ms = level === "error" ? 0 : 5000) {
   return t;
 }
 
-// Editor chats started from here: show how handing over the prompt went.
-// Handoffs and teams report each step the same way. The server lists them for 10
-// minutes, so each step's notice is remembered across reloads too: a reload
-// doesn't show it again, except a failed one you haven't closed yet.
+// Editor chats started from here, handoffs, teams and compactions: a notice
+// only when one failed, or a new editor chat came up other than asked (another
+// window, or its model not set). The rest shows on the board, on the buttons
+// that wait and in Activity. The server lists them for 10 minutes, so each
+// notice is remembered across reloads too: a reload doesn't show it again,
+// except a failed one you haven't closed yet.
 const LAUNCH_LISTED = 600;  // seconds the server lists a launch
 const launchShown = {};     // launch id -> state shown on this page
 const launchSeen = store("ltt.launchSeen") || {};  // launch id -> [state, at], notice gone
@@ -2972,11 +2953,11 @@ function renderLaunches() {
     if (now - at > LAUNCH_LISTED + 60) delete launchSeen[id];
   }
   for (const l of state.view?.launches || []) {
+    if (l.state !== "failed" && !(l.state === "done" && l.warn)) continue;
     if (launchShown[l.id] === l.state || launchSeen[l.id]?.[0] === l.state) continue;
     launchShown[l.id] = l.state;
     const seen = () => { launchSeen[l.id] = [l.state, l.at || now]; store("ltt.launchSeen", launchSeen); };
-    const level = l.state === "done" ? "ok" : l.state === "failed" ? "error" : "info";
-    const t = toast(l.detail, level, l.state === "failed" ? 0 : 7000);
+    const t = l.state === "failed" ? toast(l.detail, "error") : toast(l.detail, "info", 7000);
     if (l.state === "failed") t.querySelector(".icon-btn").addEventListener("click", seen);
     else seen();
     if (l.state === "failed" && l.prompt) {
@@ -3071,9 +3052,7 @@ function chatSection(n) {
 function answerButton(n) {
   if (n.background && n.running) return el("button", {
     class: "fold", text: "Open its terminal to answer",
-    onclick: () => agentAction(n, "agent-attach", (r) => r.opened
-      ? toast("Opened a terminal window attached to it.", "ok")
-      : toast(`Run this in a terminal: ${r.command}`, "info", 0)),
+    onclick: () => agentAction(n, "agent-attach", runYourself),
   });
   if (n.editor) return el("button", {
     class: "fold", text: `Answer in ${n.editor}`,
@@ -3350,6 +3329,10 @@ async function sendAsBubble(n, text, failed, images = []) {
   }
 }
 
+// A notice only when it needs you: no terminal could be opened, so it says
+// what to run. A window that opened shows itself.
+const runYourself = (r) => r.opened || toast(`Run this in a terminal: ${r.command}`, "info", 0);
+
 async function agentAction(n, action, done) {
   try {
     const res = await api(`/api/board/${state.boardId}/${action}`, { jobId: n.jobId });
@@ -3375,9 +3358,7 @@ function backgroundSection(n) {
       text: `It's waiting for you (${n.waitingFor || "an answer"}). Open it in a terminal to answer.` }),
     el("div", { class: "drawer-actions" },
       el("button", { class: blocked || restart ? "btn primary" : "btn", text: restart ? "Restart in terminal" : "Open in terminal",
-        onclick: () => agentAction(n, "agent-attach", (r) => r.opened
-          ? toast(restart ? `Opened a terminal that restarts it (${r.command}).` : "Opened a terminal window attached to it.", "ok")
-          : toast(`Run this in a terminal: ${r.command}`, "info", 0)) }),
+        onclick: () => agentAction(n, "agent-attach", runYourself) }),
       !restart && where(n) && conversationButton(n, "Open in", "btn"),
       !restart && el("button", { class: "btn",
         text: state.logs[n.sessionId] ? "Hide its screen" : blocked ? "What is it asking?" : "Show its screen",
@@ -3389,7 +3370,7 @@ function backgroundSection(n) {
         onclick: async () => {
           if (await confirmBox(`Stop ${display(n)}?`, "It stops whatever it is doing now, as Esc does in its " +
             "terminal. It keeps running, and its terminal stays open.", { ok: "Stop" })) {
-            agentAction(n, "agent-stop", () => toast(`Stopped ${display(n)}. It's waiting for you.`, "ok"));
+            agentAction(n, "agent-stop");
           }
         } })),
     state.logs[n.sessionId] && el("pre", { class: "logs mono", text: state.logs[n.sessionId] }),
@@ -3426,7 +3407,6 @@ async function setUltracode(n, want) {
   try {
     const res = await api(`/api/board/${state.boardId}/ultracode`, { sessionId: n.sessionId, on: want === "on" });
     if (state.chat[n.sessionId]) state.chat[n.sessionId].ultracode = res.result.ultracode;
-    toast(`${display(n)}: ${res.result.said}`, "ok");  // Claude Code's own answer
   } catch (e) {
     toast(failText(e), "error");
   } finally {
@@ -3485,7 +3465,7 @@ function deleteControls(n) {
         const midway = n.status === "busy" ? " It stops in the middle of what it is doing." : "";
         if (await confirmBox(`End ${display(n)}?`, `${midway} It stops and its terminal windows close. ` +
           "It stays on the board: send it a prompt to wake it.", { ok: "End agent" })) {
-          agentAction(n, "agent-end", () => toast(`Ended ${display(n)}. Send it a prompt to wake it.`, "ok"));
+          agentAction(n, "agent-end");
         }
       } }),
     el("button", { class: "btn danger", text: "Delete agent",
@@ -3493,7 +3473,7 @@ function deleteControls(n) {
       onclick: async () => {
         if (await confirmBox(`Delete the background agent ${display(n)}?`, "It's removed for good, with its own " +
           "worktree if it has one. Its conversation stays on disk.", { ok: "Delete agent", danger: true })) {
-          agentAction(n, "agent-delete", () => { toast(`Deleted ${display(n)}.`, "ok"); closeDrawer(); });
+          agentAction(n, "agent-delete", closeDrawer);
         }
       } }));
 }

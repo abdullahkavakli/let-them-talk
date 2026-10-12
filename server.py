@@ -2976,7 +2976,8 @@ def _watch_launch(lid, images=()):
                     board.setdefault("names", {})[s["sessionId"]] = job["name"]
                 save_board(board)
         if not job["prompt"] and not images:
-            job.update(state="done", detail="The new chat is open." + aside)
+            # warn: the page shows a done launch only when it came up other than asked
+            job.update(state="done", detail="The new chat is open." + aside, warn=bool(aside))
             return
         if s.get("messageBlock"):
             job.update(state="failed", detail=f"The new chat opened, but {s['messageBlock']} "
@@ -2997,7 +2998,8 @@ def _watch_launch(lid, images=()):
         ok = states[0]["state"] != "failed"
         job.update(state="done" if ok else "failed",
                    detail=("The new chat got your prompt." if ok
-                           else f"The chat opened, but the prompt didn't arrive: {states[0]['detail']}") + aside)
+                           else f"The chat opened, but the prompt didn't arrive: {states[0]['detail']}") + aside,
+                   warn=bool(aside))
         with lock:
             board = load_board(job["board"])
             if board is not None:

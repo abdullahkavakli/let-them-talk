@@ -139,7 +139,8 @@ IDE** in a folder first open the folder with the editor's command-line tool
 (`cursor`, `code` …), wait a few seconds for its window, then hand the editor
 a link, `<editor>://anthropic.claude-code/open?session=<id>`, which its Claude
 extension turns into a conversation tab. The editor never answers whether it
-did, so the page's notice says where to look if it didn't.
+did, so the page shows no notice once the link went out; a failure before
+that (the folder or the editor's tool missing) gets one.
 
 - **From WSL** the app reads the editor's link command from the Windows
   registry (`reg.exe`, `HKCU\Software\Classes\<scheme>\shell\open\command`,

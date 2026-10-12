@@ -85,8 +85,9 @@ runs:
   opens there. The editor must
   [trust the folder](limits.md#the-editor-must-trust-the-folder). With the
   folder box empty, the chat opens in the editor window you used last.
-  - The chat gets your prompt as a message from Let Them Talk. A notice says
-    whether it arrived (with **Copy prompt** if not).
+  - The chat gets your prompt as a message from Let Them Talk. A notice
+    comes only if it didn't arrive (with **Copy prompt**), or if the chat
+    opened in another window or without the model you picked.
   - **Name** is its card's name on the board; its tab in the editor keeps its
     own title.
   - **Model** is the model its replies run on (see
@@ -154,11 +155,11 @@ be available, and one on it then asks before it acts.
   prompts already introduce them; click one to follow what the two send each
   other.
 - Every role and prompt is checked before anything starts (the box that needs
-  a fix gets the cursor). Notices and Activity say how it goes: one that
-  didn't start (and why) is named, one that doesn't come up running within 90
-  seconds is removed, and the master is told to do its part itself; an agent
-  whose arrow back can't be made keeps no arrow at all, and the notice says
-  why.
+  a fix gets the cursor). Activity says how it went; a notice comes only
+  when something went wrong: one that didn't start (and why) is named, one
+  that doesn't come up running within 90 seconds is removed, and the master
+  is told to do its part itself; an agent whose arrow back can't be made
+  keeps no arrow at all, and the notice says why.
 
 ## Cards
 
@@ -302,10 +303,9 @@ its folder. The editor must
 [trust the folder](limits.md#the-editor-must-trust-the-folder). If the editor
 can't be asked, the notice says what to run instead (`cursor "<folder>"`).
 
-The editor takes the link without saying whether the conversation opened, so
-the notice that follows says where to find it if nothing did (the Claude
-panel's list of past conversations) and has **Copy link**. This goes for a
-background agent's **Open in IDE** too.
+If the conversation doesn't show up (the editor never says whether it
+opened), it is in the editor's Claude panel, in its list of past
+conversations. This goes for a background agent's **Open in IDE** too.
 
 ### Open in terminal (an editor chat)
 
@@ -342,11 +342,11 @@ A background agent's details have these buttons:
   context freed (its conversation file keeps every message). The app types
   `/compact` into its prompt box, as you would in its terminal; one whose
   process has ended is woken with it. Not while it works or asks you
-  something (the button waits). Meanwhile the button says *Compacting…*; a
-  notice and Activity say when it's done, with its context before and after
-  (*from 120k to 6k tokens*), or Claude Code's answer if it didn't compact
-  (*Not enough messages to compact.*). In any other chat, type `/compact`
-  yourself. How it works: [Compacting](how-it-works.md#compacting).
+  something (the button waits). Meanwhile the button says *Compacting…*;
+  Activity says when it's done, with its context before and after (*from
+  120k to 6k tokens*). If it didn't compact, a notice gives Claude Code's
+  answer (*Not enough messages to compact.*). In any other chat, type
+  `/compact` yourself. How it works: [Compacting](how-it-works.md#compacting).
 - **Stop** (while it works or shows a permission prompt or a question): Esc
   through `claude attach`, so it stops what it is doing, or declines the
   prompt, and waits for you. It keeps running and its terminal stays open.
@@ -371,9 +371,9 @@ time.
 
 The line says *Ultracode is on* or *off*, as its conversation shows it, with
 **Turn off** or **Turn on**. The app types `/effort ultracode off` (or `on`)
-into its prompt box, as you would in its terminal, also while it works. A
-notice shows Claude Code's answer, or why it can't: workflows off under
-`/config`, or a model without ultracode. The app keeps what it switched, also
+into its prompt box, as you would in its terminal, also while it works. The
+line then shows the new state; a notice comes only when it can't be switched:
+workflows off under `/config`, or a model without ultracode. The app keeps what it switched, also
 across a restart of the app.
 
 It lasts until the agent ends. One started with **Ultracode** ticked in
@@ -445,11 +445,22 @@ needs Claude Code's bypass warning accepted once
 
 ## Notices
 
-Notices (bottom right) say how an action went. Most go after a few seconds.
-These stay until you close them (×): a command to run in a terminal, the
-resume command after **End this chat**, a new editor chat that didn't get
-your prompt, and anything that failed. A failed **Disconnect** or **Remove
-from board** leaves the details open.
+Notices (bottom right) come only when something needs you; nothing that
+the board already shows (a window that opened, an agent that stopped, ended
+or was deleted, a board that was deleted, a new agent starting). They come
+for:
+
+- anything that failed;
+- a command to run in a terminal, when no terminal window could be opened;
+- a new editor chat that opened in another window or without the model you
+  picked;
+- an action that changes nothing you can see: **Ask to stop** or **Ask to
+  resume** on a workflow, **Subagents** while none runs, a new board for a
+  folder that already has one.
+
+A failure and a command to run stay until you close them (×); the others go
+after a few seconds. A failed **Disconnect** or **Remove from board** leaves
+the details open.
 
 If the server stops answering, a banner at the bottom says so and the board
 fades until it answers again. A fault in the page itself shows as a notice
@@ -495,5 +506,5 @@ In this browser, the page remembers:
 - whether Activity, the line under a chat's title and a chat's Connections
   list are open;
 - your Settings and Subagents choices;
-- the notices about new editor chats and handoffs you have already seen, so a
-  reload doesn't show them again.
+- the notices about new editor chats, handoffs, teams and compactions you
+  have already seen, so a reload doesn't show them again.
