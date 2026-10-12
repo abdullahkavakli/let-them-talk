@@ -307,6 +307,26 @@ If the conversation doesn't show up (the editor never says whether it
 opened), it is in the editor's Claude panel, in its list of past
 conversations. This goes for a background agent's **Open in IDE** too.
 
+### Open in IDE (a chat in a terminal)
+
+A chat running in a terminal here has **Open in IDE** (the IDE picked under
+[Settings](#settings)) beside **End this chat**, to go on with it in the IDE
+in one step. Only one place can run a conversation, so it asks first, then
+ends the chat in its terminal as [End this chat](#end-this-chat) does (Claude
+Code in it exits; the terminal window stays open), and opens its folder and
+conversation as [Continue in IDE](#continue-in-ide) does. The button says
+*Opening…* meanwhile, and the card then shows the chat in the IDE; no notice
+follows (if the conversation doesn't show up, see
+[Continue in IDE](#continue-in-ide)).
+
+The question says what stops: *It stops what it is doing.* while the chat
+works, and *Its 2 running agents stop too.* (the agents a chat runs stop with
+it); each is left out when it doesn't apply. If the chat is still running in
+its terminal a few seconds later, nothing opens in the IDE and a notice says
+to close it there and try again. The button shows only for a chat with a saved
+conversation (a chat just started has none before its first reply). How it is
+done: [Ending a chat to open it in the IDE](how-it-works.md#ending-a-chat-to-open-it-in-the-ide).
+
 ### Open in terminal (an editor chat)
 
 An editor chat's details have **Open in terminal** beside **Open in IDE**:
@@ -415,7 +435,9 @@ agents*.
 
 For a chat in a terminal: its Claude Code exits as if you closed the window,
 which stays open. The conversation is kept; `claude --resume <id>` continues
-it. Chats in an editor are closed there (or moved to a terminal with
+it. **Open in IDE** beside it ends the chat the same way and goes on with it
+in the IDE ([details](#open-in-ide-a-chat-in-a-terminal)). Chats in an editor
+are closed there (or moved to a terminal with
 [Open in terminal](#open-in-terminal-an-editor-chat)).
 
 ## Hand off to a new agent

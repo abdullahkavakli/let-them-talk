@@ -526,6 +526,103 @@ def checks_wide(browser):
         check(name, "Its 3 running agents stop too. Then it opens in a terminal window." in texts[0]
               and "Its 1 running agent stops too." in texts[1] and "running agent" not in texts[2], texts)
 
+    foot_ide = '#drawer-body .drawer-foot button:text-is("Open in IDE")'  # a chat in a terminal's own, beside End this chat
+
+    name = "details: a running chat in a terminal has Open in IDE beside End this chat; no other kind of card does"
+    with step(page, name):
+        cases = ((A, {}, 1, "a chat in a terminal"),
+                 (B, {}, 0, "a background agent"),
+                 (A, {"editor": "Cursor", "entrypoint": "claude-vscode"}, 0, "an editor chat"),
+                 (A, {"platform": "windows"}, 0, "a chat on Windows"),
+                 (D, {}, 0, "an ended chat"),
+                 (A, {"movedTo": B}, 0, "one sent to the background"),
+                 (A, {"hasTranscript": False}, 0, "one with no saved conversation"),
+                 (A, {"pid": None}, 0, "one with no process"),
+                 (A, {"hasTranscript": True}, 1, "one whose conversation is saved"))
+        found = {}
+        for sid, patch, _, why in cases:
+            page.api.patch = {sid: patch}
+            poll(page)
+            open_card(page, sid)
+            found[why] = page.locator(foot_ide).count()
+            if why == "a chat in a terminal":
+                look = page.locator("#drawer-body .drawer-foot .drawer-actions", has_text="End this chat").locator(
+                    "button").evaluate_all("bs => bs.map(b => [b.textContent, b.className])")
+            if why == "an ended chat":
+                continued = page.locator("#drawer-body button", has_text="Continue in IDE").count()
+            page.evaluate("closeDrawer()")
+        check(name, all(found[why] == want for _, _, want, why in cases) and continued == 1
+              and look == [["Open in IDE", "btn primary"], ["End this chat", "btn danger"]], (found, continued, look))
+
+    name = "details: Open in IDE on a chat in a terminal says what closes (the busy sentence and the agents one only when they apply)"
+    with step(page, name):
+        page.evaluate("store('ltt.editor', 'Cursor')")
+        one = {"sessionId": A, "live": True, "workflows": [], "direct": AGENTS["direct"][:1]}
+        texts = []
+        try:
+            for status, agents in (("busy", AGENTS), ("idle", one), ("idle", {**one, "direct": []})):
+                page.api.patch = {A: {"status": status}}
+                page.api.agents = copy.deepcopy(agents)
+                poll(page)
+                open_card(page, A)
+                page.evaluate(f"loadDetails('{A}')")
+                page.locator(foot_ide).click()
+                texts.append(answer(page, yes=False))
+                page.evaluate("closeDrawer()")
+        finally:
+            page.evaluate("localStorage.removeItem('ltt.editor')")
+        t = [x["text"] for x in texts]
+        check(name, texts[0]["title"] == "Go on with alpha in Cursor?" and texts[0]["ok"] == "Open in Cursor"
+              and not texts[0]["danger"]
+              and "Only one place can run a conversation, so it ends in its terminal first: Claude Code in it exits "
+              "and the window stays open." in t[0]
+              and "It stops what it is doing. Its 3 running agents stop too. Then it opens in Cursor, where you go on "
+              "with it." in t[0]
+              and "stops what it is doing" not in t[1] and "Its 1 running agent stops too." in t[1]
+              and "stops what it is doing" not in t[2] and "running agent" not in t[2]
+              and t[2].endswith("Then it opens in Cursor, where you go on with it."), t)
+
+    name = "details: Open in IDE on a chat in a terminal posts endChat only after a yes, says Opening… meanwhile, and leaves no notice"
+    with step(page, name):
+        page.evaluate("store('ltt.editor', 'Cursor')")
+        held = []
+        try:
+            open_card(page, A)
+            page.locator(foot_ide).click()
+            answer(page, yes=False)
+            page.wait_for_timeout(300)
+            after_no = [b for p, b in page.api.posts if p.endswith("/open-folder")]
+            page.route("**/open-folder", lambda route, request: held.append(route))  # the server is slow to answer
+            page.locator(foot_ide).click()
+            answer(page)
+            page.wait_for_function("[...document.querySelectorAll('#drawer-body .drawer-foot button')]"
+                                   ".some(b => b.textContent === 'Opening…' && b.disabled)")
+            page.wait_for_timeout(300)  # the request goes out, and waits
+            page.api.post_result = {"ended": True}
+            held[0].fallback()
+            page.wait_for_function("[...document.querySelectorAll('#drawer-body .drawer-foot button')]"
+                                   ".filter(b => b.textContent === 'Open in IDE').length === 1")
+            page.wait_for_timeout(300)
+            said = page.locator("#toasts .toast").all_inner_texts()  # none: the card shows what happened
+            sent = [b for p, b in page.api.posts if p.endswith("/open-folder")]
+        finally:
+            page.unroute("**/open-folder")
+            page.evaluate("localStorage.removeItem('ltt.editor')")
+        check(name, after_no == [] and sent == [{"sessionId": A, "editor": "Cursor", "continue": True, "endChat": True}]
+              and not said, (after_no, sent, said))
+
+    name = "details: Open in IDE on a chat in a terminal says why it failed, and the button is there again"
+    with step(page, name):
+        open_card(page, A)
+        page.api.post_status = 400
+        page.locator(foot_ide).click()
+        answer(page)
+        page.wait_for_function("document.querySelector('#toasts')?.textContent.includes('It didn')")
+        page.wait_for_function("[...document.querySelectorAll('#drawer-body .drawer-foot button')]"
+                               ".filter(b => b.textContent === 'Open in IDE').length === 1")
+        said = page.inner_text("#toasts")
+        check(name, "It didn't work." in said and page.locator("#toasts .toast.error").count() == 1, said)
+
     name = "send box: a pasted screenshot shows as a thumbnail and goes with the text"
     with step(page, name):
         open_card(page, B)

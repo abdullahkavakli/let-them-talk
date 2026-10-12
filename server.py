@@ -1598,11 +1598,12 @@ def windows_exe(pid):
 
 
 def _session(reg, platform, cwd, block, exe=""):
+    title = session_title(reg["sessionId"])  # also finds its transcript
     return {
         "editor": editor_from_path(exe) if reg.get("entrypoint") == "claude-vscode" else None,
         "sessionId": reg["sessionId"],
         "name": reg.get("name") or "",
-        "title": session_title(reg["sessionId"]),
+        "title": title,
         "model": session_model(reg["sessionId"]),
         "cwd": cwd,
         "winCwd": reg.get("cwd", "") if platform == "windows" else None,
@@ -1618,6 +1619,8 @@ def _session(reg, platform, cwd, block, exe=""):
         "jobId": reg.get("jobId"),
         "parkedJobId": reg.get("parkedJobId"),
         "running": reg.get("pid") is not None,
+        # a conversation is saved once its first reply is (a chat just started has none yet)
+        "hasTranscript": title_cache.get(reg["sessionId"], {}).get("path") is not None,
     }
 
 
@@ -4186,19 +4189,27 @@ def delete_background(bid, body):
 END_WAIT = 5  # seconds an ended chat gets to exit
 
 
-def end_chat(bid, body):
-    """End a chat running in a terminal here: its Claude Code exits as when
-    its window is closed (the window stays open). Its conversation stays on
-    disk, and `claude --resume <id>` continues it."""
-    sid = str(body.get("sessionId") or "")
+def _terminal_chat(sid, gone_ok=False):
+    """A running chat of a terminal here, as live_sessions() lists it now, if it
+    is one that may be ended from here (not an editor chat, a background agent,
+    a Windows chat or one sent to the background). With gone_ok, a chat that has
+    ended by itself meanwhile is None."""
     s = next((x for x in live_sessions() if x["sessionId"] == sid), None)
     if s is None:
+        if gone_ok:
+            return None
         raise ValueError("That chat is no longer running.")
-    # live_sessions() just matched the PID with the process that registered
-    # the chat, so the signal reaches that Claude Code and nothing else.
     if (s["platform"] != "wsl" or s["background"] or s["kind"] != "interactive"
             or s["entrypoint"] != "cli" or s.get("movedTo") or not s["pid"]):
         raise ValueError("Only a chat running in a terminal here can be ended from here.")
+    return s
+
+
+def _end_terminal_chat(s):
+    """End the chat s (from _terminal_chat): its Claude Code gets SIGTERM and has
+    END_WAIT seconds to exit. live_sessions() matched the PID with the process
+    that registered the chat just before, so the signal reaches that Claude Code
+    and nothing else. True once it has gone."""
     try:
         os.kill(s["pid"], signal.SIGTERM)
     except ProcessLookupError:
@@ -4208,7 +4219,16 @@ def end_chat(bid, body):
     deadline = time.time() + END_WAIT
     while _proc_start(s["pid"]) is not None and time.time() < deadline:
         time.sleep(0.2)
-    ended = _proc_start(s["pid"]) is None
+    return _proc_start(s["pid"]) is None
+
+
+def end_chat(bid, body):
+    """End a chat running in a terminal here: its Claude Code exits as when
+    its window is closed (the window stays open). Its conversation stays on
+    disk, and `claude --resume <id>` continues it."""
+    sid = str(body.get("sessionId") or "")
+    s = _terminal_chat(sid)
+    ended = _end_terminal_chat(s)
     with lock:
         board = load_board(bid)
         add_activity(board, f"Ended {label(s, board)}" if ended else f"Asked {label(s, board)} to end; it is still running",
@@ -4458,7 +4478,10 @@ def open_folder(bid, body):
     in (the C:\\ one for a Windows chat). With "continue", the card's
     conversation then opens in the editor's Claude panel there: the panel finds
     a conversation only in a window on its folder, and the link goes to the
-    window in front, so the folder's window comes first."""
+    window in front, so the folder's window comes first. A chat running in a
+    terminal here holds its conversation just as much: with "endChat" (you said
+    yes to that) it ends at the same moment, as End this chat does, and the link
+    isn't sent while it still runs."""
     sid = str(body.get("sessionId") or "")
     with lock:
         board = load_board(bid)
@@ -4483,6 +4506,13 @@ def open_folder(bid, body):
     if body.get("continue") and body.get("end"):
         row = next((r for r in background_rows(fresh=True) if r["sessionId"] == sid and r.get("pid")), None)
         row = row and _endable(row)
+    # Only a chat that End this chat could end, and one with a saved
+    # conversation to go on with: refused here, before anything opens or closes.
+    chat = None
+    if body.get("continue") and body.get("endChat") and not body.get("board"):
+        chat = _terminal_chat(sid)
+        if not has_transcript(sid):
+            raise ValueError(f"It has no saved conversation yet, so {editor or 'the IDE'} can't continue it.")
     opened = open_in_editor(editor, folder)
     if not opened["opened"]:
         raise ValueError(f"{editor} couldn't be asked to open {folder}. Run this instead: {opened['command']}")
@@ -4490,10 +4520,28 @@ def open_folder(bid, body):
         settled = time.time() + FOLDER_SETTLE
         if row:
             _stop_job(row)
+        if chat:
+            now = _terminal_chat(sid, gone_ok=True)  # matched again, just before it is signalled
+            if now and not _end_terminal_chat(now):
+                _chat_activity(bid, chat, lambda name: f"Asked {name} to end; it is still running", "error")
+                raise ValueError(f"It is still open in its terminal, so it can't be opened in {editor} yet. "
+                                 "Close it there and try again.")
         time.sleep(max(0, settled - time.time()))
-        if not open_editor_link(editor, session=sid):
+        linked = open_editor_link(editor, session=sid)
+        if chat:
+            _chat_activity(bid, chat, lambda name: f"Ended {name}; opened it in {editor}" if linked
+                           else f"Ended {name}; it couldn't be opened in {editor}", "info" if linked else "error")
+        if not linked:
             raise ValueError(f"{folder} is open in {editor}, but the conversation couldn't be opened there.")
-    return {"folder": folder, "ended": row and row["id"]}
+    return {"folder": folder, "ended": row["id"] if row else (True if chat else None)}
+
+
+def _chat_activity(bid, s, text, level="info"):
+    """An Activity line about the chat s; text is given the name the board uses for it."""
+    with lock:
+        board = load_board(bid)
+        add_activity(board, text(label(s, board)), level)
+        save_board(board)
 
 
 # -------------------------------------------------------------------- http

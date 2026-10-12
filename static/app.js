@@ -1465,10 +1465,14 @@ function terminalButton(n) {
 // runs inside its own process.
 function moveToTerminalText(n) {
   const midway = n.status === "busy" ? " It stops what it is doing." : "";
-  const data = state.agents[n.sessionId], running = data && !data.error ? agentCounts(data).running : 0;
-  const agents = running ? ` Its ${running} running agent${running === 1 ? "" : "s"} stop${running === 1 ? "s" : ""} too.` : "";
-  return `Only one place can run a conversation, so the chat closes in ${n.editor} first.${midway}${agents} ` +
+  return `Only one place can run a conversation, so the chat closes in ${n.editor} first.${midway}${agentsStopText(n)} ` +
     "Then it opens in a terminal window.";
+}
+
+// The agents a chat runs (subagents, workflows) run inside it and stop with it.
+function agentsStopText(n) {
+  const data = state.agents[n.sessionId], running = data && !data.error ? agentCounts(data).running : 0;
+  return running ? ` Its ${running} running agent${running === 1 ? "" : "s"} stop${running === 1 ? "s" : ""} too.` : "";
 }
 
 // The board's own folder in an editor window (the sidebar's Board folder).
@@ -1584,7 +1588,7 @@ const endable = (n) => n.live && !n.background && !onWindows(n) && !n.movedTo &&
 
 function endControls(n) {
   if (!endable(n)) return null;
-  return el("div", { class: "drawer-actions" }, el("button", {
+  return el("div", { class: "drawer-actions" }, terminalToIdeButton(n), el("button", {
     class: "btn danger", text: "End this chat", title: "Its Claude Code exits; the terminal window stays open",
     onclick: async () => {
       const midway = n.status === "busy" ? " It stops in the middle of what it is doing." : "";
@@ -1600,6 +1604,31 @@ function endControls(n) {
       poll();
     },
   }));
+}
+
+// A chat in a terminal, gone on with in the IDE: only one place can run a
+// conversation, so after a yes it ends in its terminal (as End this chat does),
+// then its folder and conversation open in the IDE. Needs a saved conversation.
+function terminalToIdeButton(n) {
+  if (!n.pid || !where(n) || n.hasTranscript === false) return null;
+  const editor = defaultEditor(), busy = editorBusy[n.sessionId];
+  return el("button", {
+    class: "btn primary", text: busy ? "Opening…" : "Open in IDE", disabled: !!busy,
+    title: `Ends this chat in its terminal first (you're asked), then opens its folder in ${editor} and this ` +
+      `conversation in ${editor}'s Claude panel there, where you go on with it. ${trustNote(editor)}`,
+    onclick: async () => {
+      if (!await confirmBox(`Go on with ${display(n)} in ${editor}?`, terminalToIdeText(n, editor),
+        { ok: `Open in ${editor}` })) return;
+      await openInEditor(n.sessionId, { sessionId: n.sessionId, editor, continue: true, endChat: true });
+      poll();
+    },
+  });
+}
+
+function terminalToIdeText(n, editor) {
+  const midway = n.status === "busy" ? " It stops what it is doing." : "";
+  return "Only one place can run a conversation, so it ends in its terminal first: Claude Code in it exits and " +
+    `the window stays open.${midway}${agentsStopText(n)} Then it opens in ${editor}, where you go on with it.`;
 }
 
 // A card can always go; its arrows go with it. Agents still running at the

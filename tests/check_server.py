@@ -843,6 +843,157 @@ finally:
     S.os.kill = real_kill
     sessions[:] = []
 
+# ------------------------- End this chat, and Open in IDE for a chat running in a terminal
+
+TW = "0e0e0e0e-0000-4000-8000-0000000000f2"
+tw_names = ("load_board", "add_activity", "_proc_start", "has_transcript", "open_in_editor", "open_editor_link",
+            "END_WAIT", "background_rows", "run_claude", "_read_registry", "wsl_exe")
+tw_saved, real_kill = {n: getattr(S, n) for n in tw_names}, S.os.kill
+order, notes, alive, bg_rows = [], [], {7, 8}, []
+term = {"sessionId": TW, "name": "it", "title": "my chat", "entrypoint": "cli", "editor": None, "platform": "wsl",
+        "background": False, "kind": "interactive", "cwd": home, "pid": 7}
+neighbour = {**term, "sessionId": "neighbour", "name": "neighbour", "pid": 8}  # another chat in a terminal
+S.load_board = lambda bid: {"folder": home, "nodes": {TW: {"cwd": home, "name": "it"}}, "activity": []}
+S.add_activity = lambda board, text, level: notes.append((text, level))
+S.has_transcript = lambda sid: True
+S._proc_start = lambda pid: "1" if pid in alive else None
+S.background_rows = lambda fresh=False: bg_rows
+S.run_claude = lambda args, **kw: order.append(" ".join(["claude", *args])) or types.SimpleNamespace(
+    returncode=0, stdout="", stderr="")
+S.open_in_editor = lambda editor, folder: order.append("folder") or {"opened": True, "command": ""}
+S.open_editor_link = lambda editor, **params: order.append(f"link {params['session']}") or True
+
+
+def term_kill(pid, sig):
+    order.append(f"kill {pid} {S.signal.Signals(sig).name}")
+    alive.discard(pid)  # it exits, as Claude Code does on SIGTERM
+
+
+def attempt(call, *args):
+    order.clear(); notes.clear(); alive.update({7, 8})
+    try:
+        return call("b", *args)
+    except ValueError as e:
+        return str(e)
+
+
+go = lambda body: attempt(S.open_folder, {"sessionId": TW, "editor": "Cursor", **body})
+end = lambda sid=TW: attempt(S.end_chat, {"sessionId": sid})
+try:
+    S.os.kill = term_kill
+    sessions[:] = [term, neighbour]
+    r = end()
+    check("end chat: SIGTERM to the chat's own process only, then Activity says it ended",
+          order == ["kill 7 SIGTERM"] and r == {"ended": True, "resume": f"claude --resume {TW}"}
+          and notes == [('Ended "my chat"', "info")], (r, order, notes))
+    S.END_WAIT = 0.1
+    S.os.kill = lambda pid, sig: order.append(f"kill {pid}")  # it ignores the signal
+    r = end()
+    check("end chat: one that is still running after the wait says so, in Activity as an error",
+          r["ended"] is False and notes == [('Asked "my chat" to end; it is still running', "error")], (r, notes))
+    S.os.kill = lambda pid, sig: (_ for _ in ()).throw(PermissionError(1, "Operation not permitted"))
+    check("end chat: a process that can't be signalled is reported", end() == "Couldn't end it: Operation not permitted.")
+    S.os.kill = term_kill
+    sessions[:] = []
+    check("end chat: a chat that isn't running is refused", end() == "That chat is no longer running." and not order)
+    for kw, why in (({"entrypoint": "claude-vscode", "editor": "Cursor"}, "an editor chat"),
+                    ({"background": True, "kind": "bg", "jobId": "j1"}, "a background agent"),
+                    ({"platform": "windows"}, "a chat on Windows"), ({"movedTo": "zzz"}, "one sent to the background"),
+                    ({"pid": None}, "one with no process")):
+        sessions[:] = [{**term, **kw}]
+        check(f"end chat: refused, nothing signalled: {why}",
+              end() == "Only a chat running in a terminal here can be ended from here." and not order, order)
+        r = go({"continue": True, "endChat": True})
+        check(f"open in IDE: ending a terminal chat is refused before anything opens or closes: {why}",
+              r == "Only a chat running in a terminal here can be ended from here." and not order and not notes, (r, order))
+
+    sessions[:] = [term, neighbour]
+    r = go({"continue": True})
+    check("open in IDE: a chat in a terminal isn't ended without endChat",
+          order == ["folder", f"link {TW}"] and r["ended"] is None, order)
+    r = go({"endChat": True})
+    check("open in IDE: endChat alone (no continue) ends nothing",
+          order == ["folder"] and r["ended"] is None, order)
+    r = go({"continue": True, "endChat": True})
+    check("open in IDE: a chat in a terminal gets SIGTERM (its own process only) once its folder opens, before the link",
+          order == ["folder", "kill 7 SIGTERM", f"link {TW}"] and r["ended"] is True, (r, order))
+    check("open in IDE: Activity says it ended and opened in the IDE", notes == [('Ended "my chat"; opened it in Cursor', "info")], notes)
+    r = go({"continue": True, "endChat": True, "board": True})
+    check("open in IDE: the board's own folder never ends a chat", not any(o.startswith("kill") for o in order), (r, order))
+
+    S.os.kill = lambda pid, sig: order.append(f"kill {pid}")  # it ignores the signal
+    r = go({"continue": True, "endChat": True})
+    check("open in IDE: one still running after the wait isn't sent the link, and the error says to close it there",
+          r == "It is still open in its terminal, so it can't be opened in Cursor yet. Close it there and try again."
+          and order == ["folder", "kill 7"], (r, order))
+    check("open in IDE: and Activity says it is still running, as an error",
+          notes == [('Asked "my chat" to end; it is still running', "error")], notes)
+    S.os.kill = lambda pid, sig: (_ for _ in ()).throw(PermissionError(1, "Operation not permitted"))
+    r = go({"continue": True, "endChat": True})
+    check("open in IDE: a process that can't be signalled is reported, and no link goes",
+          r == "Couldn't end it: Operation not permitted." and order == ["folder"], (r, order))
+    S.os.kill = term_kill
+
+    S.has_transcript = lambda sid: False
+    r = go({"continue": True, "endChat": True})
+    check("open in IDE: one with no saved conversation is refused before anything opens or closes",
+          "no saved conversation" in r and "Cursor" in r and not order and not notes, (r, order))
+    S.has_transcript = lambda sid: True
+    sessions[:] = []
+    r = go({"continue": True, "endChat": True})
+    check("open in IDE: endChat for a chat that isn't running is refused before anything opens",
+          r == "That chat is no longer running." and not order, (r, order))
+    r = go({"continue": True})
+    check("open in IDE: an ended chat goes on as before, with nothing to end", order == ["folder", f"link {TW}"], order)
+
+    def folder_then_gone(editor, folder):  # it ends by itself while the folder's window opens
+        order.append("folder")
+        sessions[:] = []
+        return {"opened": True, "command": ""}
+
+    sessions[:] = [term, neighbour]
+    S.open_in_editor = folder_then_gone
+    r = go({"continue": True, "endChat": True})
+    check("open in IDE: a chat that ended by itself meanwhile gets no signal, and the link goes",
+          order == ["folder", f"link {TW}"] and r["ended"] is True, (r, order))
+    S.open_in_editor = lambda editor, folder: order.append("folder") or {"opened": True, "command": ""}
+    S.open_editor_link = lambda editor, **params: order.append("link") or False
+    sessions[:] = [term]
+    r = go({"continue": True, "endChat": True})
+    check("open in IDE: an ended chat whose link couldn't go says so in Activity, as an error",
+          "couldn't be opened there" in r and notes == [('Ended "my chat"; it couldn\'t be opened in Cursor', "error")], (r, notes))
+    S.open_editor_link = lambda editor, **params: order.append(f"link {params['session']}") or True
+
+    # a background agent and an editor chat go on as before: no signal, and endChat isn't for them
+    bg_rows[:] = [{"id": "j1", "sessionId": TW, "pid": 7}]
+    sessions[:] = [{**term, "background": True, "kind": "bg", "jobId": "j1"}]
+    r = go({"continue": True, "end": True})
+    check("open in IDE: a background agent still ends with claude stop (end), and nothing is signalled",
+          order == ["folder", "claude stop j1", f"link {TW}"] and r["ended"] == "j1", (r, order))
+    bg_rows.clear()
+    sessions[:] = [{**term, "entrypoint": "claude-vscode", "editor": "Cursor"}]
+    r = go({"continue": True})
+    check("open in IDE: an editor chat is opened as before, nothing signalled",
+          order == ["folder", f"link {TW}"] and r["ended"] is None, (r, order))
+
+    # the card knows whether its conversation is saved (the page hides the button without one)
+    sock = os.path.join(home, "sock")
+    S._read_registry = lambda d: [{"pid": 7, "sessionId": TW, "kind": "interactive", "entrypoint": "cli", "name": "it",
+                                   "messagingSocketPath": sock, "cwd": home}]
+    S.wsl_exe = lambda pid, started: "/home/you/.local/share/claude/versions/current"
+    alive.update({7, 8})
+    unsaved = next(s for s in real_live_sessions() if s["sessionId"] == TW)
+    S.title_cache[TW] = {"path": Path(home) / "chat.jsonl"}
+    saved_chat = next(s for s in real_live_sessions() if s["sessionId"] == TW)
+    check("live sessions: a chat says whether its conversation is saved yet",
+          unsaved["hasTranscript"] is False and saved_chat["hasTranscript"] is True, (unsaved, saved_chat))
+finally:
+    S.title_cache.pop(TW, None)
+    for n, value in tw_saved.items():
+        setattr(S, n, value)
+    S.os.kill = real_kill
+    sessions[:] = []
+
 # ------------------------------------------- Images with a prompt or message
 
 S.CLAUDE_TMP = Path(tempfile.mkdtemp()) / "claude-test"  # not the real temp folder

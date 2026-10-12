@@ -134,8 +134,8 @@ nothing:
 
 ## How an editor gets a folder and a chat
 
-**Continue in IDE**, **Open in IDE** on a background agent and a **Chat in
-IDE** in a folder first open the folder with the editor's command-line tool
+**Continue in IDE**, **Open in IDE** on a background agent or a chat in a
+terminal, and a **Chat in IDE** in a folder first open the folder with the editor's command-line tool
 (`cursor`, `code` …), wait a few seconds for its window, then hand the editor
 a link, `<editor>://anthropic.claude-code/open?session=<id>`, which its Claude
 extension turns into a conversation tab. The editor never answers whether it
@@ -165,6 +165,28 @@ that (the folder or the editor's tool missing) gets one.
 - **The editor's side:** Cursor routes an extension's link to one of its
   ordinary (not agents) windows, and the extension finds a conversation only
   in a window on its folder.
+
+## Ending a chat to open it in the IDE
+
+Claude Code lets only one place run a conversation: nothing else can go on
+with one a running process holds (the editor's *Open here anyway* included).
+So **Open in IDE** on a chat that runs (after your yes) ends it first, in the
+moment between the folder's window coming up and the link going to it:
+
+- **A background agent** is stopped with `claude stop`.
+- **A chat in a terminal** gets SIGTERM, as **End this chat** does: its Claude
+  Code exits as if the window were closed, the window stays open, and the
+  conversation stays on disk. The app waits up to 5 seconds for the process
+  to go. If it is still running, the link isn't sent (the editor would be
+  handed a conversation another place still holds) and the notice says to
+  close it in its terminal and try again.
+- **Which chats:** the same ones **End this chat** can end (on this machine,
+  not an editor chat, a background agent or a chat sent to the background),
+  and only with a saved conversation. All of that is checked before the folder
+  opens or anything closes. The signal goes only to the process that
+  registered the chat, matched against the running sessions once before the
+  folder opens and again just before the signal; one that has gone by itself
+  meanwhile isn't signalled, and the link goes as usual.
 
 ## The model of a Chat in IDE
 
