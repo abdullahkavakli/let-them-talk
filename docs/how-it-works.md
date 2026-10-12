@@ -93,8 +93,7 @@ Claude Code writes the result into the agent's transcript once it is done
 with the context's size before and after, then `/compact`'s answer. The app
 reads what the transcript gets after you click. It stops waiting after 8
 minutes, or once the agent is neither busy nor done for a few seconds (Esc in
-its terminal, or it ended). Meanwhile it doesn't look up ultracode (see
-[Ultracode](usage.md#ultracode)) in that agent.
+its terminal, or it ended).
 
 ## Reply suggestions
 
@@ -137,35 +136,38 @@ requests, not its subagents'.
 Whether ultracode is on in a background agent (see
 [Ultracode](usage.md#ultracode)) is read from its transcript: Claude Code
 notes each `/effort` answered while the agent is idle ("Ultracode on …",
-"Ultracode off …", or for `/effort status` a line that names ultracode only
-while it is on), and at each prompt a reminder when it changed since the last
-one. The newest of these counts, with what the app saw itself: a **Turn on**
-or **Turn off**, or a look in its Effort panel.
+"Ultracode off …", or for an `/effort status` typed in its terminal a line
+that names ultracode only while it is on), and at each prompt a reminder when
+it changed since the last one. The newest of these counts, with what the app
+saw itself: a **Turn on** or **Turn off**.
+
+The app never types `/effort` into an agent to find out. The only `/effort`
+it types is the one a **Turn on** or **Turn off** click sends, so nothing of
+its own appears in the agent's terminal. The
+[suggestions mod](configuration.md#suggestions-mod) runs no command in a chat
+either.
 
 - **While it works:** an `/effort` answers only on the agent's screen, and
-  its transcript gets nothing. In a background agent that loads the
-  [suggestions mod](configuration.md#suggestions-mod), the mod sees the
-  command run but not its answer. When `/effort ultracode …` or the Effort
-  panel gets no answer (an effort level alone leaves ultracode as it was, so
-  it doesn't count), it runs `/effort status` in the agent, once. Claude
-  Code queues it until the agent is idle, then notes its answer in the
-  transcript, where the app reads it like any other. The mod sends the app
-  nothing about it, and the app shows neither that line nor its queued entry
-  in the agent's messages. Without the mod, the agent's next prompt tells.
-- **Only in background agents:** Claude Code starts one with
-  `CLAUDE_CODE_SESSION_KIND=bg`, which also makes its registry file's kind
-  `bg`, the kind the app reads. The mod runs `/effort status` only where that
-  variable says `bg`, so never in an ordinary terminal or IDE chat.
+  its transcript gets nothing, so the line keeps what it said until the
+  agent's next prompt (or a **Turn on** or **Turn off** from here, below).
+- **Unknown:** a process that has had no prompt and no switch yet (woken,
+  restarted) leaves its conversation silent, so the line says *Ultracode:
+  unknown*, with both buttons, until a switch or a prompt tells.
 - **The app's own Turn on or off while it works:** the app reads Claude
-  Code's answer off the agent's screen, so it is in no transcript either.
-  The app keeps it on disk, as it does what a look in the Effort panel
-  showed, so a restart of the app loses neither.
+  Code's answer off the agent's screen, so it is in no transcript. The app
+  keeps it on disk, so a restart of the app loses nothing. If Claude Code
+  queues the `/effort` instead of running it at once, nothing is on the
+  screen: the app says it got no answer within 10 seconds, the line stays as
+  it was, and once the agent is idle and runs it, its answer is in the
+  transcript and the line follows.
 - **Which process:** a switch the app keeps counts only while the process
   that had it (by its pid) runs the agent, and only from when that process
   started, so a later process that gets the same pid doesn't inherit it.
-- **The panel opened only to look:** closed with Esc, Claude Code notes
-  "Cancelled", which changes nothing. Opened while the agent works, the mod's
-  `/effort status` reads what it left once the agent is idle.
+- **The panel opened and closed with Esc:** Claude Code notes "Cancelled",
+  which changes nothing.
+- **Older conversations:** an earlier version of the mod ran `/effort status`
+  in a background agent. Its lines stay in those conversations, and the app
+  doesn't show them as yours or as work.
 
 ## Moving an editor chat to a terminal
 
@@ -214,9 +216,8 @@ no conversation.
 - `logs/suggestions.json`: the mod's latest suggestions, kept for a day.
 - `logs/models.json`: the model picked for each Chat in IDE, kept a week, so
   a chat resumed within a week still runs on it.
-- `logs/ultracode.json`: each chat's latest ultracode switch the app made or
-  saw in its Effort panel, with the pid of the process that had it, kept 30
-  days.
+- `logs/ultracode.json`: each chat's latest ultracode switch the app made
+  (Turn on or off), with the pid of the process that had it, kept 30 days.
 
 Elsewhere:
 

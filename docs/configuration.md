@@ -32,15 +32,12 @@ The older `ORGANIZER_*` names (such as `ORGANIZER_PORT`) still work.
 
 ## Suggestions mod
 
-The mod in `mods/let-them-talk-suggestions` does three things: it passes on
+The mod in `mods/let-them-talk-suggestions` does two things: it passes on
 Claude Code's reply suggestion for terminal chats (see
-[Reply suggestions](how-it-works.md#reply-suggestions)), it runs a
+[Reply suggestions](how-it-works.md#reply-suggestions)), and it runs a
 **Chat in IDE** on the model picked in **New agent** (see
-[The model of a Chat in IDE](how-it-works.md#the-model-of-a-chat-in-ide)),
-and in a background agent, after an ultracode switch made while it works,
-it runs `/effort status` so the app can read the switch (see
-[Ultracode](how-it-works.md#ultracode)). In other chats it runs nothing
-for ultracode.
+[The model of a Chat in IDE](how-it-works.md#the-model-of-a-chat-in-ide)).
+It runs no command in any chat.
 
 To install it, add this repository as a plugin marketplace and install the
 plugin from it:
@@ -74,8 +71,10 @@ A copy loaded this way (`CLAUDE_CODE_PLUGIN_DIRS` or `--plugin-dir`) takes the
 place of an installed one with the same name, so having both is fine.
 
 - Chats started before the mod was loaded show no suggestion until
-  restarted, and an ultracode switch made while they work shows only at
-  their next prompt.
+  restarted.
+- A chat that loaded an earlier version of the mod keeps that version until
+  it is restarted, so an agent may still run `/effort status` after an
+  ultracode switch made while it works. The app doesn't show those lines.
 - A **Chat in IDE** gets the picked model only where the mod is loaded: a
   Cursor or VS Code connected to WSL reads the same `~/.claude/settings.json`;
   one on Windows has its own.

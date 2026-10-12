@@ -120,7 +120,6 @@ class FakeAPI:
         self.posts = []
         self.asked = 0
         self.ultracode = None   # what the server reads off a running background agent
-        self.checking = False   # it is looking in that agent's /effort panel
         self.suggest = None     # alpha's suggested reply
         self.arrows = []        # more arrows on the project board
         self.agents = None      # every chat's agents (like AGENTS above); none by default
@@ -137,7 +136,7 @@ class FakeAPI:
         return {"sessionId": sid, "messages": msgs, "asking": None, "plan": None, "queued": [],
                 "suggest": {"text": self.suggest} if self.suggest and sid == A else None,
                 "working": self.vary and sid == A, "doing": f"Step {self.asked}" if self.vary else None,
-                "ultracode": self.ultracode if sid == B else None, "ultracodeChecking": self.checking and sid == B}
+                "ultracode": self.ultracode if sid == B else None}
 
     def reply(self, route, request):
         url = urlparse(request.url)
@@ -592,26 +591,18 @@ def checks_wide(browser):
         check(name, "Ultracode is off" in shown and "Turn off" not in shown and sent == [{"sessionId": B, "on": True}]
               and "Ultracode on (this session only)" in page.inner_text("#toasts"), (shown, sent))
 
-    name = "ultracode: unknown shows both buttons; a stopped agent has none"
+    name = "ultracode: unknown says so, with both buttons and a note on when it shows, and the page sends nothing to find out; a stopped agent has none"
     with step(page, name):
         open_card(page, B)
-        both = page.locator("#drawer-body .ultracode button").all_inner_texts()
-        open_card(page, C)
-        check(name, both == ["Turn on", "Turn off"] and page.locator("#drawer-body .ultracode").count() == 0
-              and "while it runs" in page.inner_text("#drawer-body"), both)
-
-    name = "ultracode: while the app looks in its /effort panel, the line says checking and the buttons wait"
-    with step(page, name):
-        page.api.checking = True
-        open_card(page, B)
+        poll(page, 2)  # its details stay open while the page refreshes
         row = page.locator("#drawer-body .ultracode")
-        shown, waiting = row.inner_text(), row.locator("button:disabled").count()
-        said = "opens /effort in it and closes it again" in page.inner_text("#drawer-body")
-        page.api.checking, page.api.ultracode = False, True
-        poll(page)
-        check(name, "Ultracode: checking…" in shown and waiting == 2 and said
-              and row.inner_text().startswith("Ultracode is on") and row.locator("button:enabled").all_inner_texts() == ["Turn off"],
-              (shown, waiting, said, row.inner_text()))
+        shown, both, enabled = row.inner_text(), row.locator("button").all_inner_texts(), row.locator("button:enabled").count()
+        note = "once you turn it on or off here, or after its next prompt" in page.inner_text("#drawer-body")
+        sent = list(page.api.posts)
+        open_card(page, C)
+        check(name, shown.startswith("Ultracode: unknown") and both == ["Turn on", "Turn off"] and enabled == 2 and note
+              and not sent and page.locator("#drawer-body .ultracode").count() == 0
+              and "while it runs" in page.inner_text("#drawer-body"), (shown, both, enabled, note, sent))
 
     name = "compact: an idle background agent has Compact; it asks first, then asks the server"
     with step(page, name):

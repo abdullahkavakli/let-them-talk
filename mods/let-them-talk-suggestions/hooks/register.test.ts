@@ -1,6 +1,4 @@
 import { test, expect, mock } from 'claude-code/testing'
-import type { Engine } from 'claude-code/testing'
-import type { On } from 'claude-code'
 import { cleanSuggestion, modelFor, report } from './register'
 
 // Sending needs the chat's id ($.session.id) and making one needs its
@@ -50,107 +48,17 @@ test('runs on the app\'s model until the chat picks another', () => {
   expect(modelFor('claude-opus-5-5', undefined, 'claude-opus-5-5[1m]').model).toBe('claude-opus-5-5[1m]')
 })
 
-// ---------------------------------------------------------------- ultracode
-
-const ON = 'Ultracode on (this session only): dynamic workflows on every task. Effort stays xhigh.'
-
-const BACKGROUND = { CLAUDE_CODE_SESSION_KIND: 'bg' } // how Claude Code starts a background agent
-
-/** A chat whose /effort runs are recorded; by default a background agent.
- * A plugin's /effort status waits until the chat is idle: idle() lets it run. */
-function chat(on: On, env: Record<string, string> = BACKGROUND) {
+test('runs no command of its own: an /effort, even in a background agent, is followed by nothing', async ($, on) => {
   const clock = mock.clock(on, { now: 1_000_000 })
-  mock.env(on, env)
+  mock.env(on, { CLAUDE_CODE_SESSION_KIND: 'bg' }) // how Claude Code starts a background agent
   const ran: string[] = []
-  let idle: () => void = () => {}
-  const quiet = new Promise<void>(resolve => { idle = () => resolve() })
-  on('command.run', async ($, e) => {
-    ran.push(e.args)
-    if (e.origin.kind === 'plugin') await quiet
-    return {}
-  })
-  return { clock, ran, idle }
-}
+  on('command.run', async (_$, e) => { ran.push(`${e.command} ${e.args}`.trim()); return {} })
 
-/** /effort typed in the chat, as Claude Code runs it. */
-const effort = ($: Engine, args: string) => $.command.run({
-  command: 'effort', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 },
-})
-
-let rows = 0
-/** The rows Claude Code appends for a command run while the chat is idle: its
- * name, then its answer (a subagent's carry its agentId). */
-async function answer($: Engine, args: string, said: string, command = 'effort', agentId?: string) {
-  for (const text of [
-    `<command-name>/${command}</command-name>\n            <command-message>${command}</command-message>\n            <command-args>${args}</command-args>`,
-    `<local-command-stdout>${said}</local-command-stdout>`,
-  ]) {
-    await $.session.append({
-      door: 'command', origin: { kind: 'composer' }, uuid: `row-${++rows}`, ...(agentId ? { agentId } : {}),
-      message: { type: 'user', role: 'user', content: [{ type: 'text', text }] },
+  for (const args of ['ultracode on', '', 'high']) {
+    await $.command.run({
+      command: 'effort', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 },
     })
   }
-}
-
-test('an /effort answered at once (the agent was idle) needs no /effort status', async ($, on) => {
-  const { clock, ran } = chat(on)
-  await effort($, 'ultracode on')
-  await answer($, 'ultracode on', ON)
-  await effort($, 'ultracode on') // refused: answered all the same
-  await answer($, 'ultracode on', "Ultracode isn't available on claude-sonnet-4-5. Valid options are: low, medium, high, xhigh, max, auto")
-  await effort($, '')
-  await answer($, '', 'Cancelled') // the panel closed with Esc
-  await clock.advance(5000)
-  expect(ran).toEqual(['ultracode on', 'ultracode on', ''])
-})
-
-test('a switch while a background agent works is followed by /effort status, run once it is idle', async ($, on) => {
-  const { clock, ran, idle } = chat(on)
-  await effort($, 'ultracode on') // while it works: Claude Code appends no answer
-  await clock.advance(1000)
-  expect(ran).toEqual(['ultracode on'])
-  await clock.advance(1000)
-  expect(ran).toEqual(['ultracode on', 'status'])
-  idle()
-  await answer($, 'status', 'Current effort level: xhigh (Deeper reasoning than high) · Ultracode on')
-  await clock.advance(5000)
-  expect(ran).toEqual(['ultracode on', 'status']) // its own answer starts nothing more
-})
-
-test('its panel opened while the agent works is followed by one /effort status; a level by none', async ($, on) => {
-  const { clock, ran } = chat(on)
-  await effort($, 'high') // a level leaves ultracode as it is
-  await clock.advance(2000)
-  expect(ran).toEqual(['high'])
-  await effort($, '') // the panel, where Tab switches it unseen
-  await clock.advance(1000)
-  await effort($, 'ultracode off') // only one /effort status for both
-  await clock.advance(2000)
-  expect(ran).toEqual(['high', '', 'ultracode off', 'status'])
-})
-
-for (const [chatKind, env] of [['terminal or IDE', {}], ['named interactive', { CLAUDE_CODE_SESSION_KIND: 'interactive' }]] as const) {
-  test(`an ordinary chat (${chatKind}) gets no /effort status`, async ($, on) => {
-    const { clock, ran } = chat(on, env)
-    await effort($, 'ultracode on') // while it works
-    await effort($, '')
-    await clock.advance(5000)
-    expect(ran).toEqual(['ultracode on', ''])
-  })
-}
-
-test('another command\'s answer is not the answer to an /effort', async ($, on) => {
-  const { clock, ran } = chat(on)
-  await effort($, 'ultracode on') // while it works
-  await answer($, '', 'Total cost: $0.12', 'cost')
-  await clock.advance(2000)
-  expect(ran).toEqual(['ultracode on', 'status'])
-})
-
-test('a subagent\'s /effort answer is not the agent\'s', async ($, on) => {
-  const { clock, ran } = chat(on)
-  await effort($, 'ultracode on') // while it works
-  await answer($, 'ultracode on', ON, 'effort', 'agent-1')
-  await clock.advance(2000)
-  expect(ran).toEqual(['ultracode on', 'status'])
+  await clock.advance(10_000)
+  expect(ran).toEqual(['effort ultracode on', 'effort', 'effort high'])
 })

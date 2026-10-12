@@ -1,12 +1,11 @@
 # let-them-talk-suggestions
 
-A Claude Code plugin for [Let Them Talk](https://github.com/abdullahkavakli/let-them-talk), a visual board for your Claude Code sessions. It does three things:
+A Claude Code plugin for [Let Them Talk](https://github.com/abdullahkavakli/let-them-talk), a visual board for your Claude Code sessions. It does two things:
 
 - It passes Claude Code's suggested next prompt on to the board, so the Send box of a terminal chat shows the same grey suggestion as the chat's own prompt box.
 - It runs a **Chat in IDE** started from the board on the model you picked in **New agent**.
-- In a background agent, after an ultracode switch made while it works, it runs `/effort status` so the board can read the switch.
 
-It needs Let Them Talk running on port 8765, the default. It talks only to the app on your own machine, and does nothing when the app isn't running.
+It runs no command in your chats, so nothing of its own appears in their terminals. It needs Let Them Talk running on port 8765, the default. It talks only to the app on your own machine, and does nothing when the app isn't running.
 
 ## Install
 

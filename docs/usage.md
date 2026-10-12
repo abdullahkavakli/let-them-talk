@@ -362,25 +362,19 @@ It lasts until the agent ends. One started with **Ultracode** ticked in
 Switching it in the agent's own terminal counts too: `/effort ultracode on`
 (or `off`), or Tab and Enter in its Effort panel. While the agent is idle,
 the line follows at once. While it works, Claude Code shows its answer only
-on that screen, so the line keeps what it said until Claude Code tells:
+on that screen, so the line keeps what it said until the agent's next
+prompt.
 
-- With the [suggestions mod](configuration.md#suggestions-mod) loaded in the
-  agent, once its turn ends: the mod then runs `/effort status` in it, and
-  the app reads its answer. You see that line in the agent's terminal, not
-  in its messages here.
-- Without the mod, at its next prompt.
+A switch Claude Code turns down, and the panel opened and closed with Esc,
+change nothing.
 
-A switch Claude Code turns down, and the panel opened only to look and closed
-with Esc, change nothing.
-
-After a restart its conversation doesn't tell yet, so while its details are
-open the app finds out, once, when it is idle (if it is working, as soon as
-it stops). It types `/effort` into its prompt box, reads *Ultracode on* (or
-*off*) in the effort panel that opens, and closes the panel with Esc,
-changing nothing. Meanwhile the line says *Ultracode: checking…*. Claude Code
-notes the cancelled `/effort` in the conversation; the board doesn't show it.
-If the panel has no Ultracode line (a model without it), the line says
-*Ultracode: unknown* until its next prompt, with both buttons.
+An agent that was just woken or restarted has had no prompt and no switch
+yet, so its conversation doesn't tell. The line says *Ultracode: unknown*,
+with both buttons, and shows *on* or *off* once you turn it on or off here,
+or after its next prompt. The app never types anything into an agent to find
+out. It types only for what you ask (a prompt, a rename, **Turn on** or
+**Turn off**, **Compact**, **Stop**), so nothing of its own shows up in the
+agent's terminal.
 
 In any other chat, type `/effort ultracode on` (or `off`) yourself.
 

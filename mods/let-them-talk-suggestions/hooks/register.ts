@@ -17,15 +17,7 @@ import type { Register } from 'claude-code'
 // which when the chat's first turns start, and this names it on the chat's
 // own requests (not its subagents'). A model you then pick in the chat wins.
 //
-// And in a background agent it keeps the app's Ultracode line true. The app
-// reads ultracode from the agent's conversation, where Claude Code notes each
-// /effort answered while it is idle. One run while it works (typed, or Tab
-// in its Effort panel) answers on its screen only, which no hook sees. So
-// after an /effort that may have switched it (not an effort level alone) and
-// got no answer, this runs /effort status (a line the agent shows), which
-// Claude Code queues until the agent is idle: its answer lands in the
-// conversation, where the app reads it. Ordinary terminal and IDE chats are
-// left alone: the app shows ultracode for background agents only.
+// It runs no command in a chat: no command line of its own shows in its terminal.
 
 const APP = 'http://localhost:8765' // Let Them Talk's default port (LTT_PORT)
 const HEADERS = { 'Content-Type': 'application/json', 'X-Let-Them-Talk': '1' }
@@ -34,11 +26,6 @@ const OWN_WAIT_MS = 12000 // Claude Code makes its own within a few seconds of t
 const WINDOW_MS = 300_000 // after that the conversation may no longer be cached (server: MOD_WINDOW)
 const HELLO_EVERY_MS = 300_000 // so the app keeps counting this chat as having the mod
 const MODEL_ASKS = 3 // turns at a chat's start the app is asked for a model (it knows by the first)
-const ANSWER_WAIT_MS = 1500 // an idle /effort's answer is appended within ms; a busy one's never
-const BACKGROUND = 'bg' // CLAUDE_CODE_SESSION_KIND of a background agent (claude --bg), its registry kind the app reads
-const COMMAND_NAME = /<command-name>\/?([^<]*)<\/command-name>/
-const COMMAND_OUT = /^\s*<local-command-stdout>/ // a command's answer
-const MAY_SWITCH = /^\s*(ultracode(\s|$)|$)/i // /effort ultracode [on|off], or its panel (no words): Claude Code's own reading
 
 const PROMPT = `[Suggestion only. Do not answer this message or continue the task.]
 Predict what the user will most likely type next in this chat. Predict what they
@@ -72,14 +59,6 @@ export function modelFor(wanted: string | undefined, startedOn: string | undefin
   return { model: now.startsWith(wanted) ? now : wanted, startedOn: startedOn ?? now, dropped: false }
 }
 
-/** What the mod keeps of the /effort runs in this chat. */
-type Efforts = {
-  lastCommand?: string // the command whose answer is appended next
-  runs: number // /effort runs so far
-  answered: number // the last /effort run whose answer was appended
-  looking: boolean // this mod's /effort status waits for the chat to be idle
-}
-
 export const register: Register = on => {
   let turn = 0 // main-loop turns ended so far
   let starts = 0 // main-loop turns started so far
@@ -92,7 +71,6 @@ export const register: Register = on => {
   let wanted: string | undefined // the model the app picked for this chat
   let startedOn: string | undefined // the chat's own model when that took over
   let asked = 0
-  const efforts: Efforts = { runs: 0, answered: 0, looking: false }
 
   // Work after a turn outlives the turn's own hooks, so a timer started here does it.
   on('session.start', async ($, e, next) => {
@@ -193,36 +171,4 @@ export const register: Register = on => {
     if (!e.agentId && !e.isAborted && e.reason === 'answer') pending = { turn: ++turn, starts, waited: 0 }
     return done
   })
-
-  // An /effort run: while the chat is idle its answer is appended at once
-  // (below); while it works, never. Then, in a background agent, for one that
-  // may have switched ultracode: /effort status, queued until it is idle.
-  on('command.run', { command: 'effort' }, async ($, e, next) => {
-    const run = ++efforts.runs
-    const ran = await next(e)
-    if (!MAY_SWITCH.test(e.args) || (await $.env.get('CLAUDE_CODE_SESSION_KIND')) !== BACKGROUND) return ran
-    $.clock.after(ANSWER_WAIT_MS, () => {
-      if (efforts.answered >= run || efforts.looking) return
-      efforts.looking = true
-      $.command.run({ command: 'effort', args: 'status' })
-        .catch(() => undefined) // the agent ended: its next prompt tells the app
-        .finally(() => { efforts.looking = false })
-    })
-    return ran
-  }).catch(($, e, next) => next(e))
-
-  // The rows a command run while the chat is idle leaves in its conversation:
-  // its name, then its answer. A subagent's are its own.
-  on('session.append', { door: 'command' }, async ($, e, next) => {
-    const kept = await next(e)
-    if (e.agentId) return kept
-    const text = e.message.content.map(block => (block.type === 'text' ? block.text : '')).join('')
-    const name = COMMAND_NAME.exec(text)
-    if (name) efforts.lastCommand = name[1]?.trim()
-    else if (COMMAND_OUT.test(text)) {
-      if (efforts.lastCommand === 'effort') efforts.answered = efforts.runs
-      efforts.lastCommand = undefined
-    }
-    return kept
-  }).catch(($, e, next) => next(e))
 }

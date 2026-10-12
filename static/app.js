@@ -3343,26 +3343,23 @@ function backgroundSection(n) {
 // Ultracode: it runs a workflow for every bigger task without being asked each
 // time. The server types /effort ultracode on|off into a running background
 // agent, as you would in its terminal, and reads its state from its
-// conversation; after a restart, while these details are open, it looks in
-// the agent's /effort panel once ("checking…"). If that can't tell, it is
-// unknown until its next prompt, so both buttons show then.
+// conversation. The app types nothing on its own to find out: after a restart
+// it is unknown until you turn it on or off here or its next prompt, so both
+// buttons show then.
 state.ultra = {};  // sessionId -> "on" | "off" being switched (kept across redraws)
 function ultracodeRow(n) {
   if (!n.running) return [el("p", { class: "muted small", text: "Ultracode can be turned on or off while it runs." })];
   const chat = state.chat[n.sessionId], on = chat?.ultracode, busy = state.ultra[n.sessionId];
-  const checking = on == null && chat?.ultracodeChecking;
-  const button = (want) => el("button", { class: "btn", disabled: !!busy || checking,
+  const button = (want) => el("button", { class: "btn", disabled: !!busy,
     text: busy === want ? `Turning ${want}…` : `Turn ${want}`,
     title: `Types /effort ultracode ${want} into it, as in its terminal (until it ends)`,
     onclick: () => setUltracode(n, want) });
   return [
     el("div", { class: "drawer-actions ultracode" },
-      el("span", { text: on === true ? "Ultracode is on" : on === false ? "Ultracode is off"
-        : checking ? "Ultracode: checking…" : "Ultracode: unknown" }),
+      el("span", { text: on === true ? "Ultracode is on" : on === false ? "Ultracode is off" : "Ultracode: unknown" }),
       on !== true && button("on"), on !== false && button("off")),
     el("p", { class: "muted small", text: "With ultracode on, it runs a workflow (a team of agents) for every bigger task." +
-      (checking ? " To find out, the app opens /effort in it and closes it again, changing nothing."
-        : on == null ? " Whether it's on shows after its next prompt." : "") }),
+      (on == null ? " Whether it's on shows once you turn it on or off here, or after its next prompt." : "") }),
   ];
 }
 
