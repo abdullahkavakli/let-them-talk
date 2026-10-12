@@ -1091,6 +1091,71 @@ def checks_wide(browser):
             "(d => !!(d.getAttribute('aria-label') || document.getElementById(d.getAttribute('aria-labelledby'))?.textContent))"
             f"(document.querySelector('#{i}'))") for i in ("connect-dialog", "chat-dialog", "board-dialog")))
 
+    # Connecting to an ended background agent wakes it. Gamma (an agent whose process has ended) is made one the
+    # server lists as asleep, with a saved conversation (wakeable) or without one (restart it first).
+    ASLEEP = {"running": False, "messageBlock": "This background agent isn't running right now. Send it a prompt to wake it."}
+    NO_CHAT = {"running": False, "resumable": False, "wakeable": False,
+               "messageBlock": "This background agent has no saved conversation, so it can't be woken; restart it first."}
+
+    def drag_connect(page, src, dst):
+        """Drag an arrow from src's handle onto dst's card, as a hand does; the Connect dialog opens."""
+        page.wait_for_timeout(200)
+        h = page.locator(f'.node[data-id="{src}"] .port.out').bounding_box()
+        t = page.locator(f'.node[data-id="{dst}"] .name').bounding_box()
+        page.mouse.move(h["x"] + h["width"] / 2, h["y"] + h["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(t["x"] + 10, t["y"] + 5, steps=8)
+        page.mouse.up()
+        page.wait_for_selector("#connect-dialog[open]")
+
+    name = "connect: an ended background agent that can be woken has a handle to drag from; one with no saved conversation has none"
+    with step(page, name):
+        page.api.patch = {C: {**ASLEEP, "wakeable": True}}
+        poll(page)
+        woken = page.locator(f'.node[data-id="{C}"] .port.out').count()
+        page.api.patch = {C: NO_CHAT}
+        poll(page)
+        check(name, woken == 1 and page.locator(f'.node[data-id="{C}"] .port.out').count() == 0)
+
+    name = ("connect: dropping an arrow on an ended background agent that can be woken says it isn't running and that "
+            "Connecting wakes it, with no error, Connect enabled and its note still editable")
+    with step(page, name):
+        page.api.patch = {C: {**ASLEEP, "wakeable": True}}
+        page.api.post_result = {"id": "c1"}
+        poll(page)
+        drag_connect(page, A, C)
+        line = page.inner_text("#c-wake")
+        shown = is_open(page, "#c-wake") and not is_open(page, "#c-error")
+        ready = page.locator("#c-submit").is_enabled() and page.locator("#c-text-to").is_enabled()
+        page.locator("#c-text-to").fill("Wake up and talk to alpha.")
+        page.locator("#c-submit").click()
+        page.wait_for_timeout(300)
+        sent = [b for p, b in page.api.posts if p.endswith("/connect")]
+        check(name, line == "gamma isn't running. Connecting wakes it with its note as its first prompt."
+              and shown and ready and sent and sent[-1]["from"] == A and sent[-1]["to"] == C
+              and sent[-1]["notifyTo"] is True and sent[-1]["textTo"] == "Wake up and talk to alpha."
+              and not page.evaluate("document.querySelector('#connect-dialog').open"), (line, shown, ready, sent))
+
+    name = "connect: from an ended background agent too, and with its note switched off the line says it isn't woken"
+    with step(page, name):
+        page.api.patch = {C: {**ASLEEP, "wakeable": True}}
+        poll(page)
+        drag_connect(page, C, A)
+        both = page.inner_text("#c-wake")
+        page.locator("#c-notify-from").uncheck()
+        off = page.inner_text("#c-wake")
+        check(name, both == "gamma isn't running. Connecting wakes it with its note as its first prompt."
+              and off == "gamma isn't running. Its note is off, so it isn't woken and the connection is only drawn."
+              and page.locator("#c-text-from").is_disabled() and page.locator("#c-submit").is_enabled(), (both, off))
+
+    name = "connect: an ended agent with no saved conversation still gets the red message, no wake line, Connect off"
+    with step(page, name):
+        page.api.patch = {C: NO_CHAT}
+        poll(page)
+        page.evaluate(f"openConnectDialog('{A}', '{C}')")  # it has no handle to drag from, but a card to drop on
+        check(name, "restart it first" in page.inner_text("#c-error") and not is_open(page, "#c-wake")
+              and page.locator("#c-submit").is_disabled())
+
     name = "failures: a failed Disconnect leaves a notice and the details open, no alert()"
     with step(page, name):
         page.api.post_status = 500

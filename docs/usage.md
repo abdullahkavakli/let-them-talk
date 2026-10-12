@@ -40,6 +40,14 @@ they work on. You can edit or switch off either note before sending.
   first chat runs.
 - There is one arrow per direction: dropping onto a card you already point to
   opens that arrow.
+- **An ended background agent** (its process is gone but its conversation is
+  saved: its card says *done*, *stopped* or *failed*) can be connected too:
+  Connect wakes it, with its note as its first prompt, the way **Send** wakes
+  it. The dialog says so under the names; switch its note off and it isn't
+  woken, and the arrow is only drawn. The other chat, if it runs, is told once
+  the agent is up. One that has no saved conversation (*needs restart*) can't
+  be connected; restart it first. How: [Notes and
+  messages](how-it-works.md#notes-and-messages).
 
 ## Arrows
 
@@ -58,7 +66,10 @@ to see why and when it was connected, and:
   earlier** loads older ones.
 - **Notes sent when connected** (open when one failed): each note with its
   state, *sent*, *sent, reworded* (with what was actually sent), *failed* or
-  *not sent*. **Resend failed notes** sends the failed ones again.
+  *not sent*. **Resend failed notes** sends the failed ones again: an ended
+  agent is woken again, one that runs by then gets it as a message. If Claude
+  Code starts a copy of an agent instead of waking it, its note is *failed*
+  and says so, and the copy gets a card (delete it there).
 - **Disconnect** asks first. With **Tell both agents** ticked (the default),
   each end that is still running gets a note from `@let-them-talk` saying the
   connection was removed and to stop messaging for it.
@@ -153,7 +164,9 @@ be available, and one on it then asks before it acts.
 
 - *name shared* on a card means another running session has the same name
   (see [Sessions are addressed by name](limits.md#sessions-are-addressed-by-name)).
-- A card that has ended or can't receive notes has no handle.
+- A card that has ended or can't receive notes has no handle; an ended
+  background agent that can be woken keeps it (see [Connect two
+  chats](#connect-two-chats)).
 
 ## Subagents
 

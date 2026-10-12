@@ -976,6 +976,171 @@ check("subagent message: images go too, saved where its chat (and so the subagen
       "including any image lines at its end" in note and named and Path(named.group(1)).read_bytes() == PNG, note[-160:])
 S.shutil.rmtree(S.CLAUDE_TMP.parent)
 
+# ---------------- Connecting to an ended background agent wakes it (every launch and message faked)
+# An ended agent has no inbox: its note is its prompt (claude --resume <id> --bg -- <note>), the way Send
+# wakes it; a running chat's note goes through the relay as ever.
+
+cn_saved = {n: getattr(S, n) for n in ("load_board", "relay_send", "run_claude", "_deliver_later", "add_activity", "WAKE_WAIT")}
+cn_board, cn_log, cn_order, cn_woke, cn_relayed, cn_up = {}, [], [], [], [], []
+S.load_board = lambda bid: cn_board
+S.add_activity = lambda b, text, level="info": cn_log.append((text, level))
+S._deliver_later = lambda bid, conn_id, sides: S._deliver(bid, conn_id, sides)  # in this thread: nothing to wait for
+S.WAKE_WAIT = 0.2
+CN_BLOCK = "This background agent isn't running right now. Send it a prompt to wake it."
+cn_sess = lambda sid, name, **kw: {"sessionId": sid, "name": name, "title": None, "platform": "wsl", "cwd": "/home/you/proj",
+                                  "winCwd": None, "ambiguous": False, "messageBlock": None, "running": True,
+                                  "background": False, "jobId": None, **kw}
+cn_nap = lambda sid, name, **kw: cn_sess(sid, name, **{"background": True, "running": False, "jobId": "j" + sid,
+                                                       "status": "asleep", "resumable": True, "wakeable": True,
+                                                       "messageBlock": CN_BLOCK, **kw})
+
+
+def cn_relay(items):
+    cn_up.append([x["running"] for x in sessions if x["name"] == "merger"])  # was the agent up when this went?
+    cn_order.extend(f"relay {it['to']}" for it in items)
+    cn_relayed.extend(items)
+    return [{"state": "sent", "detail": "queued in the agent's inbox"} for _ in items], {}
+
+
+def cn_wake(says="backgrounded · 0123abcd\n", err="", comes_up=True):
+    def run(args, **kw):
+        cn_order.append(f"wake {args[1]}")
+        cn_woke.append(args)
+        if comes_up and says.startswith("backgrounded"):
+            for x in sessions:
+                if x["sessionId"] == args[1]:
+                    x.update(running=True, wakeable=False, messageBlock=None, status="idle")
+        return types.SimpleNamespace(stdout=says, stderr=err, returncode=0 if says.startswith("backgrounded") else 1)
+    return run
+
+
+def cn_connect(a, b, wake=None, **body):
+    """Connect sessions a -> b (given as they are listed) on a fresh board; returns the connection, or the refusal."""
+    cn_board.clear()
+    cn_board.update(nodes={}, connections=[], activity=[], hidden=[])
+    for l in (cn_log, cn_order, cn_woke, cn_relayed, cn_up):
+        l.clear()
+    sessions[:] = [a, b]
+    S.run_claude = wake or cn_wake()
+    S.relay_send = cn_relay
+    try:
+        return S.connect("b", {"from": a["sessionId"], "to": b["sessionId"], "reason": "merge the fixes", **body})
+    except ValueError as e:
+        return str(e)
+
+
+RUNNER = cn_sess("run", "runner")
+conn = cn_connect(dict(RUNNER), cn_nap("nap", "merger"))
+note_to = conn["notes"]["to"] if isinstance(conn, dict) else {}
+check("connect to an ended agent: it is woken once, with its note (who connected it, why, and how to reach the "
+      "other chat) as its prompt, and the running chat's note goes through the relay once, after it",
+      isinstance(conn, dict) and [(w[:4], w[4]) for w in cn_woke] == [(["--resume", "nap", "--bg", "--"], note_to["text"])]
+      and cn_order == ["wake nap", "relay runner"] and len(cn_relayed) == 1
+      and cn_relayed[0]["text"] == conn["notes"]["from"]["text"]
+      and all(x in note_to["text"] for x in ("connected @runner", "Why: merge the fixes", "SendMessage", "reply to @runner")),
+      (conn, cn_order))
+check("connect to an ended agent: the notes' states are sent, the one that woke it says so, and Activity names it",
+      isinstance(conn, dict) and note_to["state"] == "sent" and note_to["detail"] == "woke it with the note as its prompt"
+      and conn["notes"]["from"]["state"] == "sent" and conn["status"] == "sent"
+      and cn_log[-1][1] == "ok" and "notes sent, sent; woke @merger" in cn_log[-1][0], (conn, cn_log))
+
+conn = cn_connect(cn_nap("nap", "merger"), dict(RUNNER))
+check("connect from an ended agent: it is woken with its note, which tells it to start; the running chat's goes by relay",
+      isinstance(conn, dict) and [w[4] for w in cn_woke] == [conn["notes"]["from"]["text"]]
+      and "Start now: send @runner" in conn["notes"]["from"]["text"]
+      and cn_order == ["wake nap", "relay runner"] and conn["status"] == "sent", (conn, cn_order))
+
+conn = cn_connect(cn_nap("n1", "merger"), cn_nap("n2", "tester"))
+check("connect two ended agents: both are woken, each with its own note, nothing goes by relay",
+      isinstance(conn, dict) and sorted(w[4] for w in cn_woke) == sorted(n["text"] for n in conn["notes"].values())
+      and cn_order == ["wake n1", "wake n2"] and not cn_relayed and conn["status"] == "sent"
+      and all(n["state"] == "sent" for n in conn["notes"].values()), (conn, cn_order))
+
+conn = cn_connect(dict(RUNNER), cn_nap("nap", "merger"), notifyTo=False)
+check("connect with the ended agent's note off: it isn't woken, and the arrow is drawn",
+      isinstance(conn, dict) and not cn_woke and conn["notes"]["to"]["state"] == "skipped"
+      and cn_order == ["relay runner"] and len(cn_board["connections"]) == 1, (conn, cn_order))
+
+no_transcript = cn_nap("nap", "merger", resumable=False, wakeable=False,
+                       messageBlock="This background agent has no saved conversation, so it can't be woken; restart it first.")
+conn = cn_connect(dict(RUNNER), no_transcript)
+check("connect to an ended agent with no saved conversation: refused with the plain message, nothing woken, no arrow",
+      conn == no_transcript["messageBlock"] and not cn_woke and not cn_relayed and not cn_board["connections"], conn)
+conn = cn_connect(dict(RUNNER), cn_sess("win", "winner", platform="windows", messageBlock="Windows can't be reached."))
+check("connect to a chat that can't receive notes is refused as before", conn == "Windows can't be reached." and not cn_woke, conn)
+cn_board.update(connections=[])
+sessions[:] = [dict(RUNNER)]
+try:
+    S.connect("b", {"from": "run", "to": "ended chat"})
+    conn = "connected"
+except ValueError as e:
+    conn = str(e)
+check("connect to a chat that isn't listed any more (an ended chat, not a background agent) is refused",
+      "must be running" in conn, conn)
+
+# a wake that fails: the note says why, the other side is still told, and the arrow shows it
+conn = cn_connect(dict(RUNNER), cn_nap("nap", "merger"), wake=cn_wake(says="", err="Workspace not trusted"))
+check("connect: an agent that couldn't be woken has a failed note with Claude Code's reason; the other note still goes; "
+      "the arrow is failed and Activity says so",
+      isinstance(conn, dict) and conn["notes"]["to"]["state"] == "failed" and "doesn't trust" in conn["notes"]["to"]["detail"]
+      and conn["notes"]["from"]["state"] == "sent" and conn["status"] == "failed"
+      and cn_log[-1][1] == "error" and "notes sent, failed" in cn_log[-1][0] and "woke" not in cn_log[-1][0], (conn, cn_log))
+
+# Claude Code started a copy instead of waking it in place: the note went to the copy, so it isn't delivered
+conn = cn_connect(dict(RUNNER), cn_nap("nap", "merger"), wake=cn_wake(
+    comes_up=False, err="note: session nap is already running in the background, so this started a copy as 0123abcd."))
+check("connect: a copy started instead of waking it is a failed note that says so, and the copy's card is added "
+      "(it can be deleted)",
+      isinstance(conn, dict) and conn["notes"]["to"]["state"] == "failed" and "copy (0123abcd)" in conn["notes"]["to"]["detail"]
+      and cn_board.get("adopt") == ["0123abcd"] and conn["status"] == "failed", (conn, cn_board.get("adopt")))
+
+# resend: a failed wake note is sent again by whatever fits the agent now, once
+def cn_resend(conn):
+    """Resend a connection's failed notes; "" if it went, else the refusal."""
+    try:
+        S.resend("b", conn["id"] if isinstance(conn, dict) else "")
+        return ""
+    except ValueError as e:
+        return str(e)
+
+
+conn = cn_connect(dict(RUNNER), cn_nap("nap", "merger"), wake=cn_wake(says="", err="boom"))
+sessions[1].update(running=True, wakeable=False, messageBlock=None, status="idle")  # it was started meanwhile
+before = len(cn_woke)
+said = cn_resend(conn)
+check("resend: a failed wake note goes through the relay once the agent runs again, not by waking it a second time",
+      isinstance(conn, dict) and not said and len(cn_woke) == before and cn_order[-1] == "relay merger"
+      and conn["notes"]["to"]["state"] == "sent" and conn["status"] == "sent", (said, cn_order, conn))
+check("resend: nothing is sent twice once every note is sent",
+      cn_resend(conn) == "nothing to resend" and len(cn_woke) == before and cn_order.count("relay merger") == 1, cn_order)
+
+conn = cn_connect(dict(RUNNER), cn_nap("nap", "merger"), wake=cn_wake(says="", err="boom"))
+S.run_claude = cn_wake()
+said = cn_resend(conn)
+check("resend: a failed wake note wakes an agent that is still ended, once more",
+      isinstance(conn, dict) and not said and [w[4] for w in cn_woke].count(conn["notes"]["to"]["text"]) == 2
+      and conn["notes"]["to"]["state"] == "sent" and conn["notes"]["to"]["detail"].startswith("woke it"), (said, cn_woke, conn))
+
+# the running chat is told once the woken agent shows up running (it may take a moment), or after the wait if it doesn't
+def cn_late(args, **kw):
+    for x in sessions:  # it registers a moment after Claude Code says it started
+        if x["sessionId"] == args[1]:
+            threading.Timer(0.08, x.update, kwargs=dict(running=True, wakeable=False, messageBlock=None)).start()
+    cn_order.append(f"wake {args[1]}")
+    return types.SimpleNamespace(stdout="backgrounded · 0123abcd\n", stderr="", returncode=0)
+
+
+conn = cn_connect(dict(RUNNER), cn_nap("nap", "merger"), wake=cn_late)
+check("connect: the running chat is told only once the woken agent shows up running (so it can message it)",
+      isinstance(conn, dict) and cn_order == ["wake nap", "relay runner"] and cn_up == [[True]], (conn, cn_order, cn_up))
+conn = cn_connect(dict(RUNNER), cn_nap("nap", "merger"), wake=cn_wake(comes_up=False))
+check("connect: the other note still goes when the woken agent doesn't show up running within the wait",
+      isinstance(conn, dict) and cn_order == ["wake nap", "relay runner"] and conn["status"] == "sent", (conn, cn_order))
+
+for n, v in cn_saved.items():
+    setattr(S, n, v)
+sessions[:] = []
+
 # ------------------------- New workflow with agents: a master and its team (faked)
 
 S.CLAUDE_TMP = Path(tempfile.mkdtemp()) / "claude-test"  # the master's images go here, not in the real temp folder

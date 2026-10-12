@@ -24,6 +24,16 @@ Notes are delivered by a short headless run,
 `SendMessage` (about 8 s); [`LTT_MODEL`](configuration.md#environment-settings)
 picks another model.
 
+A background agent whose process has ended has no inbox, so its note is its
+prompt instead: it is woken with `claude --resume <id> --bg -- <note>`, as
+**Send** wakes it (see below). That goes first, and the running chat's note
+follows once the woken agent shows up running (up to 15 s), because that note
+may tell the chat to message it. Which way a note goes is decided when it is
+sent, so **Resend failed notes** reaches an agent that has started since by
+message, not by waking it twice. A woken note is marked *sent* ("woke it with
+the note as its prompt"). If Claude Code reports it started a copy instead of
+waking the agent in place, the note is *failed*, and the copy's card is added.
+
 Each note is then marked *sent*, *sent, reworded* or *failed*; until then its
 arrow shows it is still sending (see [Arrows](usage.md#arrows)). If the
 server restarts meanwhile, the run carries on without it, and the arrow is

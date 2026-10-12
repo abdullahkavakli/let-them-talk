@@ -1680,6 +1680,7 @@ def _background_session(row):
         "status": "asleep", "kind": "bg", "entrypoint": "cli", "version": "",
         "pid": None, "startedAt": row.get("startedAt"), "background": True,
         "jobId": row["id"], "running": False, "resumable": resumable,
+        "wakeable": resumable,  # a prompt wakes it: connecting it to a chat does (see _deliver)
     }
 
 
@@ -2328,16 +2329,68 @@ def deliver_connection(bid, conn_id, sides):
         delivering.discard(conn_id)
 
 
+WAKE_WAIT = 15  # seconds a woken agent gets to show up running before the other note goes
+
+
+def _wake_with_note(bid, s, text):
+    """The state of a note delivered by waking the ended background agent s
+    with it as its prompt: it has no inbox for a message to wait in."""
+    try:
+        copy = _wake_background(s, text)
+    except subprocess.TimeoutExpired:
+        return {"state": "failed", "detail": "Claude Code didn't answer within 90 seconds."}
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        return {"state": "failed", "detail": str(e)[:400]}
+    if copy:  # the copy got the note, not the agent the arrow is to; its card shows, so it can be deleted
+        with lock:
+            board = load_board(bid)
+            board.setdefault("adopt", []).append(copy)
+            save_board(board)
+        return {"state": "failed", "detail": f"Claude Code started a copy ({copy}) instead of waking it, so it "
+                                             "wasn't woken. The copy got the note."}
+    return {"state": "sent", "detail": "woke it with the note as its prompt"}
+
+
+def _await_running(sids):
+    """Wait a while for woken agents to show up running, so a chat told to
+    message one finds it."""
+    end = time.time() + WAKE_WAIT
+    while time.time() < end:
+        if set(sids) <= {s["sessionId"] for s in live_sessions() if s.get("running")}:
+            return
+        time.sleep(1)
+
+
 def _deliver(bid, conn_id, sides):
+    """Each note goes to a running chat through the relay. An ended agent that
+    can be woken is woken with its note as its prompt first; the notes after
+    it wait until it runs, since they may tell a chat to message it."""
     with lock:
         board = load_board(bid)
         conn = next((c for c in board["connections"] if c["id"] == conn_id), None)
         if conn is None:
             return
         ends = {side: dict(board["nodes"][conn[side]]) for side in ("from", "to")}
-        items = [{"side": side, "to": ends[side]["name"], "text": conn["notes"][side]["text"]}
+        items = [{"side": side, "sid": conn[side], "to": ends[side]["name"], "text": conn["notes"][side]["text"]}
                  for side in sides]
-    states, meta = relay_send([{"to": it["to"], "text": it["text"]} for it in items])
+    t0 = time.time()
+    now = {s["sessionId"]: s for s in live_sessions()}
+    by_side, woke = {}, []
+    for it in items:
+        s = now.get(it["sid"]) or {}
+        if s.get("wakeable"):
+            by_side[it["side"]] = _wake_with_note(bid, s, it["text"])
+            if by_side[it["side"]]["state"] == "sent":
+                woke.append(it)
+        elif s.get("messageBlock") and not s.get("running"):  # ended, with nothing to wake it from: say so
+            by_side[it["side"]] = {"state": "failed", "detail": s["messageBlock"]}
+    rest = [it for it in items if it["side"] not in by_side]
+    if rest:
+        if woke:
+            _await_running([it["sid"] for it in woke])
+        got, _ = relay_send([{"to": it["to"], "text": it["text"]} for it in rest])
+        by_side.update({it["side"]: st for it, st in zip(rest, got)})
+    states = [by_side[it["side"]] for it in items]
     with lock:
         board = load_board(bid)
         conn = next((c for c in board["connections"] if c["id"] == conn_id), None)
@@ -2347,8 +2400,9 @@ def _deliver(bid, conn_id, sides):
             conn["notes"][it["side"]].update(st, sentAt=time.time())
         conn["status"] = _conn_status(conn)
         level = "ok" if conn["status"] == "sent" else "error"
-        add_activity(board, f"{label(ends['from'])} → {label(ends['to'])}: notes {_summary(states)}"
-                     f" ({meta['seconds']}s)", level)
+        woken = f"; woke {', '.join(label(ends[it['side']]) for it in woke)}" if woke else ""
+        add_activity(board, f"{label(ends['from'])} → {label(ends['to'])}: notes {_summary(states)}{woken}"
+                     f" ({round(time.time() - t0, 1)}s)", level)
         save_board(board)
 
 
@@ -2394,7 +2448,7 @@ def connect(bid, body):
     if src["sessionId"] == dst["sessionId"]:
         raise ValueError("an agent cannot be connected to itself")
     for s in (src, dst):
-        if s.get("messageBlock"):
+        if s.get("messageBlock") and not s.get("wakeable"):
             raise ValueError(s["messageBlock"])
     if src.get("platform") != dst.get("platform"):
         raise ValueError("A WSL session and a Windows session can't message each other.")
@@ -3564,22 +3618,30 @@ def _prompt_background(bid, s, text):
             save_board(board)
         background_rows(fresh=True)
         return {"how": "prompt", "copy": None}
-    # no flags: a background agent keeps its saved options (mode, model,
-    # name), and passing any would make Claude Code start a copy instead
+    copy = _wake_background(s, text)
+    with lock:
+        board = load_board(bid)
+        if copy:
+            board.setdefault("adopt", []).append(copy)
+            add_activity(board, f"Prompt to {label(s, board)} started a copy ({copy})", "error")
+        else:
+            add_activity(board, f"Prompt to {label(s, board)}: sent", "ok")
+        save_board(board)
+    return {"how": "prompt", "copy": copy}
+
+
+def _wake_background(s, text):
+    """Wake the background agent s, whose process has ended, with text as its
+    prompt. Returns the id of the copy Claude Code started instead of waking
+    it in place (None when it woke); raises ValueError when nothing started.
+    No flags: a background agent keeps its saved options (mode, model,
+    name), and passing any would make Claude Code start a copy instead."""
     proc = run_claude(["--resume", s["sessionId"], "--bg", "--", text], cwd=s["cwd"] or None, timeout=90)
     if not BG_LINE.search(_plain(proc.stdout)):
         raise ValueError(_cli_error(proc, s["cwd"]))
     copy = COPY_LINE.search(_plain(proc.stderr))
-    with lock:
-        board = load_board(bid)
-        if copy:
-            board.setdefault("adopt", []).append(copy.group(1))
-            add_activity(board, f"Prompt to {label(s, board)} started a copy ({copy.group(1)})", "error")
-        else:
-            add_activity(board, f"Prompt to {label(s, board)}: sent", "ok")
-        save_board(board)
     background_rows(fresh=True)
-    return {"how": "prompt", "copy": copy.group(1) if copy else None}
+    return copy.group(1) if copy else None
 
 
 # Claude Code has no command that hands a running background agent a prompt,

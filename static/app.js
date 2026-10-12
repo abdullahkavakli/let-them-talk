@@ -507,7 +507,7 @@ function renderNodes() {
         el("span", { class: `badge state ${{ needs: "warn", waiting: "warn", failed: "danger" }[st.dot] || ""}`, text: st.text,
           title: n.waitingFor ? `Waiting for: ${n.waitingFor}` : "" }),
         n.ambiguous && el("span", { class: "badge warn", text: "name shared", title: "Another running session has this name; /rename one of them" })),
-      ...(n.live && !n.messageBlock ? [el("span", { class: "port out", title: "Drag onto another agent to connect" })] : []),
+      ...(n.live && (!n.messageBlock || n.wakeable) ? [el("span", { class: "port out", title: "Drag onto another agent to connect" })] : []),
     );
   }
   for (const node of [...layer.children]) if (!seen.has(node.dataset.id)) node.remove();
@@ -1368,7 +1368,7 @@ function nodeDetails(n) {
         onclick: () => openWirePop(c.id),
       }, el("span", { class: "dir", text: dir }), el("span", { class: "name", text: name }),
       why && el("span", { class: "why", text: why })));
-    })))] : [el("h2", { text: "Connections" }), el("p", { class: "muted small", text: n.messageBlock
+    })))] : [el("h2", { text: "Connections" }), el("p", { class: "muted small", text: n.messageBlock && !n.wakeable
       ? "None. This session can't be connected until it can receive notes."
       : "None. Drag the blue handle onto another agent to connect them." })]),
     // what can be done with the card itself, apart from the rest
@@ -2040,9 +2040,11 @@ const cd = {
   dialog: $("#connect-dialog"), reason: $("#c-reason"),
   textFrom: $("#c-text-from"), textTo: $("#c-text-to"),
   notifyFrom: $("#c-notify-from"), notifyTo: $("#c-notify-to"),
-  error: $("#c-error"), submit: $("#c-submit"),
+  error: $("#c-error"), submit: $("#c-submit"), wake: $("#c-wake"),
   pair: null, edited: { from: false, to: false },
 };
+// An ended background agent with a saved conversation can be connected: its note wakes it.
+const cantConnect = (n) => n.messageBlock && !n.wakeable;
 
 function openConnectDialog(fromId, toId) {
   const src = nodeById(fromId), dst = nodeById(toId);
@@ -2059,7 +2061,7 @@ function openConnectDialog(fromId, toId) {
   refreshNotes();
   let problem = "";
   if (!src.live || !dst.live) problem = "Both agents must be running to connect them.";
-  else if (src.messageBlock || dst.messageBlock) problem = (src.messageBlock || dst.messageBlock);
+  else if (cantConnect(src) || cantConnect(dst)) problem = (cantConnect(src) ? src : dst).messageBlock;
   else if (src.platform !== dst.platform) problem = "A WSL session and a Windows session can't message each other.";
   else if (src.ambiguous || dst.ambiguous) problem = "Two running sessions share one of these names. Run /rename in one of them first.";
   cd.error.textContent = problem;
@@ -2075,6 +2077,12 @@ function refreshNotes() {
   if (!cd.edited.to) cd.textTo.value = notes.to;
   cd.textFrom.disabled = !cd.notifyFrom.checked;
   cd.textTo.disabled = !cd.notifyTo.checked;
+  // under the names: who is asleep, and what Connect does about it
+  const asleep = [[cd.pair.src, cd.notifyFrom], [cd.pair.dst, cd.notifyTo]].filter(([n]) => n.wakeable);
+  cd.wake.replaceChildren(...asleep.map(([n, box]) => el("p", { class: "muted small", text: box.checked
+    ? `${display(n)} isn't running. Connecting wakes it with its note as its first prompt.`
+    : `${display(n)} isn't running. Its note is off, so it isn't woken and the connection is only drawn.` })));
+  cd.wake.hidden = !asleep.length;
 }
 
 cd.reason.addEventListener("input", refreshNotes);
