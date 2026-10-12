@@ -546,8 +546,11 @@ TLDR_SYSTEM = (
     "the reply. Say what was done or found and anything the user must do. It is "
     "a summary, not an answer: if the reply asks the user something, end with that "
     "question, worded as the assistant asked it. Prefer plain words over jargon. Plain text only, no markdown, no "
-    "preamble."
+    "preamble. Put the summary, and nothing else, between <summary> and </summary>."
 )
+# Only what is between the tags is shown: notes the run writes before it never
+# reach the page, and an answer without them counts as failed (tried again).
+SUMMARY_RE = re.compile(r"<summary>\s*(.*?)\s*</summary>", re.S)
 END_STOPS = ("end_turn", "stop_sequence")
 CONTEXT_TAGS = re.compile(r"<(ide_[a-z_]+|system-reminder)>.*?</\1>\s*", re.S)
 USER_NOTE_RE = re.compile(r"\[[^\]\n]+\] Message from your user:\s*")  # see message_note()
@@ -738,7 +741,8 @@ def _clip(text):
 
 
 def _ask_haiku(cache, key, system, text, name):
-    """One short headless run with no tools; its answer goes into cache[key]."""
+    """One short headless run with no tools; what its answer has between
+    <summary> tags (the last pair) goes into cache[key]."""
     entry = {"state": "failed", "text": "", "at": time.time()}
     with tldr_slots:
         try:
@@ -747,7 +751,8 @@ def _ask_haiku(cache, key, system, text, name):
                                "--system-prompt", system],
                               cwd=DATA_DIR, timeout=TLDR_TIMEOUT, input_text=text)
             res = json.loads(proc.stdout)
-            out = str(res.get("result") or "").replace("`", "").replace("**", "").strip()
+            tagged = SUMMARY_RE.findall(str(res.get("result") or ""))
+            out = tagged[-1].replace("`", "").replace("**", "").strip() if tagged else ""
             if out and not res.get("is_error"):
                 entry.update(state="done", text=out)
         except (OSError, subprocess.TimeoutExpired, ValueError):

@@ -1771,6 +1771,24 @@ for m in (as_package, as_file):
           [Path(c) for c in spawned] == [m.DATA_DIR] * 3, spawned)
 S.subprocess.Popen = real_spawn
 
+# a TL;DR is only what its run put between <summary> tags: once, its own notes
+# ("The reply is in English…", "Plain text, under 200 characters.") showed first
+real_run = S.run_claude
+for said, want, why in (
+        ("The reply is in English and asks a question at the end.\nPlain text, under 200 characters.\n\n"
+         "<summary>Proposes a cache for the board and asks whether to build it.</summary>",
+         ("done", "Proposes a cache for the board and asks whether to build it."), "notes before the summary are left out"),
+        ("Proposes a cache for the board and asks whether to build it.", ("failed", ""),
+         "an answer without the tags fails, so it is tried again later"),
+        ("<summary>Ran the `tests`: **all** pass.</summary>", ("done", "Ran the tests: all pass."),
+         "backticks and bold are dropped from the summary")):
+    S.run_claude = lambda args, **kw: types.SimpleNamespace(stdout=json.dumps({"result": said, "is_error": False}))
+    cache = {}
+    S._ask_haiku(cache, "k", S.TLDR_SYSTEM, "<reply>\nx\n</reply>", "tldr")
+    check(f"TL;DR: {why}", "<summary>" in S.TLDR_SYSTEM
+          and (cache["k"]["state"], cache["k"]["text"]) == want, cache["k"])
+S.run_claude = real_run
+
 # the let-them-talk command
 real_server = S.ThreadingHTTPServer
 S.ThreadingHTTPServer = lambda addr, handler: types.SimpleNamespace(serve_forever=lambda: None)

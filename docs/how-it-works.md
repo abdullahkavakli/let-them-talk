@@ -85,7 +85,10 @@ the same messages between the two chats, each with its own notes.
 
 A TL;DR is written by `claude -p` on the same model as notes, with no tools
 (about 7 s). It is written once per finished reply of 280+ characters, only
-when you open that chat, and kept in memory until the server restarts.
+when you open that chat, and kept in memory until the server restarts. The
+run puts its summary between `<summary>` tags and only that is shown, so any
+notes it writes before it stay out; an answer without the tags counts as
+failed and is tried again after two minutes.
 
 ## Handoffs
 
