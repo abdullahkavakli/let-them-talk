@@ -777,6 +777,9 @@ body:has(#drawer:not([hidden])) .topbar { right: calc(var(--drawer) + 24px); }
   box-sizing: border-box; border-radius: 28px;
 }
 #drawer-body { padding: 18px 18px 18px 20px; }
+/* What scrolls up under the rounded top fades out there, not cut off flat (the
+   name sits 18px down, so at rest it is untouched). */
+#drawer-body { -webkit-mask-image: linear-gradient(to bottom, transparent, #000 16px); mask-image: linear-gradient(to bottom, transparent, #000 16px); }
 :is(#drawer, #wire-pop, #agents-pop) .close { right: 14px; top: 12px; }
 /* The details lie above the top bar, so top-bar items that don't fit beside
    them go under the panel, never over its title and close button. */

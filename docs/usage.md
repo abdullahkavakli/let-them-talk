@@ -200,7 +200,9 @@ Type a name and press Enter (Esc cancels).
 
 ## Details
 
-Click a card to open its details.
+Click a card to open its details. They open at the top, with the whole name
+(a long one wraps), however far the last details you looked at were scrolled.
+What you scroll up under the top edge fades out there.
 
 ### Recent messages
 

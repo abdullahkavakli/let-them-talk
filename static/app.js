@@ -32,6 +32,7 @@ const state = {
   renaming: null,        // sessionId whose name is being edited in the drawer
   renameDraft: "",       // what is typed there (kept across redraws)
   lastClick: null,       // {id, at}: the last click on a card, to tell a double-click
+  drawn: null,           // what the details show now ("type:parent:id"), to open each at its top
 };
 
 // ------------------------------------------------------------------ helpers
@@ -766,10 +767,11 @@ function richText(text) {
 }
 
 function inlineMd(s) {
-  return s.split(/(`[^`]+`)/).flatMap((part) => /^`[^`]+`$/.test(part)
-    ? [el("code", { text: part.slice(1, -1) })]
-    : part.replace(/\[([^\]]+)\]\([^)\s]+\)/g, "$1").split(/(\*\*[^*]+\*\*|__[^_]+__)/)
-      .map((b) => /^(\*\*|__).+\1$/.test(b) ? el("strong", { text: b.slice(2, -2) }) : b))
+  const code = (t) => t.split(/(`[^`]+`)/).map((part) => /^`[^`]+`$/.test(part) ? el("code", { text: part.slice(1, -1) }) : part);
+  // links first, never inside `code`; then **bold** (it may hold `code`), `code` and plain words
+  return s.split(/(`[^`]+`)/).map((part, i) => i % 2 ? part : part.replace(/\[([^\]]+)\]\([^)\s]+\)/g, "$1")).join("")
+    .split(/(\*\*(?:`[^`]+`|[^*`])+\*\*|__(?:`[^`]+`|[^_`])+__|`[^`]+`)/)
+    .flatMap((b) => /^(\*\*|__).+\1$/.test(b) ? [el("strong", {}, code(b.slice(2, -2)).filter((x) => x !== ""))] : code(b))
     .filter((x) => x !== "");
 }
 
@@ -1034,6 +1036,9 @@ function renderDrawer() {
 }
 
 function drawDrawer(body, sel) {
+  // The details open at their top, not where the last ones (or these, before they were closed) were scrolled to.
+  const key = `${sel.type}:${sel.parent || ""}:${sel.id}`, fresh = $("#drawer").hidden || state.drawn !== key;
+  state.drawn = key;
   if (sel.type === "wire") {
     const c = connById(sel.id);
     if (!c) return closeDrawer();
@@ -1046,6 +1051,7 @@ function drawDrawer(body, sel) {
     swapChildren(body, nodeDetails(n).filter(Boolean));
   }
   $("#drawer").hidden = false;
+  if (fresh) body.scrollTop = 0;
 }
 
 $("#drawer").addEventListener("pointerdown", () => { state.pressing = true; });

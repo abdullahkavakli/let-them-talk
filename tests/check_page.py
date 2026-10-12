@@ -127,12 +127,13 @@ class FakeAPI:
         self.sub_asked = []     # the agents whose details were asked for
         self.patch = {}         # sessionId -> fields of its card that differ
         self.launches = []      # what the server lists as under way
+        self.says = None        # the text of Claude's reply in every chat (default: a short list)
 
     def chat(self, sid):
         self.asked += 1
         msgs = [{"id": "u1", "role": "user", "at": 1, "text": "Fix the tests", "done": True},
                 {"id": "r1", "role": "claude", "at": 2, "done": True,
-                 "text": "## Done\n- **All green** now\n- ran `npm test`\n\n| a | b |\n|---|---|\n| 1 | 2 |"}]
+                 "text": self.says or "## Done\n- **All green** now\n- ran `npm test`\n\n| a | b |\n|---|---|\n| 1 | 2 |"}]
         return {"sessionId": sid, "messages": msgs, "asking": None, "plan": None, "queued": [],
                 "suggest": {"text": self.suggest} if self.suggest and sid == A else None,
                 "working": self.vary and sid == A, "doing": f"Step {self.asked}" if self.vary else None,
@@ -334,6 +335,50 @@ def checks_wide(browser):
         text = bubble.inner_text()
         check(name, bubble.locator("strong").count() >= 2 and bubble.locator("code").count() == 1
               and "**" not in text and "|---|" not in text and "• " in text)
+
+    name = "bubbles: **bold** around `code` shows as bold, with no ** left over"
+    with step(page, name):
+        page.api.says = "1. **The `/effort` line:** a check\n2. **Cursor:** use `**` for bold and [a link](https://x.test)"
+        open_card(page, A)
+        page.wait_for_function("document.querySelector('#drawer-body .msg.claude .bubble').textContent.includes('Cursor')")
+        bubble = page.locator("#drawer-body .msg.claude .bubble").first
+        bold, words = bubble.locator("strong").all_inner_texts(), bubble.inner_text()
+        check(name, bold == ["The /effort line:", "Cursor:"] and bubble.locator("strong code").count() == 1
+              and bubble.locator("code").all_inner_texts() == ["/effort", "**"] and "a link" in words
+              and "https" not in words and words.count("**") == 1, (bold, words))
+
+    name = "details: they open at their top, a long name in full, however the last ones were scrolled"
+    with step(page, name):
+        page.set_viewport_size({"width": 1440, "height": 600})  # short enough that every chat's details scroll
+        long_name = "you are a master of the handoff 2"
+        page.api.patch = {B: {"title": long_name, "name": long_name}}
+        poll(page)
+        top = """() => { const b = document.querySelector('#drawer-body'), h = document.querySelector('#drawer-body h3');
+            return { scrolled: b.scrollTop, room: b.scrollHeight - b.clientHeight, title: h.textContent,
+                     above: h.getBoundingClientRect().top - b.getBoundingClientRect().top,
+                     lines: Math.round(h.getBoundingClientRect().height / parseFloat(getComputedStyle(h).lineHeight)) }; }"""
+        scroll = "document.querySelector('#drawer-body').scrollTop = 30"
+        try:
+            open_card(page, B)  # both chats are known now, so their details draw whole at once
+            open_card(page, A)
+            page.evaluate(scroll)
+            open_card(page, B)  # another chat's details, scrolled down
+            other = page.evaluate(top)
+            page.evaluate(scroll)
+            page.evaluate("closeDrawer()")
+            open_card(page, B)  # its own, closed while scrolled down
+            again = page.evaluate(top)
+        finally:
+            page.api.patch = {}
+            poll(page)
+            page.set_viewport_size({"width": 1440, "height": 900})
+        check(name, all(r["scrolled"] == 0 and r["room"] > 30 and r["above"] >= 0 and r["lines"] == 2 and r["title"] == long_name
+                        for r in (other, again)), (other, again))
+
+    name = "details: what scrolls up under the top edge fades out there, not cut off flat"
+    with step(page, name):
+        open_card(page, A)
+        check(name, "linear-gradient" in page.evaluate("getComputedStyle(document.querySelector('#drawer-body')).maskImage"))
 
     name = "dots: needs you / waiting and failed each differ from ended"
     with step(page, name):
