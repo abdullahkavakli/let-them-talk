@@ -122,6 +122,31 @@ nothing:
 - **Chats in Cursor or VS Code** show none, like their own composer: the
   extension doesn't ask Claude Code for suggestions.
 
+## How an editor gets a folder and a chat
+
+**Continue in IDE**, **Open in IDE** on a background agent and a **Chat in
+IDE** in a folder first open the folder with the editor's command-line tool
+(`cursor`, `code` …), wait a few seconds for its window, then hand the editor
+a link, `<editor>://anthropic.claude-code/open?session=<id>`, which its Claude
+extension turns into a conversation tab. The editor never answers whether it
+did, so the page's notice says where to look if it didn't.
+
+- **From WSL** the app reads the editor's link command from the Windows
+  registry (`reg.exe`, `HKCU\Software\Classes\<scheme>\shell\open\command`,
+  then `HKCR`), which for Cursor, VS Code and their forks is
+  `"C:\…\Cursor.exe" --open-url -- "%1"`, and starts that program itself with
+  the link as one argument (no shell, so `&` and `%` stay as they are). That
+  is what Windows would do for a click on the link, and what the folder step
+  does too: the program finds the running editor and hands it the link. The
+  program is found once and kept. If the registry can't be read, the command
+  isn't of that shape or the program isn't there or won't start, the app asks
+  Windows' own link handler (`rundll32.exe url.dll,FileProtocolHandler`)
+  instead; `explorer.exe` would drop the `?session=`.
+- **On Linux and macOS** the link goes to `xdg-open` or `open`.
+- **The editor's side:** Cursor routes an extension's link to one of its
+  ordinary (not agents) windows, and the extension finds a conversation only
+  in a window on its folder.
+
 ## The model of a Chat in IDE
 
 An editor link can't name a model, so the

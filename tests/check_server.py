@@ -62,6 +62,7 @@ S.load_board = lambda bid: {"nodes": {}, "activity": []}
 S.save_board = lambda board: None
 S.add_activity = lambda board, text, level: None
 real_live_sessions, S.live_sessions = S.live_sessions, lambda: list(sessions)
+S._registry_default = lambda key: None  # never the real Windows registry
 S.FOLDER_SETTLE = 0.05
 S.LAUNCH_WAIT = 6
 real_sleep = time.sleep
@@ -123,6 +124,91 @@ S.open_editor_link("Cursor", session="x")
 S.ON_WSL = on_wsl
 check("open_editor_link: from WSL through Windows' link handler, which keeps ?session= (explorer.exe drops it)",
       launched[-1] == ["/win/rundll32.exe", "url.dll,FileProtocolHandler", "cursor://anthropic.claude-code/open?session=x"])
+
+# From WSL the editor itself is started as the registry says Windows would (the registry and the program faked).
+exes = tempfile.mkdtemp()
+program = os.path.join(exes, "Program Files", "Cursor", "Cursor.exe")
+os.makedirs(os.path.dirname(program))
+Path(program).touch()
+real_win_to_wsl, S.win_to_wsl = S.win_to_wsl, lambda p: p.replace("C:\\", exes + "/").replace("\\", "/")
+registry, asked = {}, []
+S._registry_default = lambda key: asked.append(key) or registry.get(key)
+cursor_key = "HKCU\\Software\\Classes\\cursor\\shell\\open\\command"
+S.ON_WSL, on_wsl = True, S.ON_WSL
+
+
+def link_from_wsl(editor="Cursor", **params):
+    launched.clear(); asked.clear(); S._link_exes.clear()
+    S.open_editor_link(editor, **(params or {"session": "a b&c"}))
+    return launched[-1]
+
+
+registry[cursor_key] = '"C:\\Program Files\\Cursor\\Cursor.exe" --open-url -- "%1"'
+got = link_from_wsl()
+check("open_editor_link: from WSL the registered program is started with --open-url --, the link one argument "
+      "(spaces in the path, & and % in the link)",
+      got == [program, "--open-url", "--", "cursor://anthropic.claude-code/open?session=a%2520b%2526c"], got)
+registry[cursor_key] = '"C:\\Program Files\\Cursor\\Cursor.exe" --open-url'
+check("open_editor_link: a registered command without the -- \"%1\" at the end gives the same program",
+      link_from_wsl(session="x")[:3] == [program, "--open-url", "--"])
+registry[cursor_key] = "C:\\Program Files\\Cursor\\Cursor.exe --open-url -- %1"
+check("open_editor_link: and so does one without quotes around the path",
+      link_from_wsl(session="x")[:3] == [program, "--open-url", "--"])
+registry[cursor_key] = '"C:\\Program Files\\Cursor\\Cursor.exe" --open-url -- "%1"'
+link_from_wsl(session="x"); first = len(asked)
+S.open_editor_link("Cursor", session="y")
+check("open_editor_link: the registry is read once per program, not at each link",
+      first == 1 and len(asked) == 1 and launched[-1][0] == program, asked)
+registry.clear()
+registry["HKCR\\cursor\\shell\\open\\command"] = '"C:\\Program Files\\Cursor\\Cursor.exe" --open-url -- "%1"'
+check("open_editor_link: HKCR is read when HKCU has nothing", link_from_wsl(session="x")[0] == program, asked)
+registry.clear()
+check("open_editor_link: with nothing in the registry, Windows' link handler",
+      link_from_wsl(session="x")[:2] == ["/win/rundll32.exe", "url.dll,FileProtocolHandler"])
+registry[cursor_key] = '"C:\\Program Files\\Gone\\Cursor.exe" --open-url -- "%1"'
+check("open_editor_link: the registered program not being there, Windows' link handler",
+      link_from_wsl(session="x")[0] == "/win/rundll32.exe")
+registry[cursor_key] = '"C:\\Program Files\\Cursor\\Cursor.exe" --reuse-window "%1"'
+check("open_editor_link: a command that isn't --open-url isn't run by guesswork, Windows' link handler",
+      link_from_wsl(session="x")[0] == "/win/rundll32.exe")
+registry[cursor_key] = '"C:\\Program Files\\Cursor\\Cursor.exe" --open-url -- "%1"'
+real_popen = S.subprocess.Popen
+
+
+def popen_fails_for_exe(args, **kw):
+    if args[0] == program:
+        raise OSError("not startable")
+    return real_popen(args, **kw)
+
+
+S.subprocess.Popen = popen_fails_for_exe
+check("open_editor_link: a program that can't be started falls back to Windows' link handler",
+      link_from_wsl(session="x")[0] == "/win/rundll32.exe")
+S.subprocess.Popen = real_popen
+registry.clear()
+registry["HKCU\\Software\\Classes\\vscode\\shell\\open\\command"] = '"C:\\Program Files\\Cursor\\Cursor.exe" --open-url -- "%1"'
+check("open_editor_link: each editor's own scheme is looked up (vscode for VS Code)",
+      link_from_wsl("VS Code", session="x")[:4] == [program, "--open-url", "--", "vscode://anthropic.claude-code/open?session=x"])
+S._registry_default = lambda key: None
+check("open_editor_link: an editor it doesn't know has Windows' link handler",
+      link_from_wsl("Notepad", session="x")[0] == "/win/rundll32.exe")
+S.win_to_wsl = real_win_to_wsl
+S._registry_default = lambda key: asked.append(key) or registry.get(key)  # a registry read off WSL would show here
+registry[cursor_key] = '"C:\\Program Files\\Cursor\\Cursor.exe" --open-url -- "%1"'
+asked.clear(); S._link_exes.clear()
+S.ON_WSL, S.HOST_LABEL, label = False, "Linux", S.HOST_LABEL
+S.open_editor_link("Cursor", session="x")
+linux = launched[-1]
+S.HOST_LABEL = "macOS"
+S.open_editor_link("Cursor", session="x")
+mac = launched[-1]
+S.ON_WSL, S.HOST_LABEL = on_wsl, label
+check("open_editor_link: on Linux the registry isn't read and xdg-open opens the link, as before",
+      not asked and linux == ["/bin/xdg-open", "cursor://anthropic.claude-code/open?session=x"], (asked, linux))
+check("open_editor_link: on macOS it's open, as before",
+      not asked and mac == ["open", "cursor://anthropic.claude-code/open?session=x"], (asked, mac))
+S._registry_default = lambda key: None
+S._link_exes.clear()
 
 # ------------------------------------------------ Rename a card (typing faked)
 

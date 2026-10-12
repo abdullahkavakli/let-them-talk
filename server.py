@@ -2749,21 +2749,72 @@ def windows_link_opener():
     return [shutil.which("rundll32.exe") or "/mnt/c/Windows/System32/rundll32.exe", "url.dll,FileProtocolHandler"]
 
 
+_link_exes = {}  # scheme -> the editor's program (a WSL path), kept once the registry has given it
+
+
+def _registry_default(key):
+    """The default value of a Windows registry key, as reg.exe prints it (the
+    word for "default" follows the Windows language, so the line is found by
+    its REG_SZ), or None."""
+    reg = shutil.which("reg.exe") or "/mnt/c/Windows/System32/reg.exe"
+    try:
+        out = subprocess.run([reg, "query", key, "/ve"], capture_output=True, timeout=10, cwd="/mnt/c").stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in out.decode("utf-8", "replace").splitlines():
+        found = re.match(r"\s+\S.*?\s+REG_(?:EXPAND_)?SZ\s+(.*?)\s*$", line)
+        if found:
+            return found.group(1)
+    return None
+
+
+def link_exe(command):
+    """The program in a link command the registry holds, as a WSL path, when it
+    is the VS Code family's `"C:\\...\\Cursor.exe" --open-url -- "%1"` and the
+    program is there; else None."""
+    found = re.match(r'\s*(?:"([^"]+)"|(\S.*?\.exe)(?=\s|$))(.*)', command or "", re.I)
+    if not found or "--open-url" not in found.group(3).split():
+        return None
+    exe = win_to_wsl(found.group(1) or found.group(2))
+    return exe if exe.startswith("/") and exe.lower().endswith(".exe") and os.path.isfile(exe) else None
+
+
+def windows_link_exe(scheme):
+    """The program Windows starts for <scheme>:// links (the editor), from the
+    registry, or None. A hit is kept; a miss is looked up again next time."""
+    exe = _link_exes.get(scheme)
+    if exe and os.path.isfile(exe):
+        return exe
+    exe = link_exe(_registry_default(rf"HKCU\Software\Classes\{scheme}\shell\open\command")
+                   ) or link_exe(_registry_default(rf"HKCR\{scheme}\shell\open\command"))
+    _link_exes[scheme] = exe
+    return exe
+
+
 def open_editor_link(editor, **params):
     """Open <editor>://anthropic.claude-code/open (?session=, ?prompt=) in the
     editor window in front, as a click on the link would. Each value is encoded
     twice, as the page does (the editor decodes it once before the extension
-    reads it). Returns whether it could."""
+    reads it). From WSL the editor is started as the registry says Windows
+    would (`Cursor.exe --open-url -- <link>`, the link one argument), the way
+    the folder is opened; Windows' link handler is the fallback. Returns
+    whether it could."""
     query = "&".join(f"{k}={quote(quote(str(v), safe=''), safe='')}" for k, v in params.items() if v)
-    url = f"{EDITOR_SCHEMES.get(editor, 'vscode')}://anthropic.claude-code/open" + (f"?{query}" if query else "")
-    opener = (windows_link_opener() if ON_WSL
-              else ["open"] if HOST_LABEL == "macOS" else [shutil.which("xdg-open") or "xdg-open"])
-    try:
-        subprocess.Popen(opener + [url], cwd="/mnt/c" if ON_WSL else None, stdin=subprocess.DEVNULL,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        return True
-    except OSError:
-        return False
+    scheme = EDITOR_SCHEMES.get(editor, "vscode")
+    url = f"{scheme}://anthropic.claude-code/open" + (f"?{query}" if query else "")
+    if ON_WSL:
+        exe = windows_link_exe(scheme) if editor in EDITOR_SCHEMES else None
+        openers = ([[exe, "--open-url", "--"]] if exe else []) + [windows_link_opener()]
+    else:
+        openers = [["open"] if HOST_LABEL == "macOS" else [shutil.which("xdg-open") or "xdg-open"]]
+    for opener in openers:
+        try:
+            subprocess.Popen(opener + [url], cwd="/mnt/c" if ON_WSL else None, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            return True
+        except OSError:
+            continue
+    return False
 
 
 def start_editor_chat(bid, body):
