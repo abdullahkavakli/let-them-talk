@@ -1420,9 +1420,19 @@ function conversationButton(n, verb, cls) {
     onclick: () => {
       if (end && !confirm(endHereText(n, editor))) return;
       openInEditor(n.sessionId, { sessionId: n.sessionId, editor, continue: true, end },
-        (r) => r.ended && toast(`Ended ${display(n)} here; it goes on in ${editor}.`, "ok"));
+        (r) => sentToEditor(n, editor, !!r.ended));
     },
   });
+}
+
+// The editor takes the link and never says whether the conversation opened, so
+// the notice says where to find it if it didn't, and offers the link itself.
+function sentToEditor(n, editor, ended) {
+  const link = editorLink(editor, { session: n.sessionId }), name = display(n);
+  const t = toast(`${ended ? `Ended ${name} here and asked` : "Asked"} ${editor} to open it. If nothing opened ` +
+    `there, open ${editor}'s Claude panel, click its list of past conversations and pick it.`, "info", 20000);
+  t.insertBefore(el("button", { class: "btn", text: "Copy link",
+    onclick: () => navigator.clipboard?.writeText(link) }), t.lastChild);
 }
 
 // What ending a running background agent closes, so you can go on with it in the IDE.

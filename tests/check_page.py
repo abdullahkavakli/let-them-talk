@@ -428,6 +428,22 @@ def checks_wide(browser):
         sent = [(b["sessionId"], b["end"]) for p, b in page.api.posts if p.endswith("/open-folder")]
         check(name, quiet and page.dialogs[asked:] == ["confirm"] and sent == [(C, False), (B, True)], sent)
 
+    name = "details: after Open in IDE the notice says where to find the chat if nothing opened, and can copy the link"
+    with step(page, name):  # the editor never says whether the link opened anything
+        page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t => t.remove())")
+        page.evaluate("Object.defineProperty(navigator, 'clipboard', "
+                      "{value: {writeText: (t) => { window.copied = t; }}, configurable: true})")
+        page.api.post_result = {"ended": "abcdef12"}
+        open_card(page, B)
+        page.locator("#drawer-body button", has_text="Open in IDE").click()  # the confirm is accepted
+        page.wait_for_function("document.querySelector('#toasts')?.textContent.includes('past conversations')")
+        said = page.inner_text("#toasts")
+        page.locator("#toasts button", has_text="Copy link").click()
+        copied = page.evaluate("window.copied") or ""
+        page.api.post_result = {}
+        check(name, "Ended beta here and asked" in said and "Claude panel" in said
+              and copied.endswith(f"://anthropic.claude-code/open?session={B}"), (said, copied))
+
     name = "details: an editor chat has Open in terminal beside Open in IDE, and asks first only while it is open in the IDE"
     with step(page, name):
         open_card(page, A)  # alpha: a chat in a terminal

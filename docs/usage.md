@@ -289,6 +289,11 @@ its folder. The editor must
 [trust the folder](limits.md#the-editor-must-trust-the-folder). If the editor
 can't be asked, the notice says what to run instead (`cursor "<folder>"`).
 
+The editor takes the link without saying whether the conversation opened, so
+the notice that follows says where to find it if nothing did (the Claude
+panel's list of past conversations) and has **Copy link**. This goes for a
+background agent's **Open in IDE** too.
+
 ### Open in terminal (an editor chat)
 
 An editor chat's details have **Open in terminal** beside **Open in IDE**:
