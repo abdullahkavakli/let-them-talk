@@ -508,6 +508,10 @@ edge; other browsers show a plain blur. With reduced transparency on in your
 system the panels are solid (in browsers that report that setting, such as
 Chrome and Edge).
 
+The notices (bottom right) are small glass panels too, always a plain blur
+(they don't bend the board). A round icon in front shows what kind: a tick
+for something done, an exclamation mark for a failure, an i for the rest.
+
 Before something that stops an agent or can't be undone (Disconnect, End,
 Stop, Compact, Remove, Delete …), the page asks in a small glass box over the
 dimmed board, with **Cancel** and a button named for the action (not the

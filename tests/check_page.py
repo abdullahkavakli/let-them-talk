@@ -857,6 +857,27 @@ def checks_wide(browser):
         toast, drawer = page.locator("#toasts .toast").last.bounding_box(), page.locator("#drawer").bounding_box()
         check(name, toast["x"] + toast["width"] <= drawer["x"])
 
+    name = "notices: glass panels with a round icon in the kind's colour (a tick, a mark, an i) and no stripe; solid with transparency reduced"
+    with step(page, name):
+        page.evaluate("toast('Done', 'ok', 0); toast('Broke', 'error', 0); toast('Run it', 'info', 0)")
+        look = lambda: page.evaluate("""() => [...document.querySelectorAll('#toasts .toast')].map(t => {
+            const s = getComputedStyle(t), i = getComputedStyle(t, '::before');
+            return { blur: s.backdropFilter.includes('blur'), alpha: parseFloat(s.backgroundColor.split(',')[3]),
+                     round: parseFloat(s.borderTopLeftRadius), edges: [s.borderLeftWidth, s.borderTopWidth].join(' '),
+                     lit: s.boxShadow.includes('inset'), icon: i.backgroundColor,
+                     mask: (i.maskImage || i.webkitMaskImage || 'none') !== 'none' }; })""")
+        glass = look()
+        cdp = page.context.new_cdp_session(page)
+        cdp.send("Emulation.setEmulatedMedia", {"features": [{"name": "prefers-reduced-transparency", "value": "reduce"}]})
+        try:
+            solid = page.evaluate("(s => [s.backgroundColor, s.backdropFilter])(getComputedStyle(document.querySelector('#toasts .toast')))")
+        finally:
+            cdp.send("Emulation.setEmulatedMedia", {"features": [{"name": "prefers-reduced-transparency", "value": "no-preference"}]})
+        check(name, all(g["blur"] and 0 < g["alpha"] < 1 and g["round"] >= 16 and g["edges"] == "1px 1px" and g["lit"] and g["mask"]
+                        for g in glass)
+              and [g["icon"] for g in glass] == ["rgb(31, 122, 53)", "rgb(215, 0, 21)", "rgb(0, 102, 204)"]
+              and solid == ["rgb(255, 255, 255)", "none"], (glass, solid))
+
     name = "details: the clicked card moves out from under them"
     with step(page, name):
         open_card(page, E)
@@ -1308,7 +1329,8 @@ def checks_wide(browser):
             return { side: no.right <= yes.left && Math.abs(no.top - yes.top) < 1, equal: Math.abs(no.width - yes.width) < 1,
                      tall: no.height >= 44 && yes.height >= 44, small: alert.width <= 380 && alert.height < 400,
                      glass: css('#ask').backdropFilter !== 'none', red: r > 180 && g < 120,
-                     centred: css('#ask-title').textAlign === 'center', focus: document.activeElement.id };
+                     centred: css('#ask-title').textAlign === 'center', focus: document.activeElement.id,
+                     corners: css('#ask').borderTopLeftRadius === css('#connect-dialog').borderTopLeftRadius };  // as the other dialogs'
         }""")
         page.keyboard.press("Escape")
         page.wait_for_selector("#ask[open]", state="detached")
