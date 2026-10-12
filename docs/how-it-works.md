@@ -9,6 +9,18 @@ stores.
   aren't running come from `claude agents --json --all`. (With
   [`CLAUDE_CONFIG_DIR`](configuration.md#environment-settings) set, that
   folder takes the place of `~/.claude` here and below.)
+- A background agent's state word is Claude Code's own (`working`, `blocked`,
+  `done`, `failed`, `stopped`), except for `blocked`. Claude Code means an
+  agent that waits on you by it, which includes one that only ended its turn,
+  so the app tells the two apart: **needs you** when a permission or dialog is
+  open in its process (`waitingFor`, or its status is waiting) or its job file
+  (`~/.claude/jobs/<id>/state.json`, the one reply suggestions read, see
+  [Reply suggestions](#reply-suggestions)) holds a question with choices;
+  **finished** when it only ended its turn waiting on your own words. If the
+  job file can't be read, a blocked agent counts as needing you, so a real
+  question is never hidden. Only an agent that needs you holds back
+  **Compact**, and only its Send box says nothing can be typed until you
+  answer.
 - A card greys out when its session ends, and leaves the board about two
   minutes later unless it has arrows.
 - Titles, models and recent messages are read from its transcript in

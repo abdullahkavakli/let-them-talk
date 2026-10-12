@@ -41,7 +41,7 @@ they work on. You can edit or switch off either note before sending.
 - There is one arrow per direction: dropping onto a card you already point to
   opens that arrow.
 - **An ended background agent** (its process is gone but its conversation is
-  saved: its card says *done*, *stopped* or *failed*) can be connected too:
+  saved: its card says *finished*, *done*, *stopped* or *failed*) can be connected too:
   Connect wakes it, with its note as its first prompt, the way **Send** wakes
   it. The dialog says so under the names; switch its note off and it isn't
   woken, and the arrow is only drawn. The other chat, if it runs, is told once
@@ -168,6 +168,22 @@ be available, and one on it then asks before it acts.
 - A card that has ended or can't receive notes has no handle; an ended
   background agent that can be woken keeps it (see [Connect two
   chats](#connect-two-chats)).
+- A background agent's card says what it is doing, in Claude Code's own
+  terms, with one difference:
+  - *working*: it is on a turn.
+  - *needs you* (an orange dot with a ring): it can't go on without an
+    answer from you, a question with choices or a permission to give. Its
+    details say so and point to its terminal.
+  - *finished* (the green dot an idle chat has): it ended its turn and waits
+    for your next message. Nothing is asked and nothing is stuck. (Claude
+    Code lists such an agent as blocked, since its task isn't marked
+    complete; the card doesn't.) Send it a prompt, or compact it, as any
+    idle agent.
+  - *done*: its task is marked complete. *Finished* and *done* both wait for
+    your next prompt (one whose process ended is woken by it); the
+    difference is that *finished* stopped to hear from you, and *done*
+    reports nothing left to do.
+  - *stopped*, *failed*, and *needs restart* (no saved conversation).
 
 ## Subagents
 
@@ -356,13 +372,17 @@ A background agent's details have these buttons:
   ends here with `claude stop`, its terminal windows closing, and its card
   turns into the IDE's chat.
 - **Show its screen** (click again to hide). It reads **What is it asking?**
-  while the agent waits for you.
+  while the agent needs an answer from you (*needs you*), and the details
+  then open with a line saying so and **Open in terminal** stands out. An
+  agent that only *finished* gets no such line: it is waiting for your next
+  message, not stuck.
 - **Compact**: Claude Code's `/compact`, after asking you. Claude Code
   replaces its conversation so far with a summary, so it goes on with its
   context freed (its conversation file keeps every message). The app types
   `/compact` into its prompt box, as you would in its terminal; one whose
-  process has ended is woken with it. Not while it works or asks you
-  something (the button waits). Meanwhile the button says *Compacting…*;
+  process has ended is woken with it. Not while it works or needs an answer
+  from you (the button waits); an agent that only *finished* can be
+  compacted. Meanwhile the button says *Compacting…*;
   Activity says when it's done, with its context before and after (*from
   120k to 6k tokens*). If it didn't compact, a notice gives Claude Code's
   answer (*Not enough messages to compact.*). In any other chat, type

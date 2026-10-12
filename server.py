@@ -1015,9 +1015,10 @@ def session_chat(sid):
     msgs = msgs[-CHAT_LAST:]
     running = next((x for x in live_sessions() if x["sessionId"] == sid), None)
     live = running if working else None
-    if live and live.get("status") in ("idle", "asleep") and live.get("agentState") not in ("working", "blocked"):
+    if live and live.get("status") in ("idle", "asleep") and live.get("agentState") != "working" and not asks_you(live):
         # The transcript left a turn open (a cancelled command, a crash), but
-        # Claude Code says the chat is idle: believe it.
+        # Claude Code says the chat is idle (or finished, waiting for your next
+        # message): believe it. An agent that needs an answer keeps its turn open.
         working, asking = False, None
     for m in msgs:
         # notes from other sessions are written by Claude too
@@ -1029,8 +1030,7 @@ def session_chat(sid):
         # A permission prompt or a plan to approve isn't in the transcript until
         # it is answered; a background agent's screen shows it.
         s = live
-        if s and s.get("jobId") and s.get("running") and (
-                s.get("agentState") == "blocked" or s.get("status") == "waiting"):
+        if s and s.get("jobId") and s.get("running") and asks_you(s):
             on_screen = screen_question(s["jobId"])
             if on_screen:
                 questions = [on_screen]
@@ -1636,6 +1636,28 @@ agents_cache = {"at": 0.0, "rows": []}
 agents_lock = threading.Lock()
 AGENT_STATE_WORDS = {"working": "working", "blocked": "needs you", "done": "done",
                      "failed": "failed", "stopped": "stopped"}
+FINISHED_WORD = "finished"  # blocked, but nothing is asked: its answer is complete and it waits for your next message
+
+
+def needs_answer(state, row, status=None):
+    """Whether a background agent needs an answer to go on: it is blocked and
+    either has a prompt open in its process (a permission or a dialog: its row
+    has `waitingFor`, or its status is "waiting") or asks a question with
+    choices (its job record says so). One that only ended its turn waiting on
+    your own words is finished, though Claude Code lists it as blocked. When
+    its record can't be read, a blocked agent counts as asking, as before."""
+    if state != "blocked":
+        return False
+    if row.get("waitingFor") or "waiting" in (status, row.get("status")):
+        return True
+    record = job_state(row.get("id"))
+    return not (record and _waits_on_you(record))
+
+
+def asks_you(s):
+    """A background agent (a session of live_sessions) that needs an answer
+    before it can go on, so nothing can be typed to it or compacted yet."""
+    return s.get("status") == "waiting" or bool(s.get("needsAnswer", s.get("agentState") == "blocked"))
 
 
 def run_claude(args, cwd=None, timeout=60, input_text=None, text=True):
@@ -1722,8 +1744,10 @@ def live_sessions():
             state = row.get("state")
             if state == "working" and row.get("status") == "idle":
                 state = "idle"  # its task isn't done, but it is waiting for you (as after Stop)
-            match.update(background=True, jobId=row["id"], agentState=state,
-                         agentStateText=AGENT_STATE_WORDS.get(state, state),
+            needs = needs_answer(state, row, match.get("status"))
+            match.update(background=True, jobId=row["id"], agentState=state, needsAnswer=needs,
+                         agentStateText=FINISHED_WORD if state == "blocked" and not needs
+                         else AGENT_STATE_WORDS.get(state, state),
                          waitingFor=row.get("waitingFor"))
     if WIN_REGISTRY_DIR is not None:
         win_regs = list(_read_registry(WIN_REGISTRY_DIR))
@@ -3980,7 +4004,7 @@ def start_compact(bid, body):
         raise ValueError("It has no saved conversation, so there is nothing to compact.")
     if s.get("running") and (s.get("status") == "busy" or s.get("agentState") == "working"):
         raise ValueError("It's working. Compact it once it's idle.")
-    if s.get("running") and (s.get("status") == "waiting" or s.get("agentState") == "blocked"):
+    if s.get("running") and asks_you(s):
         raise ValueError("It's waiting for your answer. Answer it in its terminal first.")
     with lock:
         node = (load_board(bid) or {}).get("nodes", {}).get(sid) or {}

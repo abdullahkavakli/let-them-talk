@@ -146,12 +146,18 @@ const opener = (n) => n.background ? n.shownIn || "Background" : n.editor ||
   ({ "claude-vscode": "Editor", cli: "Terminal", "sdk-cli": "Headless" }[n.entrypoint] || n.entrypoint || "");
 const hostLabel = () => state.view?.host || "WSL";
 // Status of a card: busy/idle for chats; a background agent's own state.
+// Claude Code calls an agent that only ended its turn "blocked" too; the server
+// words that "finished" (needsAnswer false), and it gets the calm idle dot, not
+// the attention one of an agent that needs an answer.
 const BG_DOT = { working: "busy", blocked: "needs", done: "idle", stopped: "ended", failed: "failed" };
 function cardStatus(n) {
   if (!n.live) return { dot: "ended", text: "ended" };
   if (n.background && n.resumable === false) return { dot: "ended", text: "needs restart" };
-  if (n.background) return { dot: BG_DOT[n.agentState] || (n.running ? n.status : "ended"),
-    text: n.agentStateText || (n.running ? n.status : "asleep") };
+  if (n.background) {
+    const calm = n.agentState === "blocked" && !n.needsAnswer;
+    return { dot: calm ? "idle" : BG_DOT[n.agentState] || (n.running ? n.status : "ended"),
+      text: n.agentStateText || (n.running ? n.status : "asleep") };
+  }
   return { dot: n.status, text: n.status };
 }
 // Cards show the name you gave them on this board, else the title Claude
@@ -1319,11 +1325,12 @@ function wireDetails(c, close = closeDrawer) {
 
 function nodeDetails(n) {
   const conns = state.view.board.connections.filter((c) => c.from === n.sessionId || c.to === n.sessionId);
-  // In the card's words (a background agent's own state: working, needs you, done …).
+  // In the card's words (a background agent's own state: working, needs you, finished, done …).
   const status = n.live ? cardStatus(n).text : "session ended";
-  // A background agent that can't go on without you (asking you, or needing a
-  // restart) shows that first, above its messages.
-  const stuck = n.background && (n.resumable === false || n.agentState === "blocked");
+  // A background agent that can't go on without you (it needs an answer, or a
+  // restart) shows that first, above its messages. One that only finished its
+  // answer waits for your next message like any idle chat: nothing is stuck.
+  const stuck = n.background && (n.resumable === false || n.needsAnswer);
   return [
     ...nameHeading(n),
     // The facts fold into one line; the choice is remembered.
@@ -3049,7 +3056,7 @@ function chatSection(n) {
   // A turn that hasn't ended may be waiting on you: a question, or a permission prompt.
   const asking = n.live && data.asking;
   const activity = !(n.live && data.working) ? ""
-    : asking || n.status === "waiting" || n.agentState === "blocked" ? "waiting for you" : "working…";
+    : asking || n.status === "waiting" || n.needsAnswer ? "waiting for you" : "working…";
   // A plan written in plan mode waits for approval in its own window.
   const planToApprove = !asking && data.plan && activity === "waiting for you";
   // What it is doing right now (its latest tool call), so the chat never sits on an old line.
@@ -3219,7 +3226,8 @@ function sendSection(n) {
   // The drawer is redrawn every poll, so "sending" lives in state, not on this button.
   const sending = state.sending.has(sid);
   // Asking you something in its terminal: nothing can be typed there until you answer.
-  const asking = n.background && n.running && n.agentState === "blocked";
+  // (One that only finished its answer takes a prompt as an idle one does.)
+  const asking = n.background && n.running && n.needsAnswer;
   const label = sending ? "Sending…" : asPrompt ? "Send prompt" : "Send message";
   const button = el("button", {
     class: "composer-send", disabled: sending, "aria-label": label, title: label,
@@ -3376,21 +3384,23 @@ function backgroundSection(n) {
   // No saved conversation: whatever state it last reported, Claude Code can
   // only restart it, and only in a terminal (see attach_background).
   const restart = n.resumable === false;
-  const blocked = !restart && n.agentState === "blocked";
+  // Only one that needs an answer (a question, a permission) is flagged; one that
+  // finished its answer and waits for your next message says nothing here.
+  const asking = !restart && n.needsAnswer;
   return [
     el("h2", { text: "Background agent" }),
     restart && el("p", { class: "small warn-text",
       text: "It has no saved conversation (it was stopped before its first reply finished), so it can't be " +
         "woken or answered. Restart it in a terminal first, then send it a prompt. Claude Code may ask " +
         "you there to trust its folder." }),
-    blocked && el("p", { class: "small warn-text",
+    asking && el("p", { class: "small warn-text",
       text: `It's waiting for you (${n.waitingFor || "an answer"}). Open it in a terminal to answer.` }),
     el("div", { class: "drawer-actions" },
-      el("button", { class: blocked || restart ? "btn primary" : "btn", text: restart ? "Restart in terminal" : "Open in terminal",
+      el("button", { class: asking || restart ? "btn primary" : "btn", text: restart ? "Restart in terminal" : "Open in terminal",
         onclick: () => agentAction(n, "agent-attach", runYourself) }),
       !restart && where(n) && conversationButton(n, "Open in", "btn"),
       !restart && el("button", { class: "btn",
-        text: state.logs[n.sessionId] ? "Hide its screen" : blocked ? "What is it asking?" : "Show its screen",
+        text: state.logs[n.sessionId] ? "Hide its screen" : asking ? "What is it asking?" : "Show its screen",
         onclick: () => state.logs[n.sessionId]
           ? (delete state.logs[n.sessionId], renderDrawer())
           : agentAction(n, "agent-logs", (r) => { state.logs[n.sessionId] = r.text; renderDrawer(); }) }),
@@ -3457,7 +3467,7 @@ const compacting = (n) => state.compacting.has(n.sessionId) || (state.view?.laun
 function compactButton(n) {
   const busy = compacting(n), wakes = !n.running ? " It wakes up for it." : "";
   const waits = !n.running ? null : n.status === "busy" || n.agentState === "working"
-    ? "It can be compacted once it's idle." : n.status === "waiting" || n.agentState === "blocked"
+    ? "It can be compacted once it's idle." : n.status === "waiting" || n.needsAnswer
       ? "It can be compacted once you've answered it." : null;
   return el("button", {
     class: "btn", text: busy ? "Compacting…" : "Compact", disabled: busy || !!waits,

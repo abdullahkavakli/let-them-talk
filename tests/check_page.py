@@ -38,7 +38,7 @@ def card(sid, title, x, y, **kw):
          "kind": "interactive", "jobId": None, "live": True, "messageBlock": None,
          "model": "claude-opus-5-5", "pid": 1, "platform": "wsl", "running": True, "startedAt": 0,
          "status": "idle", "version": "", "waitingFor": None, "agentState": None,
-         "agentStateText": None, "x": x, "y": y}
+         "agentStateText": None, "needsAnswer": False, "x": x, "y": y}
     n.update(kw)
     return n
 
@@ -54,7 +54,7 @@ def view(bid):
     bg = dict(background=True, kind="bg", jobId="abcdef12", resumable=True)
     nodes = [
         card(A, "alpha", 340, 120),
-        card(B, "beta", 640, 120, agentState="blocked", agentStateText="needs you", status="waiting",
+        card(B, "beta", 640, 120, agentState="blocked", agentStateText="needs you", needsAnswer=True, status="waiting",
              waitingFor="permission to run a command", **bg),
         card(C, "gamma", 340, 320, agentState="failed", agentStateText="failed", running=False, **bg),
         card(D, "delta", 640, 320, live=False),
@@ -413,6 +413,71 @@ def checks_wide(browser):
     with step(page, name):
         open_card(page, B)
         check(name, page.eval_on_selector_all("#drawer-body h2", "hs => hs.map(h => h.textContent)")[:1] == ["Background agent"])
+
+    # An agent Claude Code lists as blocked that only ended its turn (nothing asked, nothing open in its
+    # process): the server words it "finished" and sends needsAnswer false. Beta, as such an agent.
+    FINISHED = {B: {"status": "idle", "agentState": "blocked", "agentStateText": "finished", "needsAnswer": False,
+                    "waitingFor": None}}
+    bg_section = """() => {
+        const d = document.querySelector('#drawer-body');
+        const buttons = [...d.querySelectorAll('button')];
+        const one = (t) => buttons.find((b) => b.textContent === t);
+        return { first: d.querySelector('h2').textContent,
+                 warn: [...d.querySelectorAll('p.warn-text')].map((p) => p.textContent),
+                 primary: one('Open in terminal')?.classList.contains('primary'),
+                 screen: buttons.map((b) => b.textContent).filter((t) => /screen|asking/.test(t)),
+                 compact: one('Compact') ? !one('Compact').disabled : null,
+                 hint: d.querySelector('.composer-hint')?.textContent || '',
+                 composer: d.querySelector('.composer')?.classList.contains('asking') };
+    }"""
+    dot_look = lambda sid: page.evaluate(
+        f"""() => {{ const s = getComputedStyle(document.querySelector('.node[data-id="{sid}"] .dot'));
+                    return [s.backgroundColor, s.boxShadow]; }}""")
+
+    name = ("background agent: one that needs an answer says needs you with the attention dot; its details warn, "
+            "point to its terminal and its Compact waits")
+    with step(page, name):
+        open_card(page, B)
+        got = page.evaluate(bg_section)
+        badge = page.locator(f'.node[data-id="{B}"] .badge.state')
+        ring = dot_look(B)[1]
+        check(name, badge.inner_text() == "needs you" and "warn" in badge.get_attribute("class") and ring != "none"
+              and got["first"] == "Background agent"
+              and got["warn"] == ["It's waiting for you (permission to run a command). Open it in a terminal to answer."]
+              and got["primary"] is True and got["screen"] == ["What is it asking?"] and got["compact"] is False
+              and got["composer"] is True and "asking you something" in got["hint"], (badge.inner_text(), ring, got))
+
+    name = ("background agent: one that finished its answer says finished with the calm idle dot, no warning, "
+            "nothing emphasised, Compact open and the Send box as for an idle one")
+    with step(page, name):
+        page.api.patch = FINISHED
+        poll(page)
+        open_card(page, B)
+        got = page.evaluate(bg_section)
+        badge = page.locator(f'.node[data-id="{B}"] .badge.state')
+        check(name, badge.inner_text() == "finished" and badge.get_attribute("class").split() == ["badge", "state"]
+              and dot_look(B) == dot_look(A) and dot_look(B)[1] == "none"  # alpha is an idle chat: the same dot
+              and page.inner_text("#drawer-body details.info summary").startswith("finished")
+              and got["first"] == "Recent messages" and got["warn"] == [] and got["primary"] is False
+              and got["screen"] == ["Show its screen"] and got["compact"] is True
+              and got["composer"] is False and "asking you something" not in got["hint"],
+              (badge.inner_text(), dot_look(B), dot_look(A), got))
+
+    name = "background agent: one that finished its answer can be compacted, running or asleep"
+    with step(page, name):
+        page.api.patch = FINISHED
+        poll(page)
+        open_card(page, B)
+        page.locator("#drawer-body button", has_text="Compact").click()
+        said = answer(page)
+        page.wait_for_timeout(300)
+        sent = [b for p, b in page.api.posts if p.endswith("/compact")]
+        page.api.patch = {B: {**FINISHED[B], "running": False, "status": "asleep"}}
+        poll(page)
+        asleep = page.evaluate(bg_section)
+        check(name, said["ok"] == "Compact" and sent == [{"sessionId": B}] and asleep["compact"] is True
+              and asleep["warn"] == []
+              and page.locator(f'.node[data-id="{B}"] .badge.state').inner_text() == "finished", (said, sent, asleep))
 
     name = "details: Delete agent is apart from Open in terminal, below it"
     with step(page, name):
@@ -780,7 +845,7 @@ def checks_wide(browser):
 
     name = "compact: an idle background agent has Compact; it asks first, then asks the server"
     with step(page, name):
-        page.api.patch = {B: {"status": "idle", "agentState": "idle", "waitingFor": None}}
+        page.api.patch = {B: {"status": "idle", "agentState": "idle", "needsAnswer": False, "waitingFor": None}}
         poll(page)
         open_card(page, B)
         page.locator("#drawer-body button", has_text="Compact").click()
@@ -791,7 +856,7 @@ def checks_wide(browser):
 
     name = "compact: while it compacts the button waits, saying so; no notice when it's done (Activity says it)"
     with step(page, name):
-        page.api.patch = {B: {"status": "idle", "agentState": "idle", "waitingFor": None}}
+        page.api.patch = {B: {"status": "idle", "agentState": "idle", "needsAnswer": False, "waitingFor": None}}
         page.api.launches = [{"id": "k1", "board": "b1", "at": 1, "kind": "compact", "from": B, "state": "compacting",
                               "detail": "Compacting \"beta\" (/compact)…"}]
         poll(page)

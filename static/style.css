@@ -649,7 +649,7 @@ details.run { container-type: inline-size; }
 .browse-item:hover { background: var(--accent-soft); }
 
 .badge.model { color: var(--text); }
-/* One line: long badges shorten with "…"; the state (idle, done, needs you) never does. */
+/* One line: long badges shorten with "…"; the state (idle, finished, done, needs you) never does. */
 .node .meta.badges { display: flex; flex-wrap: nowrap; gap: 2px; }
 .node .meta.badges .badge { margin-right: 0; min-width: 0; font-size: 11px; padding: 0 4px; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .node .meta.badges .badge.state { flex-shrink: 0; min-width: auto; }

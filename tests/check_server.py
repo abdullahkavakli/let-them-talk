@@ -664,6 +664,7 @@ for stray in set(S.launches) - launched_before:  # had it gone on, the checks be
 pressed.clear()
 for kw, why in (({"status": "busy", "agentState": "working"}, "a busy one"),
                 ({"status": "waiting", "agentState": "blocked"}, "one asking you something"),
+                ({"status": "idle", "agentState": "blocked", "needsAnswer": True}, "one blocked on a question or a permission"),
                 ({"background": False, "jobId": None, "entrypoint": "cli"}, "a chat in a terminal"),
                 ({"background": False, "jobId": None, "entrypoint": "claude-vscode"}, "an editor chat"),
                 ({"running": False, "status": "asleep", "resumable": False}, "one with no saved conversation")):
@@ -674,6 +675,16 @@ for kw, why in (({"status": "busy", "agentState": "working"}, "a busy one"),
     except ValueError as e:
         check(f"compact: refused, nothing typed or started: {why}",
               not pressed and set(S.launches) == launched_before, str(e))
+
+pressed.clear()
+sessions[:] = [{**cp_agent, "status": "idle", "agentState": "blocked", "agentStateText": "finished", "needsAnswer": False}]
+lid = S.start_compact("b", {"sessionId": CP})["launchId"]
+real_sleep(0.1)
+cp_done(8000, 1200)
+job = cp_wait(lid)
+check("compact: a running agent that only finished its answer (Claude Code lists it as blocked) is compacted like an idle one",
+      pressed == [["/compact", "\r"]] and job["state"] == "done" and "from 8k to 1k tokens" in job["detail"], (pressed, job))
+pressed.clear()
 
 woke = []
 S.run_claude = lambda args, **kw: woke.append(args) or types.SimpleNamespace(
@@ -710,6 +721,91 @@ cp_note({"type": "user", "isCompactSummary": True, "message": {"role": "user", "
         t1 + 3, uk_log)
 check("ultracode: a typed /compact and its summary aren't prompts, so a switch made before them still stands",
       S.ultracode_state({"sessionId": UK, "startedAt": (t1 - 10) * 1000}) is False)
+
+# ------------ A background agent Claude Code calls blocked: finished, or needs you
+
+# Claude Code's own state for an agent stays as it says (agentState); the card's word and needsAnswer say whether
+# it really needs an answer (a question with choices, or a permission or dialog open in its process) or only ended
+# its turn and waits for your next message ("finished").
+bk_names = ("_read_registry", "_proc_start", "WIN_REGISTRY_DIR", "wsl_exe", "session_title", "session_model",
+            "has_transcript", "background_rows", "JOBS_DIR", "job_cache", "_type_prompt", "screen_question")
+bk_saved = {n: getattr(S, n) for n in bk_names}
+bk_dir = Path(tempfile.mkdtemp())
+(bk_dir / "sock").touch()
+waits = {"state": "blocked", "tempo": "blocked"}  # a job's record: its turn ended, nothing asked
+asks = {"state": "blocked", "tempo": "blocked", "block": {"questions": [{"question": "Which one?"}]}}
+bk_sid = lambda i: f"0e0e0e0e-0000-4000-8000-{i:012d}"
+BK = [  # (what it is, running with this status or None, Claude Code's row, the job's record, needsAnswer, the card's word)
+    ("it ended its turn waiting on your words", "idle", {"state": "blocked"}, waits, False, "finished"),
+    ("it asks a question with choices", "idle", {"state": "blocked"}, asks, True, "needs you"),
+    ("a permission prompt is open in its process", "waiting", {"state": "blocked", "waitingFor": "permission prompt"},
+     waits, True, "needs you"),
+    ("its row names what it waits for", "idle", {"state": "blocked", "waitingFor": "dialog open"}, waits, True, "needs you"),
+    ("its process shows waiting", "waiting", {"state": "blocked"}, waits, True, "needs you"),
+    ("it ended its turn, and its process has ended", None, {"state": "blocked"}, waits, False, "finished"),
+    ("it asks, and its process has ended", None, {"state": "blocked"}, asks, True, "needs you"),
+    ("its record can't be read (counts as asking, as before)", None, {"state": "blocked"}, None, True, "needs you"),
+    ("a record of another tempo (counts as asking)", "idle", {"state": "blocked"}, {"state": "blocked", "tempo": "idle"},
+     True, "needs you"),
+    ("working", "busy", {"state": "working", "status": "busy"}, {"state": "working", "tempo": "active"}, False, "working"),
+    ("working but idle", "idle", {"state": "working", "status": "idle"}, {"state": "working", "tempo": "idle"}, False, "idle"),
+    ("done", None, {"state": "done"}, {"state": "done", "tempo": "idle"}, False, "done"),
+    ("failed", None, {"state": "failed"}, {"state": "failed", "tempo": "idle"}, False, "failed"),
+    ("stopped", None, {"state": "stopped"}, {"state": "stopped", "tempo": "idle"}, False, "stopped"),
+]
+bk_regs, bk_rows = [], []
+for i, (_, status, row, record, _, _) in enumerate(BK):
+    job = f"b0b0b0{i:02x}"
+    bk_rows.append({"id": job, "sessionId": bk_sid(i), "cwd": str(bk_dir), **row, **({"pid": 500 + i} if status else {})})
+    if status:
+        bk_regs.append({"pid": 500 + i, "sessionId": bk_sid(i), "kind": "bg", "entrypoint": "cli", "name": f"bk{i}",
+                        "messagingSocketPath": str(bk_dir / "sock"), "cwd": str(bk_dir), "status": status, "jobId": job})
+    if record is not None:
+        (bk_dir / job).mkdir()
+        (bk_dir / job / "state.json").write_text(json.dumps(record))
+S._read_registry, S._proc_start, S.WIN_REGISTRY_DIR = (lambda d: [dict(r) for r in bk_regs]), (lambda pid: ""), None
+S.wsl_exe, S.session_title, S.session_model = (lambda pid, started: ""), (lambda sid: None), (lambda sid: None)
+S.has_transcript, S.background_rows = (lambda sid: True), (lambda fresh=False: bk_rows)
+S.JOBS_DIR, S.job_cache = bk_dir, {}
+try:
+    bk_got = {s["sessionId"]: s for s in real_live_sessions() if s.get("background")}
+    for i, (why, status, row, record, wanted, word) in enumerate(BK):
+        s = bk_got.get(bk_sid(i)) or {}
+        own = "idle" if word == "idle" else row["state"]  # working with its process idle is told apart as idle
+        check(f"agent state: {why}: its own state stays {own}, the card says {word}, and "
+              f"{'it needs an answer' if wanted else 'nothing is asked'}",
+              s.get("agentState") == own and s.get("agentStateText") == word
+              and s.get("needsAnswer") is wanted and bool(s.get("running")) is bool(status)
+              and s.get("waitingFor") == row.get("waitingFor"), s)
+
+    # Sending a prompt and the chat's own view treat a finished agent as an idle one, and an asking one as asking.
+    typed, bk_finished, bk_asking = [], bk_got[bk_sid(0)], bk_got[bk_sid(1)]
+    S._type_prompt = lambda s, text: typed.append(text)
+    sessions[:] = [bk_finished, bk_asking]
+    S.send_to_session("b", {"sessionId": bk_sid(0), "text": "go on"})
+    check("agent state: a prompt for a running agent that finished its answer is typed into its prompt box, as for an idle one",
+          typed == ["go on"], typed)
+    check("agent state: only an agent that needs an answer holds nothing back (asks_you)",
+          not S.asks_you(bk_finished) and S.asks_you(bk_asking) and S.asks_you(bk_got[bk_sid(2)])
+          and S.asks_you({"status": "waiting"}) and S.asks_you({"agentState": "blocked"})
+          and not S.asks_you({"status": "idle", "agentState": "done"}))
+
+    # Its transcript leaves a turn open (just your prompt, no answer): Claude Code saying it only finished its answer
+    # is believed; one that needs an answer stays at that prompt and shows its question, read off its screen.
+    bk_log = root / "proj" / f"{bk_sid(0)}.jsonl"
+    bk_log2 = root / "proj" / f"{bk_sid(1)}.jsonl"
+    for path in (bk_log, bk_log2):
+        path.write_text(rec("fix it", time.time() - 30, origin={"kind": "human"}) + "\n")
+    S.session_title, S.screen_question = bk_saved["session_title"], lambda job: {"question": "Run it?", "options": ["Yes", "No"]}
+    finished_view, asking_view = S.session_chat(bk_sid(0)), S.session_chat(bk_sid(1))
+    check("agent state: its open turn is not taken for work once Claude Code says it finished its answer, but is while it needs an answer",
+          not finished_view["working"] and finished_view["asking"] is None
+          and asking_view["working"] and asking_view["asking"] and asking_view["asking"][0]["question"] == "Run it?",
+          (finished_view, asking_view))
+finally:
+    for n, value in bk_saved.items():
+        setattr(S, n, value)
+    sessions[:] = []
 
 # ------------------------------- Open in IDE: a running background agent ends first
 
