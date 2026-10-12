@@ -134,14 +134,22 @@ did, so the page's notice says where to look if it didn't.
 - **From WSL** the app reads the editor's link command from the Windows
   registry (`reg.exe`, `HKCU\Software\Classes\<scheme>\shell\open\command`,
   then `HKCR`), which for Cursor, VS Code and their forks is
-  `"C:\…\Cursor.exe" --open-url -- "%1"`, and starts that program itself with
-  the link as one argument (no shell, so `&` and `%` stay as they are). That
-  is what Windows would do for a click on the link, and what the folder step
-  does too: the program finds the running editor and hands it the link. The
-  program is found once and kept. If the registry can't be read, the command
-  isn't of that shape or the program isn't there or won't start, the app asks
-  Windows' own link handler (`rundll32.exe url.dll,FileProtocolHandler`)
-  instead; `explorer.exe` would drop the `?session=`.
+  `"C:\…\Cursor.exe" --open-url -- "%1"`, and hands that program
+  `--open-url -- <link>`, the link as one argument (no shell, so `&` and `%`
+  stay as they are), through the program's own command-line script
+  (`resources\app\out\cli.js` beside it, run the way the `cursor` command
+  runs it), which starts the editor; the editor finds its running window and
+  hands it the link. The script matters: a Windows program started from WSL
+  gets the environment of the Windows program that started that WSL session,
+  and when that is Cursor (its extension host), it carries
+  `ELECTRON_RUN_AS_NODE=1`. Started with that, `Cursor.exe` is a bare Node,
+  refuses `--open-url` and quits, and no window ever sees the link; the
+  script starts the editor without it, as it does for the folder step. With
+  no script there, the program is started straight. The program is found once
+  and kept. If the registry can't be read, the command isn't of that shape or
+  the program isn't there or won't start, the app asks Windows' own link
+  handler (`rundll32.exe url.dll,FileProtocolHandler`) instead (which passes
+  that same environment on); `explorer.exe` would drop the `?session=`.
 - **On Linux and macOS** the link goes to `xdg-open` or `open`.
 - **The editor's side:** Cursor routes an extension's link to one of its
   ordinary (not agents) windows, and the extension finds a conversation only

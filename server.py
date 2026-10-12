@@ -2791,25 +2791,47 @@ def windows_link_exe(scheme):
     return exe
 
 
+EDITOR_CLI_SCRIPT = "resources/app/out/cli.js"  # next to Cursor.exe / Code.exe: what their cursor / code shims run
+
+
+def editor_link_opener(exe):
+    """How to hand a link to the editor at exe (a WSL path) from WSL: (command,
+    cwd, env), the link to go last. As the editor's own shims do, the program
+    runs its command-line script in Node mode (ELECTRON_RUN_AS_NODE=1, passed on
+    to Windows through WSLENV), and the script starts the editor with that
+    variable removed. A Windows program started from WSL inherits the
+    environment of the Windows process that started this WSL session; when that
+    is an editor's extension host (WSL opened from Cursor), it carries
+    ELECTRON_RUN_AS_NODE=1, and `Cursor.exe --open-url -- <link>` started with it
+    runs as plain Node, refuses --open-url and exits: the editor never gets the
+    link. Without the script, the program itself."""
+    home = os.path.dirname(exe)
+    if not os.path.isfile(os.path.join(home, *EDITOR_CLI_SCRIPT.split("/"))):
+        return [exe, "--open-url", "--"], "/mnt/c", None
+    shared = [v for v in os.environ.get("WSLENV", "").split(":") if v and v.split("/")[0] != "ELECTRON_RUN_AS_NODE"]
+    env = {**os.environ, "ELECTRON_RUN_AS_NODE": "1", "WSLENV": ":".join(["ELECTRON_RUN_AS_NODE/w"] + shared)}
+    return [exe, EDITOR_CLI_SCRIPT, "--open-url", "--"], home, env
+
+
 def open_editor_link(editor, **params):
     """Open <editor>://anthropic.claude-code/open (?session=, ?prompt=) in the
     editor window in front, as a click on the link would. Each value is encoded
     twice, as the page does (the editor decodes it once before the extension
-    reads it). From WSL the editor is started as the registry says Windows
-    would (`Cursor.exe --open-url -- <link>`, the link one argument), the way
-    the folder is opened; Windows' link handler is the fallback. Returns
-    whether it could."""
+    reads it). From WSL the program the registry names for the link (Cursor.exe)
+    is given `--open-url -- <link>`, the link one argument, through its own
+    command-line script (editor_link_opener), the way the folder is opened;
+    Windows' link handler is the fallback. Returns whether it could."""
     query = "&".join(f"{k}={quote(quote(str(v), safe=''), safe='')}" for k, v in params.items() if v)
     scheme = EDITOR_SCHEMES.get(editor, "vscode")
     url = f"{scheme}://anthropic.claude-code/open" + (f"?{query}" if query else "")
     if ON_WSL:
         exe = windows_link_exe(scheme) if editor in EDITOR_SCHEMES else None
-        openers = ([[exe, "--open-url", "--"]] if exe else []) + [windows_link_opener()]
+        openers = ([editor_link_opener(exe)] if exe else []) + [(windows_link_opener(), "/mnt/c", None)]
     else:
-        openers = [["open"] if HOST_LABEL == "macOS" else [shutil.which("xdg-open") or "xdg-open"]]
-    for opener in openers:
+        openers = [(["open"] if HOST_LABEL == "macOS" else [shutil.which("xdg-open") or "xdg-open"], None, None)]
+    for opener, cwd, env in openers:
         try:
-            subprocess.Popen(opener + [url], cwd="/mnt/c" if ON_WSL else None, stdin=subprocess.DEVNULL,
+            subprocess.Popen(opener + [url], cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             return True
         except OSError:

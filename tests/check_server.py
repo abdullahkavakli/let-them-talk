@@ -53,8 +53,9 @@ check("cards: an empty board starts at the top left", S.free_slot({"nodes": {}})
 
 # --------------------------------------------- Chat in IDE in a folder (faked)
 
-launched, sent, sessions = [], [], []
-S.subprocess.Popen = lambda args, **kw: launched.append(list(args)) or types.SimpleNamespace(wait=lambda timeout=None: 0)
+launched, launched_kw, sent, sessions = [], [], [], []
+S.subprocess.Popen = lambda args, **kw: (launched.append(list(args)) or launched_kw.append(kw)
+                                         or types.SimpleNamespace(wait=lambda timeout=None: 0))
 S.shutil.which = lambda name: {"code": "/bin/code", "cursor": "/bin/cursor", "rundll32.exe": "/win/rundll32.exe",
                                "cmd.exe": "/win/cmd.exe", "xdg-open": "/bin/xdg-open"}.get(name)
 S.relay_send = lambda items: (sent.append(items) or [{"state": "sent", "detail": ""}], None)
@@ -172,6 +173,38 @@ registry[cursor_key] = '"C:\\Program Files\\Cursor\\Cursor.exe" --reuse-window "
 check("open_editor_link: a command that isn't --open-url isn't run by guesswork, Windows' link handler",
       link_from_wsl(session="x")[0] == "/win/rundll32.exe")
 registry[cursor_key] = '"C:\\Program Files\\Cursor\\Cursor.exe" --open-url -- "%1"'
+got = link_from_wsl(session="x")
+check("open_editor_link: without its command-line script beside it, the program is started straight, "
+      "in the environment the server has", got[1] == "--open-url" and launched_kw[-1].get("env") is None
+      and launched_kw[-1].get("cwd") == "/mnt/c", launched_kw[-1])
+# Windows programs started from a WSL session that Cursor opened inherit its extension host's
+# ELECTRON_RUN_AS_NODE=1: Cursor.exe then runs as plain Node, refuses --open-url and exits, and
+# no Cursor window ever gets the link. Its own cli.js (run in Node mode, as the cursor shim does)
+# starts the editor with that variable removed.
+script = os.path.join(os.path.dirname(program), "resources", "app", "out", "cli.js")
+os.makedirs(os.path.dirname(script))
+Path(script).touch()
+wslenv = os.environ.get("WSLENV")
+os.environ["WSLENV"] = "ELECTRON_RUN_AS_NODE/w:SOME_PATH/p"
+env_before = dict(os.environ)
+got, kw = link_from_wsl(session="x"), launched_kw[-1]
+env_after = dict(os.environ)
+check("open_editor_link: from WSL the link goes through the editor's own command-line script, which starts it "
+      "without the ELECTRON_RUN_AS_NODE a WSL session opened from Cursor hands every Windows program",
+      got == [program, "resources/app/out/cli.js", "--open-url", "--", "cursor://anthropic.claude-code/open?session=x"]
+      and kw.get("cwd") == os.path.dirname(program), (got, kw.get("cwd")))
+env = kw.get("env") or {}
+check("open_editor_link: the script runs in Node mode, the setting passed on to Windows (WSLENV) once, "
+      "what WSLENV already passed on kept",
+      env.get("ELECTRON_RUN_AS_NODE") == "1" and env.get("WSLENV") == "ELECTRON_RUN_AS_NODE/w:SOME_PATH/p"
+      and env.get("PATH") == os.environ.get("PATH"), {k: env.get(k) for k in ("ELECTRON_RUN_AS_NODE", "WSLENV")})
+check("open_editor_link: the server's own environment is left as it was (claude and the rest don't get Node mode)",
+      env_after == env_before)
+del os.environ["WSLENV"]
+check("open_editor_link: with no WSLENV of its own, only that setting is passed on",
+      (link_from_wsl(session="x") and (launched_kw[-1].get("env") or {}).get("WSLENV")) == "ELECTRON_RUN_AS_NODE/w")
+if wslenv is not None:
+    os.environ["WSLENV"] = wslenv
 real_popen = S.subprocess.Popen
 
 
@@ -182,13 +215,14 @@ def popen_fails_for_exe(args, **kw):
 
 
 S.subprocess.Popen = popen_fails_for_exe
-check("open_editor_link: a program that can't be started falls back to Windows' link handler",
-      link_from_wsl(session="x")[0] == "/win/rundll32.exe")
+check("open_editor_link: a program that can't be started falls back to Windows' link handler, in the server's "
+      "own environment", link_from_wsl(session="x")[0] == "/win/rundll32.exe" and launched_kw[-1].get("env") is None)
 S.subprocess.Popen = real_popen
 registry.clear()
 registry["HKCU\\Software\\Classes\\vscode\\shell\\open\\command"] = '"C:\\Program Files\\Cursor\\Cursor.exe" --open-url -- "%1"'
+got = link_from_wsl("VS Code", session="x")
 check("open_editor_link: each editor's own scheme is looked up (vscode for VS Code)",
-      link_from_wsl("VS Code", session="x")[:4] == [program, "--open-url", "--", "vscode://anthropic.claude-code/open?session=x"])
+      got[0] == program and got[-2:] == ["--", "vscode://anthropic.claude-code/open?session=x"], got)
 S._registry_default = lambda key: None
 check("open_editor_link: an editor it doesn't know has Windows' link handler",
       link_from_wsl("Notepad", session="x")[0] == "/win/rundll32.exe")
