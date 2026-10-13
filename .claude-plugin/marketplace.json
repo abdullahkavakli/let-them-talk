@@ -9,7 +9,7 @@
         "source": "git-subdir",
         "url": "https://github.com/abdullahkavakli/let-them-talk.git",
         "path": "mods/let-them-talk-suggestions",
-        "ref": "v0.1.0"
+        "ref": "v0.2.0"
       },
       "description": "Shows Claude Code's suggested next prompt in Let Them Talk's Send box, and runs a Chat in IDE on the model you pick there. Needs the app running."
     }
