@@ -1,6 +1,6 @@
 {
   "name": "let-them-talk",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Adds /let-them-talk, which starts Let Them Talk and opens it in your browser; shows Claude Code's suggested next prompt in its Send box; and runs a Chat in IDE started from it on the model picked there.",
   "author": { "name": "Abdullah KAVAKLI" },
   "homepage": "https://github.com/abdullahkavakli/let-them-talk",

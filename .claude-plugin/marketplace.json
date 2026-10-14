@@ -9,7 +9,7 @@
         "source": "git-subdir",
         "url": "https://github.com/abdullahkavakli/let-them-talk.git",
         "path": "mods/let-them-talk-suggestions",
-        "ref": "v0.2.0"
+        "ref": "v0.3.0"
       },
       "description": "Type /let-them-talk in any chat to start Let Them Talk and open it in your browser (needs uv). Also shows Claude Code's suggested next prompt in its Send box, and runs a Chat in IDE on the model you pick there."
     }
