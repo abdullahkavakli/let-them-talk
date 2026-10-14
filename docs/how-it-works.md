@@ -132,9 +132,9 @@ nothing:
   agents show nothing rather than wrong text.
 - **Terminal chats, and background turns that don't wait on you:** Claude
   Code saves the suggestion nowhere, so the
-  [suggestions mod](configuration.md#suggestions-mod) passes it on as it is
+  [plugin](configuration.md#claude-code-plugin) passes it on as it is
   shown. When Claude Code makes none (the window isn't focused, or nobody is
-  attached) and the app has that chat's details open, the mod makes one the
+  attached) and the app has that chat's details open, the plugin makes one the
   way Claude Code does (one tool-less reply of the chat's own model over its
   cached conversation). It puts it in the chat's prompt box too, so both
   match.
@@ -206,10 +206,10 @@ moment between the folder's window coming up and the link going to it:
 ## The model of a Chat in IDE
 
 An editor link can't name a model, so the
-[suggestions mod](configuration.md#suggestions-mod) runs a **Chat in IDE**
+[plugin](configuration.md#claude-code-plugin) runs a **Chat in IDE**
 started from the app on the model picked in
-[New agent](usage.md#new-agent). The app tells the mod which model as the
-chat's first turns start, and the mod names that model on the chat's own
+[New agent](usage.md#new-agent). The app tells the plugin which model as the
+chat's first turns start, and the plugin names that model on the chat's own
 requests, not its subagents'.
 
 ## Ultracode
@@ -225,7 +225,7 @@ saw itself: a **Turn on** or **Turn off**.
 The app never types `/effort` into an agent to find out. The only `/effort`
 it types is the one a **Turn on** or **Turn off** click sends, so nothing of
 its own appears in the agent's terminal. The
-[suggestions mod](configuration.md#suggestions-mod) runs no command in a chat
+[plugin](configuration.md#claude-code-plugin) runs no command in a chat
 either.
 
 - **While it works:** an `/effort` answers only on the agent's screen, and
@@ -246,7 +246,7 @@ either.
   started, so a later process that gets the same pid doesn't inherit it.
 - **The panel opened and closed with Esc:** Claude Code notes "Cancelled",
   which changes nothing.
-- **Older conversations:** an earlier version of the mod ran `/effort status`
+- **Older conversations:** an earlier version of the plugin ran `/effort status`
   in a background agent. Its lines stay in those conversations, and the app
   doesn't show them as yours or as work.
 
@@ -294,7 +294,7 @@ no conversation.
 
 - `boards/`: the boards, a card's name included.
 - `logs/relay.jsonl`: every note and message sent through the headless run.
-- `logs/suggestions.json`: the mod's latest suggestions, kept for a day.
+- `logs/suggestions.json`: the plugin's latest suggestions, kept for a day.
 - `logs/models.json`: the model picked for each Chat in IDE, kept a week, so
   a chat resumed within a week still runs on it.
 - `logs/ultracode.json`: each chat's latest ultracode switch the app made

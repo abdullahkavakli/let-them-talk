@@ -4,14 +4,14 @@
   "description": "Plugins for Let Them Talk, a visual board for your Claude Code sessions.",
   "plugins": [
     {
-      "name": "let-them-talk-suggestions",
+      "name": "let-them-talk",
       "source": {
         "source": "git-subdir",
         "url": "https://github.com/abdullahkavakli/let-them-talk.git",
         "path": "mods/let-them-talk-suggestions",
         "ref": "v0.2.0"
       },
-      "description": "Shows Claude Code's suggested next prompt in Let Them Talk's Send box, and runs a Chat in IDE on the model you pick there. Needs the app running."
+      "description": "Type /let-them-talk in any chat to start Let Them Talk and open it in your browser (needs uv). Also shows Claude Code's suggested next prompt in its Send box, and runs a Chat in IDE on the model you pick there."
     }
   ]
 }

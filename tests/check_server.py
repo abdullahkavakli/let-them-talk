@@ -2,11 +2,12 @@
 """Checks parts of server.py without a server: where new cards go, New
 agent → Chat in IDE in a folder, renaming a card, images sent with a prompt, switching
 ultracode (and that nothing is typed to find out whether it is on), compacting a background agent, moving an editor chat
-to a terminal, New workflow's teams, and the let-them-talk command of the installed
-package (where it keeps its data, opening the page, a port that is taken), and
-that the package, the mod and the plugin marketplace name one release.
+to a terminal, New workflow's teams, the let-them-talk command of the installed
+package (where it keeps its data, opening the page, a port that is taken), how
+the plugin's /let-them-talk starts it, and that the package, the mod and the
+plugin marketplace name one release.
 Every program launch, session list and message is faked, so nothing opens and
-nothing is sent. Needs only Python.
+nothing is sent. Needs only Python (and sh).
 
 Run:  python3 tests/check_server.py      Exit 0: all passed. 1: a check failed.
 """
@@ -31,6 +32,7 @@ sys.path.insert(0, str(ROOT))
 import server as S  # noqa: E402
 
 S.ULTRA_FILE = Path(tempfile.mkdtemp()) / "ultracode.json"  # switches kept on disk: never the app's own
+REAL_POPEN = S.subprocess.Popen  # faked below; the plugin's /let-them-talk check runs sh with a fake uvx
 results = []
 
 
@@ -1958,14 +1960,81 @@ S.shutil.rmtree(scratch)
 import tomllib  # noqa: E402
 
 package = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
-mod = json.loads((ROOT / "mods/let-them-talk-suggestions/.claude-plugin/plugin.json").read_text()).get("version")
-entry = next(p for p in json.loads((ROOT / ".claude-plugin/marketplace.json").read_text())["plugins"]
-             if p["name"] == "let-them-talk-suggestions")
+manifest = json.loads((ROOT / "mods/let-them-talk-suggestions/.claude-plugin/plugin.json").read_text())
+mod = manifest.get("version")
+entry = next((p for p in json.loads((ROOT / ".claude-plugin/marketplace.json").read_text())["plugins"]
+              if p["name"] == manifest.get("name")), {"source": None})
 source = entry["source"] if isinstance(entry["source"], dict) else {}
 check("release: the mod's version is the package's", mod == package, f"plugin.json {mod}, pyproject.toml {package}")
-check("release: the marketplace fetches the mod from that release's tag",
-      source.get("source") == "git-subdir" and source.get("path") == "mods/let-them-talk-suggestions"
+check("release: the marketplace lists the mod under its own name (let-them-talk), fetched from that release's tag",
+      manifest.get("name") == "let-them-talk"
+      and source.get("source") == "git-subdir" and source.get("path") == "mods/let-them-talk-suggestions"
       and source.get("ref") == f"v{package}", json.dumps(entry["source"]))
+
+# ------------------------------------------------- the plugin's /let-them-talk
+# It runs START from the mod's hooks/register.ts with sh (how the command reads
+# what START prints is the mod's own test). Here START runs for real, with a
+# fake uvx: the app must start from the home folder, apart from the chat that
+# ran it (a session of its own, where setsid exists), so it keeps running after
+# that chat ends, and without the chat's variables (the server's SESSION_ENV).
+
+import re  # noqa: E402
+import signal  # noqa: E402
+
+register_ts = (ROOT / "mods/let-them-talk-suggestions/hooks/register.ts").read_text()
+mod_env = tuple(re.findall(r"'(\w+)'", re.search(r"export const SESSION_ENV = \[(.*?)\]", register_ts, re.S)[1]))
+start = re.search(r"export const START = `(.*?)\n`\n", register_ts, re.S)[1].replace("${SESSION_ENV.join(' ')}",
+                                                                                      " ".join(mod_env))
+check("/let-them-talk: the plugin starts the app without the same chat variables the server leaves out",
+      mod_env == S.SESSION_ENV, mod_env)
+lt = Path(tempfile.mkdtemp())
+lt_home, lt_url = lt / "home", "http://localhost:18765"
+for name, body in (
+        ("runs", f'{{ echo "$$"; pwd; echo "$*"; env; }} > "{lt}/record"\n'
+                 f'echo "Let Them Talk running at {lt_url}  (Ctrl+C to stop)"\nexec sleep 30\n'),
+        ("fails", 'echo "Port 18765 is already used by another program, not Let Them Talk." >&2\nexit 1\n')):
+    (lt / name).mkdir(parents=True)
+    (lt / name / "uvx").write_text(f"#!/bin/sh\n{body}")
+    (lt / name / "uvx").chmod(0o755)
+lt_home.mkdir()
+(lt / "tmp").mkdir()
+
+
+def run_start(uvx_dir):
+    env = {"HOME": str(lt_home), "PATH": f"{uvx_dir}:/usr/bin:/bin", "TMPDIR": str(lt / "tmp"), "KEEP_ME": "yes",
+           **{n: "from the chat" for n in S.SESSION_ENV}}
+    proc = REAL_POPEN(["sh", "-c", start, "let-them-talk", lt_url], stdout=S.subprocess.PIPE,
+                      stderr=S.subprocess.PIPE, text=True, env=env, cwd=lt)
+    return proc.communicate(timeout=30)[0]
+
+
+said = run_start(lt / "runs")
+pid, cwd, args, *env_lines = (lt / "record").read_text().splitlines()
+pid, env_names = int(pid), {line.split("=", 1)[0] for line in env_lines}
+try:
+    os.kill(pid, 0)  # the fake app (it is not this process's child, so never a zombie of ours)
+    alive, own_session = True, os.getsid(pid) != os.getsid(0)
+except ProcessLookupError:
+    alive = own_session = False
+finally:
+    with contextlib.suppress(ProcessLookupError):
+        os.kill(pid, signal.SIGTERM)
+has_setsid = any(Path(d, "setsid").exists() for d in ("/usr/bin", "/bin"))
+check("/let-them-talk: uvx let-them-talk is started from the home folder, and said to be running once the app "
+      "prints its address",
+      said.splitlines()[0] == "running" and lt_url in said and args == "let-them-talk" and cwd == str(lt_home),
+      (said, args, cwd))
+check("/let-them-talk: the app keeps running after the start ends, in a session of its own (no terminal or "
+      "process group of the chat's)", alive and (own_session or not has_setsid), (alive, own_session))
+check("/let-them-talk: the app gets none of the chat's own variables, and every other one",
+      "KEEP_ME" in env_names and not env_names & set(S.SESSION_ENV), sorted(env_names & set(S.SESSION_ENV)))
+said = run_start(lt / "fails")
+check("/let-them-talk: an app that can't start is said to have ended, with its reason",
+      said.splitlines() == ["ended 1", "Port 18765 is already used by another program, not Let Them Talk."], said)
+check("/let-them-talk: with no uv on the PATH or in the home folder it says so", run_start(lt / "none") == "no-uv\n")
+check("/let-them-talk: it leaves no folder of its own behind, nor anything in the home folder",
+      not list((lt / "tmp").iterdir()) and not list(lt_home.iterdir()), list((lt / "tmp").iterdir()))
+S.shutil.rmtree(lt)
 
 failed = [r for r in results if not r[1]]
 for name, ok, detail in results:

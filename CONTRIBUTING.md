@@ -16,7 +16,7 @@ Run all checks (about 35 seconds):
 env -u DBUS_SESSION_BUS_ADDRESS -u DISPLAY -u WAYLAND_DISPLAY tests/check.sh
 ```
 
-The `env -u` part keeps the headless browser from opening a keyring window on your screen. The server checks alone: `python3 -I tests/check_server.py`. If you change the suggestions mod: `claude plugin test mods/let-them-talk-suggestions`.
+The `env -u` part keeps the headless browser from opening a keyring window on your screen. The server checks alone: `python3 -I tests/check_server.py`. If you change the Claude Code plugin (in `mods/let-them-talk-suggestions`): `claude plugin test mods/let-them-talk-suggestions`.
 
 ## Rules
 

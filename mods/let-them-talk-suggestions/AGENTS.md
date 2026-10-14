@@ -1,8 +1,11 @@
-# AGENTS.md (suggestions mod)
+# AGENTS.md (the plugin)
 
-- The user's settings load this mod live from the main folder (`CLAUDE_CODE_PLUGIN_DIRS`), so a change here reaches every Claude Code chat they start.
-- It talks to `http://localhost:8765` (`APP`, hard-coded in `hooks/register.ts`), so a test copy on another port gets no mod traffic.
+- This folder is the Claude Code plugin `let-them-talk` (`name` in `.claude-plugin/plugin.json`; it was `let-them-talk-suggestions` before). The folder keeps the old name on purpose: don't rename it (see the next line).
+- The user's settings load this mod live from the main folder (`CLAUDE_CODE_PLUGIN_DIRS`), so a change here reaches every Claude Code chat they start, and a renamed folder would leave every new chat without it until they change their settings.
+- The suggestions and the model talk to `http://localhost:8765` (`APP`, hard-coded in `hooks/register.ts`), so a test copy on another port gets no mod traffic. `/let-them-talk` reads `LTT_PORT` instead.
+- `/let-them-talk` runs `START` (in `hooks/register.ts`) with sh: it starts `uvx let-them-talk` for real, in a session of its own, and the app opens the browser. Its tests fake every process, and `tests/check_server.py` runs `START` with a fake uvx. Any real run goes on a free port with a scratch `HOME` and a uvx wrapper that adds `--no-open`, never on 8765 (see the test-server rule in the root `AGENTS.md`).
+- `SESSION_ENV` in `hooks/register.ts` is the same list as `SESSION_ENV` in `server.py` (a server check compares them).
 - `WINDOW_MS` in `hooks/register.ts` (milliseconds) must be the same length of time as `MOD_WINDOW` in `server.py` (seconds).
 - Validate, from the repo root: `claude plugin validate mods/let-them-talk-suggestions`. Its warning that `CLAUDE.md` isn't loaded as plugin context is expected: that file is for chats editing this folder, so keep it. (Its tests are in the root `AGENTS.md`.)
 - `tsconfig.json` and `.claude-plugin/types/` are written by Claude Code when it loads the mod (gitignored): don't edit or commit them.
-- People install it from the repo's plugin marketplace (`.claude-plugin/marketplace.json` at the repo root, which lists this mod only: the app loads the handoff mod itself). Validate it from the repo root: `claude plugin validate .`. The marketplace fetches this folder from the latest release's tag, not from main, so a change here reaches people who installed the plugin only with the next release (see Release in the root `AGENTS.md`). `version` in `plugin.json` is that release's number: don't bump it on its own.
+- People install it from the repo's plugin marketplace (`.claude-plugin/marketplace.json` at the repo root, which lists this plugin only: the app loads the handoff mod itself). Validate it from the repo root: `claude plugin validate .`. The marketplace fetches this folder from the latest release's tag, not from main, so a change here reaches people who installed the plugin only with the next release (see Release in the root `AGENTS.md`). `version` in `plugin.json` is that release's number: don't bump it on its own.

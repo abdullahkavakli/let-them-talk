@@ -1,5 +1,5 @@
 import { test, expect, mock } from 'claude-code/testing'
-import { cleanSuggestion, modelFor, report } from './register'
+import { cleanSuggestion, modelFor, report, START, startReport, UV_LINK } from './register'
 
 // Sending needs the chat's id ($.session.id) and making one needs its
 // conversation ($.model.fork), which only a real session has; those paths
@@ -61,4 +61,65 @@ test('runs no command of its own: an /effort, even in a background agent, is fol
   }
   await clock.advance(10_000)
   expect(ran).toEqual(['effort ultracode on', 'effort', 'effort high'])
+})
+
+// /let-them-talk. What START itself does (a session of its own, no chat
+// variables, what it prints) is checked with real processes in
+// tests/check_server.py; here, how the command runs it and what it says.
+
+const ran = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+const page = (server: string) => ({ value: { status: 200, ok: true, headers: { server }, text: '<!doctype html>' } })
+const typed = { args: '', origin: { kind: 'composer' as const }, presentation: { isFullscreen: false, columns: 120 } }
+
+test('/let-them-talk is there in every chat, headless ones too', async ($, on) => {
+  const registered: string[] = []
+  on('command.register', (_$, e) => { registered.push(e.name); return { value: { command: e.name } } })
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  expect(registered).toEqual(['let-them-talk'])
+})
+
+test('/let-them-talk starts the app with uvx, apart from the chat, on the port the app uses', async ($, on) => {
+  const runs: (readonly string[])[] = []
+  mock.env(on, { LTT_PORT: '9999' })
+  on('http.fetch', () => ({ deny: 'connection refused' }))
+  on('process.run', (_$, e) => { runs.push(e.argv); return ran('running\nInstalled 1 package in 12ms\nLet Them Talk running at http://localhost:9999  (Ctrl+C to stop)\n') })
+
+  const { text } = await $.command.run({ command: 'let-them-talk', ...typed })
+  expect(runs).toEqual([['sh', '-c', START, 'let-them-talk', 'http://localhost:9999']])
+  expect(text).toBe('Let Them Talk is running at http://localhost:9999 and opens in your browser. It keeps running after this chat ends.')
+})
+
+test('/let-them-talk when the app runs already: the app opens its page', async ($, on) => {
+  let runs = 0
+  mock.env(on, {})
+  on('http.fetch', (_$, e) => { expect(e.url).toBe('http://localhost:8765/'); return page('LetThemTalk/1 Python/3.12.3') })
+  on('process.run', () => { runs++; return ran('ended 0\nLet Them Talk is already running at http://localhost:8765\n') })
+
+  const { text } = await $.command.run({ command: 'let-them-talk', ...typed })
+  expect(runs).toBe(1) // uvx let-them-talk opens the page, as when typed in a terminal
+  expect(text).toBe('Let Them Talk is already running. Opening http://localhost:8765 in your browser.')
+})
+
+test('/let-them-talk without uv says so, with where to get it', async ($, on) => {
+  mock.env(on, {})
+  on('http.fetch', () => page('nginx'))
+  on('process.run', () => ran('no-uv\n'))
+
+  const done = await $.command.run({ command: 'let-them-talk', ...typed })
+  expect(done.text).toBe(`Let Them Talk starts with uv, which isn't installed. Install uv (${UV_LINK}), then run /let-them-talk again.`)
+  expect(done.exitCode).toBe(1)
+})
+
+test('/let-them-talk says why the app did not start, or that it is still starting', () => {
+  const url = 'http://localhost:8765'
+  const taken = 'Port 8765 is already used by another program, not Let Them Talk. Stop that program, or use another port: LTT_PORT=8766 let-them-talk'
+  expect(startReport(`ended 1\n${taken}\n`, url, false)).toEqual({ text: `Let Them Talk didn't start.\n\n${taken}`, exitCode: 1 })
+  expect(startReport('', url, false)).toEqual({ text: "Let Them Talk didn't start.", exitCode: 1 })
+  // the first start downloads it: nothing printed yet
+  expect(startReport('running\n', url, false).text).toBe('Let Them Talk is starting. The first start downloads it, which can take a minute; '
+    + 'then it opens in your browser at http://localhost:8765. It keeps running after this chat ends.')
+  // running already, but uvx could not open it (offline, say)
+  expect(startReport('ended 2\nerror: Failed to fetch\n', url, true).text).toBe('Let Them Talk is already running. Open http://localhost:8765 in your browser.')
 })

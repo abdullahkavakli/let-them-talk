@@ -12,7 +12,7 @@ A visual board for your agents. Each running Claude Code session is a card, and 
 - Click an arrow to read what the two chats sent each other.
 - Start a team: a master and up to 8 agents, each with its own role, prompt, model and effort.
 - Terminal chats, Cursor chats and background agents share one board, with the subagents they run.
-- Local and small: the server is one Python file that uses only Python's standard library, and nothing is installed into Claude Code.
+- Local and small: the server is one Python file that uses only Python's standard library. The Claude Code plugin is optional: `uvx let-them-talk` works without it.
 
 ## Use cases
 
@@ -24,7 +24,14 @@ A visual board for your agents. Each running Claude Code session is a card, and 
 
 Needs Python 3.12+ and Claude Code (on Windows, both inside WSL).
 
-- One line: `uvx let-them-talk` (needs [uv](https://docs.astral.sh/uv/); or `pipx run let-them-talk`). It starts the board and opens it in your browser; `--no-open` skips that. Its boards are kept in `~/.local/share/let-them-talk`.
+- From Claude Code: install the plugin once, then type `/let-them-talk` in any chat. It starts the board and opens it in your browser (it needs [uv](https://docs.astral.sh/uv/)), and the board keeps running after that chat ends. The plugin also shows each chat's suggested next prompt on the board ([more](docs/configuration.md#claude-code-plugin)).
+
+  ```
+  claude plugin marketplace add abdullahkavakli/let-them-talk
+  claude plugin install let-them-talk@let-them-talk
+  ```
+
+- One line, without the plugin: `uvx let-them-talk` (needs [uv](https://docs.astral.sh/uv/); or `pipx run let-them-talk`). It starts the board and opens it in your browser; `--no-open` skips that. Its boards are kept in `~/.local/share/let-them-talk`, whichever way you start it.
 - From a copy of this repository, on Windows: double-click `Start Let Them Talk.bat`.
 - From a copy of this repository, on macOS, Linux or WSL: `./start.sh`, then open <http://localhost:8765>.
 

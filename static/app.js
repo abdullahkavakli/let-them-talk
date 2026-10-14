@@ -2941,7 +2941,7 @@ function refreshAgentDialog() {
       ? `With Haiku, auto mode may not be available; ${team ? "the master or an agent on it" : "the agent"} then asks before it acts.`
       : bg && "Claude Code must already trust the folder (run claude there once and accept).",
     !bg && `${nd.editor.value} must trust the folder: in Restricted Mode, Claude Code is off there and no chat opens.`,
-    !bg && nd.model.value && `Let Them Talk's mod runs it on ${nd.model.selectedOptions[0].text} ` +
+    !bg && nd.model.value && `Let Them Talk's plugin runs it on ${nd.model.selectedOptions[0].text} ` +
       `(${nd.editor.value}'s model menu still shows its own); it starts with its usual permissions.`,
   ].filter(Boolean).join(" ");
 }

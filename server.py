@@ -139,7 +139,9 @@ ON_WSL = HOST_LABEL == "WSL"
 CSRF_HEADER = "X-Let-Them-Talk"
 # Variables a Claude Code session sets for its own children. If this server is
 # started from a Claude terminal, the claude processes it runs must not
-# inherit them, or they would act as parts of that session.
+# inherit them, or they would act as parts of that session. The plugin's
+# /let-them-talk starts the app without them (SESSION_ENV in its register.ts,
+# the same list; a check compares the two).
 SESSION_ENV = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET",
                "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_CHILD_SESSION",
                "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_JOB_DIR", "CLAUDE_CODE_SESSION_ATTENDED",
@@ -557,9 +559,9 @@ USER_NOTE_RE = re.compile(r"\[[^\]\n]+\] Message from your user:\s*")  # see mes
 PEER_RE = re.compile(r'<cross-session-message[^>]*?from-name="([^"]*)"[^>]*>\s*(.*?)\s*</cross-session-message>', re.S)
 tldr_lock = threading.Lock()
 tldr_cache = {}  # reply id -> {"state": pending|done|failed, "text", "at"}
-# The let-them-talk-suggestions mod (mods/ in this repo), in each chat that
-# loads it, sends the suggestion its prompt box shows: Claude Code's own, or
-# one it made the same way while this app had the chat open (see the mod).
+# The let-them-talk plugin (mods/let-them-talk-suggestions in this repo), in
+# each chat that loads it, sends the suggestion its prompt box shows: Claude
+# Code's own, or one it made the same way while this app had the chat open (see the mod).
 own_suggest = {}   # sessionId -> {"text", "at", "made"}
 has_mod = {}       # sessionId -> when the mod last said hello or sent one
 watched = {}       # sessionId -> when the page last polled its chat (drawer open)
