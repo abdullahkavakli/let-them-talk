@@ -2,9 +2,15 @@
 
 [![Latest release](https://img.shields.io/github/v/release/abdullahkavakli/let-them-talk)](https://github.com/abdullahkavakli/let-them-talk/releases/latest)
 
-A visual board for your agents. Each running Claude Code session is a card, and an arrow from one card to another tells both chats who they work with and why.
+**A visual board for your agents.** Draw an arrow between two Claude Code sessions and they talk.
 
 ![Let Them Talk: cards for Claude Code chats, an arrow between two of them, and their conversation](docs/demo/demo.gif)
+
+## Use cases
+
+- You want your agents to communicate with each other.
+- Your Claude CLI (or extension) sessions need to be aware of one another and exchange messages.
+- You're working on a project where you need to stay on top of everything (not necessarily code-related).
 
 ## What it does
 
@@ -12,13 +18,6 @@ A visual board for your agents. Each running Claude Code session is a card, and 
 - Click an arrow to read what the two chats sent each other.
 - Start a team: a master and up to 8 agents, each with its own role, prompt, model and effort.
 - Terminal chats, Cursor chats and background agents share one board, with the subagents they run.
-- Local and small: the server is one Python file that uses only Python's standard library. The Claude Code plugin is optional: `uvx let-them-talk` works without it.
-
-## Use cases
-
-- You want your agents to communicate with each other.
-- Your Claude CLI (or extension) sessions need to be aware of one another and exchange messages.
-- You're working on a project where you need to stay on top of everything (not necessarily code-related).
 
 ## Start
 
@@ -31,7 +30,7 @@ Needs Python 3.12+ and Claude Code (on Windows, both inside WSL).
   claude plugin install let-them-talk@let-them-talk
   ```
 
-- One line, without the plugin: `uvx let-them-talk` (needs [uv](https://docs.astral.sh/uv/); or `pipx run let-them-talk`). It starts the board and opens it in your browser; `--no-open` skips that. Its boards are kept in `~/.local/share/let-them-talk`, whichever way you start it.
+- One line, without the plugin: `uvx let-them-talk` (needs [uv](https://docs.astral.sh/uv/); or `pipx run let-them-talk`). It starts the board and opens it in your browser; `--no-open` skips that. Its boards are kept in `~/.local/share/let-them-talk`.
 - From a copy of this repository, on Windows: double-click `Start Let Them Talk.bat`.
 - From a copy of this repository, on macOS, Linux or WSL: `./start.sh`, then open <http://localhost:8765>.
 
