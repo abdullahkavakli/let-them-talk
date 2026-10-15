@@ -10,6 +10,7 @@
 
 - You want your agents to communicate with each other.
 - Your Claude CLI (or extension) sessions need to be aware of one another and exchange messages.
+- You run so many agents that you lose track of what each one is doing.
 - You're working on a project where you need to stay on top of everything (not necessarily code-related).
 
 ## What it does
