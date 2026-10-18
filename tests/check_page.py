@@ -72,6 +72,22 @@ def view(bid):
     }
 
 
+def not_on_board(c, title, **kw):
+    """A session in Add agents (FakeAPI.avail), in the other folder."""
+    return card(f"{c * 8}-{c * 4}-4{c * 3}-8{c * 3}-{c * 12}", title, 0, 0, cwd=OTHER, **kw)
+
+
+# Sleeping background agents (Claude Code still lists them, no process runs), two with one name and one with no
+# saved conversation; a running background agent; an editor chat.
+ASLEEP_BG = dict(background=True, kind="bg", running=False, status="asleep", pid=None, resumable=True)
+SLEEPY = not_on_board("1", "sleepy", jobId="0a5ee001", **ASLEEP_BG)
+TWIN = not_on_board("2", "sleepy", jobId="0a5ee002", **ASLEEP_BG)
+NO_REPLY = not_on_board("3", "restart me", jobId="0a5ee003", **{**ASLEEP_BG, "resumable": False})
+RUNNING_BG = not_on_board("4", "busy bee", background=True, kind="bg", jobId="0a5ee004", status="busy")
+EDITOR_CHAT = not_on_board("5", "cursor chat", entrypoint="claude-vscode", editor="Cursor")
+avail_row = lambda s: f'#available .avail-row[data-sid="{s["sessionId"]}"]'
+
+
 def agent(i, label, state, phase=None, **kw):
     a = {"id": f"a{i}", "label": label, "state": state, "model": "claude-sonnet-5-5", "phase": phase,
          "durationMs": 60000 + i * 1000, "tokens": 12000, "toolCalls": None if state == "running" else 5, "lastTool": None}
@@ -128,6 +144,9 @@ class FakeAPI:
         self.patch = {}         # sessionId -> fields of its card that differ
         self.launches = []      # what the server lists as under way
         self.says = None        # the text of Claude's reply in every chat (default: a short list)
+        self.avail = []         # more sessions in Add agents; a deleted background agent leaves it
+        self.hold_post = False  # a POST's reply waits in .held until the check sends it
+        self.keep_deleted = False  # a deleted background agent is still listed (as by a poll sent before it went)
 
     def chat(self, sid):
         self.asked += 1
@@ -158,6 +177,10 @@ class FakeAPI:
             body = {"ok": True, "result": self.post_result} if self.post_status == 200 else {"error": "It didn't work."}
             if path == "/api/boards":
                 body["id"] = self.new_board
+            if self.hold_post:
+                return self.held.append((route, body))
+            if path.endswith("/agent-delete") and self.post_status == 200 and not self.keep_deleted:
+                self.avail = [s for s in self.avail if s.get("jobId") != request.post_data_json.get("jobId")]
             return route.fulfill(status=self.post_status, content_type="application/json", body=json.dumps(body))
         if path == "/api/state":
             if "board" not in q:
@@ -167,6 +190,7 @@ class FakeAPI:
             else:
                 data = view(q["board"])
                 data["board"]["connections"] += self.arrows if q["board"] == "b1" else []
+                data["available"] += copy.deepcopy(self.avail)
                 for n in data["nodes"]:
                     n.update(self.patch.get(n["sessionId"], {}))
                 data["launches"] = self.launches
@@ -219,8 +243,8 @@ def step(page, name):
             getSelection().removeAllRanges(); document.activeElement?.blur?.(); if (state.selected) closeDrawer(); }""")
 
 
-def open_page(browser, width=1440, height=900, scheme="light"):
-    ctx = browser.new_context(viewport={"width": width, "height": height}, color_scheme=scheme)
+def open_page(browser, width=1440, height=900, scheme="light", **kw):
+    ctx = browser.new_context(viewport={"width": width, "height": height}, color_scheme=scheme, **kw)
     page = ctx.new_page()
     page.set_default_timeout(5000)
     page.api = FakeAPI()
@@ -1453,6 +1477,148 @@ def checks_wide(browser):
               and said["title"] == "Delete the background agent beta?" and plain["focus"] == "ask-yes" and not plain["danger"]
               and page.dialogs == [], (look, esc, cancelled, said, plain, page.dialogs))
 
+    # Add agents: a sleeping background agent's row has a − that deletes it, as Delete agent on its card does.
+    def onto_del(s):
+        """The pointer onto a row, then onto its − (which takes the pointer only while its row is under it)."""
+        park(page)
+        page.hover(avail_row(s) + " .name")
+        page.hover(avail_row(s) + " .del")
+
+    name = ("add agents: only a sleeping background agent's row has a −, hidden at rest, shown under the pointer and when the "
+            "keys reach it; red on the plain fill of the + beside it, as big, in light and dark")
+    with step(page, name):
+        page.api.avail = [SLEEPY, NO_REPLY, RUNNING_BG, EDITOR_CHAT]
+        poll(page)
+        park(page)
+        has = page.eval_on_selector_all("#available .avail-row", "rs => rs.map(r => [r.querySelector('.name').textContent, !!r.querySelector('.del')])")
+        look = lambda: page.evaluate("""(sel) => {
+            const d = document.querySelector(sel + ' .del'), a = document.querySelector(sel + ' .add'), s = getComputedStyle(d);
+            const b = d.getBoundingClientRect(), p = a.getBoundingClientRect();
+            return { shown: s.opacity === '1' && s.pointerEvents === 'auto', hidden: s.opacity === '0' && s.pointerEvents === 'none',
+                     red: s.color === getComputedStyle(document.querySelector('#delete-board')).color, colour: s.color,
+                     plain: s.backgroundColor === getComputedStyle(a).backgroundColor && s.backdropFilter === 'none',
+                     pair: b.width === 26 && b.height === 26 && p.width === 26 && b.right <= p.left && p.left - b.right <= 6
+                       && Math.abs(b.top - p.top) < 1,
+                     title: d.getAttribute('title'), label: d.getAttribute('aria-label') }; }""", avail_row(SLEEPY))
+        rest = look()
+        page.hover(avail_row(SLEEPY) + " .name")
+        page.wait_for_timeout(300)
+        hovered = look()
+        park(page)
+        page.focus(avail_row(SLEEPY) + " .add")
+        page.keyboard.press("Shift+Tab")
+        page.wait_for_timeout(300)
+        keys = look()["shown"] and page.evaluate("document.activeElement.matches('.del')")
+        page.emulate_media(color_scheme="dark")
+        try:
+            page.wait_for_timeout(300)  # its colour fades over
+            dark = look()
+        finally:
+            page.emulate_media(color_scheme="light")
+        check(name, has == [["zeta", False], ["sleepy", True], ["restart me", True], ["busy bee", False], ["cursor chat", False]]
+              and rest["hidden"] and rest["title"] == "Delete this background agent" and rest["label"] == "Delete sleepy"
+              and all(v["red"] and v["plain"] and v["pair"] for v in (rest, dark)) and rest["colour"] != dark["colour"]
+              and hovered["shown"] and keys, (has, rest, hovered, keys, dark))
+
+    name = ("add agents: the − asks first in the words of Delete agent on a card; Cancel and Esc send nothing; a yes sends one "
+            "delete for that agent (of two with one name, the one picked), its row goes without waiting for a poll and the "
+            "keys go on to the row beside it")
+    with step(page, name):
+        open_card(page, B)
+        page.locator("#drawer-body button", has_text="Delete agent").click()
+        on_card = answer(page, yes=False)
+        page.evaluate("closeDrawer()")
+        page.api.avail = [SLEEPY, TWIN]
+        poll(page)
+        deletes = lambda: [b for p, b in page.api.posts if p.endswith("/agent-delete")]
+        onto_del(TWIN)
+        page.click(avail_row(TWIN) + " .del")
+        cancelled = answer(page, yes=False)
+        onto_del(TWIN)
+        page.click(avail_row(TWIN) + " .del")
+        page.wait_for_selector("#ask[open]")
+        page.keyboard.press("Escape")
+        page.wait_for_selector("#ask[open]", state="detached")
+        none_sent = deletes() == []
+        page.api.hold = {"b1"}  # no poll answers from here on: the row goes by itself
+        park(page)
+        page.focus(avail_row(TWIN) + " .add")
+        page.keyboard.press("Shift+Tab")
+        page.keyboard.press("Enter")
+        said = answer(page)
+        page.wait_for_selector(avail_row(TWIN), state="detached", timeout=2000)
+        kept = page.locator(avail_row(SLEEPY)).count()
+        focus = page.evaluate("document.activeElement.closest('.avail-row')?.dataset.sid")
+        page.api.hold = set()
+        for route, data in page.api.held:
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(data))
+        check(name, on_card["title"] == "Delete the background agent beta?" and said["title"] == "Delete the background agent sleepy?"
+              and all(said[k] == on_card[k] == cancelled[k] for k in ("text", "ok", "danger", "focus")) and said["danger"]
+              and said["focus"] == "ask-no" and none_sent and deletes() == [{"jobId": TWIN["jobId"]}] and kept == 1
+              and focus == SLEEPY["sessionId"], (on_card, cancelled, said, deletes(), kept, focus))
+
+    name = ("add agents: while an agent is deleted its row fades, its − turns and takes no second click, and its + waits; a "
+            "failure is a notice, and the row is as it was")
+    with step(page, name):
+        page.api.avail = [SLEEPY]
+        poll(page)
+        page.api.hold_post = True  # the server is still deleting it
+        onto_del(SLEEPY)
+        page.click(avail_row(SLEEPY) + " .del")
+        answer(page)
+        page.wait_for_selector(avail_row(SLEEPY) + ".deleting")
+        now = lambda: page.evaluate("""(sel) => { const r = document.querySelector(sel), d = r.querySelector('.del');
+            return { busy: r.classList.contains('deleting'), ring: !!d.querySelector('.state-icon.running'),
+                     shown: getComputedStyle(d).opacity === '1', faded: getComputedStyle(r.querySelector('.name')).opacity === '0.5',
+                     waits: r.querySelector('.add').disabled, title: d.getAttribute('title') }; }""", avail_row(SLEEPY))
+        busy = now()
+        page.click(avail_row(SLEEPY) + " .del")
+        page.wait_for_timeout(200)
+        again = asking(page)
+        for route, _ in page.api.held:
+            route.fulfill(status=500, content_type="application/json", body=json.dumps({"error": "It didn't work."}))
+        page.wait_for_selector("#toasts .toast.error")
+        after = now()
+        sent = [b for p, b in page.api.posts if p.endswith("/agent-delete")]
+        check(name, busy == {"busy": True, "ring": True, "shown": True, "faded": True, "waits": True, "title": "Deleting…"}
+              and not again and sent == [{"jobId": SLEEPY["jobId"]}] and page.locator("#toasts .toast.error").count() == 1
+              and not after["busy"] and not after["ring"] and not after["faded"] and not after["waits"], (busy, again, sent, after))
+
+    name = "add agents: a poll that still lists a deleted agent doesn't bring its row back, and once one doesn't, nothing of it is kept"
+    with step(page, name):
+        page.api.avail = [SLEEPY]
+        page.api.keep_deleted = True  # the server's list still has it, as a poll sent before it went does
+        poll(page)
+        onto_del(SLEEPY)
+        page.click(avail_row(SLEEPY) + " .del")
+        answer(page)
+        page.wait_for_selector(avail_row(SLEEPY), state="detached")
+        poll(page, 2)
+        stale = page.locator(avail_row(SLEEPY)).count()
+        page.api.avail = []
+        poll(page)
+        check(name, stale == 0 and page.evaluate("state.deleting.size") == 0 and page.locator("#available .avail-row").count() == 1)
+
+    # The tooltip puts a title back as the last attribute for the poll's compare: one that wasn't last made the
+    # list differ, so it was rebuilt under the pointer on every poll (and the − faded in again each time).
+    name = "add agents: polls while the pointer rests on a row's − or + rebuild nothing, and the − and its label stay"
+    with step(page, name):
+        page.api.avail = [SLEEPY]
+        poll(page)
+        page.evaluate("""() => { window.__availSwaps = 0; new MutationObserver(m => window.__availSwaps += m.length)
+            .observe(document.querySelector('#available'), { childList: true, subtree: true }); }""")
+        onto_del(SLEEPY)
+        page.wait_for_selector("#tip:popover-open", timeout=1500)
+        poll(page, 3)
+        label = tip(page)
+        shown = page.evaluate(f"getComputedStyle(document.querySelector('{avail_row(SLEEPY)} .del')).opacity")
+        page.hover(avail_row(SLEEPY) + " .add")
+        page.wait_for_selector("#tip:popover-open", timeout=1500)
+        poll(page, 2)
+        swaps = page.evaluate("window.__availSwaps")
+        check(name, swaps == 0 and shown == "1" and label["open"] and label["text"] == "Delete this background agent",
+              (swaps, shown, label))
+
     name = "new agent: Chat in IDE has the folder box, on the board's folder"
     with step(page, name):
         page.locator("#new-chat").click()
@@ -2256,6 +2422,19 @@ def checks_narrow(browser):
         name = f"narrow {w} px: no sideways scrolling"
         with step(page, name):
             check(name, page.evaluate("document.documentElement.scrollWidth <= innerWidth"))
+        name = f"narrow {w} px: in Add agents a long name ends in … and a sleeping agent's − and + stay whole, inside the sidebar"
+        with step(page, name):
+            long = not_on_board("6", "a sleeping background agent with a name far too long for the sidebar", jobId="0a5ee006", **ASLEEP_BG)
+            page.api.avail = [long]
+            poll(page)
+            page.hover(avail_row(long) + " .name")
+            page.wait_for_timeout(300)  # the − fades in
+            look = page.evaluate("""(sel) => { const r = document.querySelector(sel), n = r.querySelector('.name');
+                const side = document.querySelector('.sidebar').getBoundingClientRect(), box = (s) => r.querySelector(s).getBoundingClientRect();
+                return { cut: n.clientWidth > 0 && n.scrollWidth > n.clientWidth && getComputedStyle(n).textOverflow === 'ellipsis',
+                         whole: [box('.del'), box('.add')].every(b => b.width === 26 && b.height === 26 && b.left >= side.left && b.right <= side.right),
+                         shown: getComputedStyle(r.querySelector('.del')).opacity === '1' }; }""", avail_row(long))
+            check(name, all(look.values()), look)
         # a workflow card too narrow for its state's word, name and numbers shows the state by its icon alone
         name = f"narrow {w} px: a workflow card's state badge " + ("shows by its icon alone" if w == 800 else "keeps its word")
         with step(page, name):
@@ -2283,6 +2462,18 @@ def checks_narrow(browser):
                 check(name, list_first and detail_then and list_in() and not detail_in() and chevron and words == "All agents",
                       (chevron, words))
         page.context.close()
+    # On a touch screen nothing hovers: a sleeping background agent's − shows all the time.
+    name = "touch screen: a sleeping background agent's − shows without a pointer on its row"
+    touch = open_page(browser, 390, 844, has_touch=True)
+    with step(touch, name):
+        touch.api.avail = [SLEEPY]
+        poll(touch)
+        flips = touch.evaluate("matchMedia('(hover: none)').matches")
+        shown = touch.evaluate(f"getComputedStyle(document.querySelector('{avail_row(SLEEPY)} .del')).opacity")
+        rule = touch.evaluate("""() => [...document.styleSheets].flatMap(s => [...s.cssRules]).some(r => r.conditionText === '(hover: none)'
+            && [...r.cssRules].some(x => x.selectorText === '.avail-row .btn.del' && x.style.opacity === '1'))""")
+        check(name, shown == "1" if flips else rule, (flips, shown, rule))  # without touch emulation, the rule at least
+    touch.context.close()
 
 
 def main():

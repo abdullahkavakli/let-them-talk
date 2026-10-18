@@ -191,7 +191,20 @@ select option { background: var(--panel); color: var(--text); }
 .avail-row:hover { background: var(--panel-2); }
 .avail-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .avail-row .btn { padding: 3px 10px; font-size: 12px; }
-.avail-row .btn.add { flex: none; width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+.avail-row .btn:is(.add, .del) { flex: none; width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+/* A sleeping background agent's − (renderAvailable in app.js): red, on the same plain fill as the + (no glass on
+   glass), close beside it as a pair. Its place is kept, so the name doesn't move; it shows under the pointer, when
+   the keys reach the row, while it is deleted, and always on a touch screen (no hover there). */
+.avail-row .btn.del {
+  margin-right: -4px; opacity: 0; pointer-events: none;
+  transition: opacity .2s ease, background-color .15s ease, color .15s ease;
+}
+.avail-row:is(:hover, :has(:focus-visible), .deleting) .btn.del { opacity: 1; pointer-events: auto; }
+@media (hover: none) { .avail-row .btn.del { opacity: 1; pointer-events: auto; } }
+/* being deleted: the row fades, the − turns, the + waits */
+.avail-row.deleting :is(.dot, .name) { opacity: .5; }
+.avail-row.deleting .btn.del { cursor: progress; }
+.avail-row .btn.del .state-icon { --ico: currentColor; width: 14px; height: 14px; }
 #activity { list-style: none; padding: 0; margin: 0; font-size: 12px; }
 #activity li { padding: 5px 0; border-bottom: 1px solid var(--border); }
 #activity li time { color: var(--muted); margin-right: 6px; }
@@ -710,7 +723,7 @@ dialog input[type="radio"] { width: auto; flex: none; margin: 3px 0 0; accent-co
 
 @media (prefers-reduced-motion: reduce) {
   .wire.sending { animation: none; }
-  .btn, .icon-btn, .avail-row, .browse-item, .node, .resizer::after { transition: none; }
+  .btn, .icon-btn, .avail-row, .browse-item, .node, .resizer::after, .avail-row .btn.del { transition: none; }
 }
 
 /* ------------------------------------------------------------ Liquid Glass

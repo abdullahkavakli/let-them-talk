@@ -1092,25 +1092,91 @@ function plusIcon() {
   return icon;
 }
 
+function minusIcon() {
+  const icon = svg("svg", { width: 12, height: 12, viewBox: "0 0 12 12", "aria-hidden": "true" });
+  icon.append(svg("path", { d: "M1.5 6h9", stroke: "currentColor", "stroke-width": 1.6, "stroke-linecap": "round" }));
+  return icon;
+}
+
+// A sleeping background agent (Claude Code still lists it, no process runs) has
+// a − on its row, shown under the pointer or the keys: it is deleted from there
+// as with Delete agent on its card. A running one is ended from its card first.
+const deletable = (s) => s.background && s.jobId && !s.running;
+state.deleting = new Map();  // sessionId -> { gone, at }: being deleted, or deleted (gone) while the server may still list it
+
 function renderAvailable() {
   const box = $("#available");
+  // A deleted agent stays off the list, also when a poll sent before it went still has it, until a poll
+  // doesn't (or 30 s have passed: the server's list may have kept its last answer).
+  for (const [sid, d] of state.deleting) {
+    if (d.gone && (Date.now() - d.at > 30000 || !state.view.available.some((s) => s.sessionId === sid))) state.deleting.delete(sid);
+  }
   const groups = {};
-  for (const s of state.view.available) (groups[where(s)] ||= []).push(s);
+  for (const s of state.view.available) if (!state.deleting.get(s.sessionId)?.gone) (groups[where(s)] ||= []).push(s);
   const folders = Object.keys(groups).sort();
   if (folders.length === 0) {
     swapChildren(box, [el("p", { class: "muted small", text: "Every running session is already on this board." })]);
     return;
   }
+  // Each title is the last attribute: under the pointer the tooltip takes it off and puts it back last (see
+  // tips), so a poll's compare then sees no change and the list isn't rebuilt under the pointer every time.
   swapChildren(box, folders.map((cwd) => el("div", { class: "folder-group" },
     el("div", { class: "folder-head" },
       el("p", { class: "folder-name path", title: cwd }, pathNodes(cwd)),
-      el("button", { class: "btn new-here", text: "+ New agent", title: `Start a new agent in ${cwd}`,
-        "aria-label": `New agent in ${cwd}`, onclick: () => openNewAgent(cwd) })),
-    ...groups[cwd].map((s) => el("div", { class: "avail-row" },
-      el("span", { class: `dot ${s.status}`, title: s.status, role: "img", "aria-label": s.status }),
-      el("span", { class: "name", text: display(s), title: [s.name && `@${s.name}`, onWindows(s) ? "Windows" : "WSL", opener(s), s.status].filter(Boolean).join(" · ") }),
-      el("button", { class: "btn add", title: "Add to this board", "aria-label": `Add ${display(s)} to this board`,
-        onclick: () => addNode(s.sessionId) }, plusIcon()))))));
+      el("button", { class: "btn new-here", text: "+ New agent", "aria-label": `New agent in ${cwd}`,
+        title: `Start a new agent in ${cwd}`, onclick: () => openNewAgent(cwd) })),
+    ...groups[cwd].map((s) => {
+      const busy = state.deleting.has(s.sessionId);
+      return el("div", { class: busy ? "avail-row deleting" : "avail-row", "data-sid": s.sessionId },
+        el("span", { class: `dot ${s.status}`, role: "img", "aria-label": s.status, title: s.status }),
+        el("span", { class: "name", text: display(s), title: [s.name && `@${s.name}`, onWindows(s) ? "Windows" : "WSL", opener(s), s.status].filter(Boolean).join(" · ") }),
+        deletable(s) && el("button", { class: "btn danger del", "aria-label": `Delete ${display(s)}`,
+          title: busy ? "Deleting…" : "Delete this background agent", onclick: () => deleteAvailable(s.sessionId) },
+        busy ? stateIcon("running") : minusIcon()),
+        el("button", { class: "btn add", "aria-label": `Add ${display(s)} to this board`, disabled: busy,
+          title: "Add to this board", onclick: () => addNode(s.sessionId) }, plusIcon()));
+    }))));
+}
+
+// The − on a row: after a yes (the words of Delete agent on a card) it is deleted, and its row folds away
+// without waiting for the next poll. A failure is a notice, and the row stays as it was.
+async function deleteAvailable(sid) {
+  const find = () => state.view?.available.find((s) => s.sessionId === sid);
+  if (state.deleting.has(sid) || !find() || !await confirmDelete(find())) return;
+  const s = find();
+  if (!s) return;  // put on the board, or gone, meanwhile
+  if (!deletable(s)) return toast(`${display(s)} is running again: end it from its card first, then delete it.`);
+  state.deleting.set(sid, { gone: false });
+  renderAvailable();
+  try {
+    await api(`/api/board/${state.boardId}/agent-delete`, { jobId: s.jobId });
+    state.deleting.set(sid, { gone: true, at: Date.now() });
+    await foldAway(sid);
+  } catch (e) {
+    state.deleting.delete(sid);
+    toast(failText(e), "error");
+    renderAvailable();
+  }
+  poll();
+}
+
+// A deleted agent's row (its folder's, when it was the last) folds up in 200 ms; with reduced motion, or if
+// anything goes wrong, it goes at once. The keys, if they were on it, go on to the next row (else the one before).
+async function foldAway(sid) {
+  const rows = [...document.querySelectorAll("#available .avail-row")], i = rows.findIndex((r) => r.dataset.sid === sid);
+  const row = rows[i], next = (rows[i + 1] || rows[i - 1])?.dataset.sid, keys = !!row?.contains(document.activeElement);
+  try {
+    const part = row && (row.parentElement.querySelectorAll(".avail-row").length === 1 ? row.parentElement : row);
+    if (part && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      part.style.overflow = "hidden";
+      const fold = part.animate([{ height: `${part.offsetHeight}px` }, { height: 0, paddingTop: 0, paddingBottom: 0,
+        marginBottom: 0, borderTopWidth: 0, opacity: 0 }], { duration: 200, easing: "ease-in-out", fill: "forwards" });
+      await Promise.race([fold.finished, new Promise((done) => setTimeout(done, 400))]);
+    }
+  } catch { /* it goes at once */ }
+  renderAvailable();
+  const to = next && $(`#available .avail-row[data-sid="${next}"]`);
+  if (keys && to) (to.querySelector(".del") || to.querySelector(".add")).focus();
 }
 
 function renderActivity() {
@@ -3673,6 +3739,12 @@ function compactButton(n) {
 // the other ways a card goes, not beside Open in terminal and Stop.
 // End: it stops and its terminals close, but it stays (a prompt wakes it), as
 // End this chat for a chat in a terminal. Delete: it is gone from the list.
+// The question, the same from a card and from the − on a row in Add agents.
+function confirmDelete(n) {
+  return confirmBox(`Delete the background agent ${display(n)}?`, "It's removed for good, with its own " +
+    "worktree if it has one. Its conversation stays on disk.", { ok: "Delete agent", danger: true });
+}
+
 function deleteControls(n) {
   return el("div", { class: "drawer-actions" },
     n.running && el("button", { class: "btn", text: "End agent",
@@ -3687,8 +3759,7 @@ function deleteControls(n) {
     el("button", { class: "btn danger", text: "Delete agent",
       title: "claude rm: removes it from Claude Code's list, with its own worktree if it has one (its conversation stays on disk)",
       onclick: async () => {
-        if (await confirmBox(`Delete the background agent ${display(n)}?`, "It's removed for good, with its own " +
-          "worktree if it has one. Its conversation stays on disk.", { ok: "Delete agent", danger: true })) {
+        if (await confirmDelete(n)) {
           agentAction(n, "agent-delete", closeDrawer);
         }
       } }));
