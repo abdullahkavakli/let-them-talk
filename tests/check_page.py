@@ -347,6 +347,12 @@ def title_of(page, sel):
     return page.evaluate("(s => document.querySelector(s).getAttribute('title'))", sel)
 
 
+def fades_done(page, *sels):
+    """Waits until the fades (CSS transitions) on what each selector finds are over: its own animations, not the
+    page's (some pulse for good). A fixed wait can end mid-fade on a slow machine."""
+    page.wait_for_function("ss => ss.every(s => document.querySelector(s).getAnimations().length === 0)", arg=list(sels))
+
+
 def stray_share(page, box, colour="255, 0, 0"):
     """What share of the pixels in the box (a screenshot of it) is not the one solid colour it is painted in."""
     import base64
@@ -1491,28 +1497,29 @@ def checks_wide(browser):
         poll(page)
         park(page)
         has = page.eval_on_selector_all("#available .avail-row", "rs => rs.map(r => [r.querySelector('.name').textContent, !!r.querySelector('.del')])")
-        look = lambda: page.evaluate("""(sel) => {
-            const d = document.querySelector(sel + ' .del'), a = document.querySelector(sel + ' .add'), s = getComputedStyle(d);
-            const b = d.getBoundingClientRect(), p = a.getBoundingClientRect();
-            return { shown: s.opacity === '1' && s.pointerEvents === 'auto', hidden: s.opacity === '0' && s.pointerEvents === 'none',
-                     red: s.color === getComputedStyle(document.querySelector('#delete-board')).color, colour: s.color,
-                     plain: s.backgroundColor === getComputedStyle(a).backgroundColor && s.backdropFilter === 'none',
-                     pair: b.width === 26 && b.height === 26 && p.width === 26 && b.right <= p.left && p.left - b.right <= 6
-                       && Math.abs(b.top - p.top) < 1,
-                     title: d.getAttribute('title'), label: d.getAttribute('aria-label') }; }""", avail_row(SLEEPY))
+        def look():
+            # Read once the fades are over, not after a fixed time: in dark, the − and the + take two fades (theirs starts
+            # again while their row's colour fades), and on a slow machine 300 ms caught the − one step short of its red.
+            fades_done(page, avail_row(SLEEPY) + " .del", avail_row(SLEEPY) + " .add", "#delete-board")
+            return page.evaluate("""(sel) => {
+                const d = document.querySelector(sel + ' .del'), a = document.querySelector(sel + ' .add'), s = getComputedStyle(d);
+                const b = d.getBoundingClientRect(), p = a.getBoundingClientRect();
+                return { shown: s.opacity === '1' && s.pointerEvents === 'auto', hidden: s.opacity === '0' && s.pointerEvents === 'none',
+                         red: s.color === getComputedStyle(document.querySelector('#delete-board')).color, colour: s.color,
+                         plain: s.backgroundColor === getComputedStyle(a).backgroundColor && s.backdropFilter === 'none',
+                         pair: b.width === 26 && b.height === 26 && p.width === 26 && b.right <= p.left && p.left - b.right <= 6
+                           && Math.abs(b.top - p.top) < 1,
+                         title: d.getAttribute('title'), label: d.getAttribute('aria-label') }; }""", avail_row(SLEEPY))
         rest = look()
         page.hover(avail_row(SLEEPY) + " .name")
-        page.wait_for_timeout(300)
         hovered = look()
         park(page)
         page.focus(avail_row(SLEEPY) + " .add")
         page.keyboard.press("Shift+Tab")
-        page.wait_for_timeout(300)
         keys = look()["shown"] and page.evaluate("document.activeElement.matches('.del')")
         page.emulate_media(color_scheme="dark")
         try:
-            page.wait_for_timeout(300)  # its colour fades over
-            dark = look()
+            dark = look()  # (with the keys on the −, the tooltip has its title off)
         finally:
             page.emulate_media(color_scheme="light")
         check(name, has == [["zeta", False], ["sleepy", True], ["restart me", True], ["busy bee", False], ["cursor chat", False]]
@@ -1546,7 +1553,7 @@ def checks_wide(browser):
         page.keyboard.press("Shift+Tab")
         page.keyboard.press("Enter")
         said = answer(page)
-        page.wait_for_selector(avail_row(TWIN), state="detached", timeout=2000)
+        page.wait_for_selector(avail_row(TWIN), state="detached")  # once it has folded away
         kept = page.locator(avail_row(SLEEPY)).count()
         focus = page.evaluate("document.activeElement.closest('.avail-row')?.dataset.sid")
         page.api.hold = set()
@@ -1567,6 +1574,7 @@ def checks_wide(browser):
         page.click(avail_row(SLEEPY) + " .del")
         answer(page)
         page.wait_for_selector(avail_row(SLEEPY) + ".deleting")
+        fades_done(page, avail_row(SLEEPY) + " .del")
         now = lambda: page.evaluate("""(sel) => { const r = document.querySelector(sel), d = r.querySelector('.del');
             return { busy: r.classList.contains('deleting'), ring: !!d.querySelector('.state-icon.running'),
                      shown: getComputedStyle(d).opacity === '1', faded: getComputedStyle(r.querySelector('.name')).opacity === '0.5',
@@ -1611,6 +1619,7 @@ def checks_wide(browser):
         page.wait_for_selector("#tip:popover-open", timeout=1500)
         poll(page, 3)
         label = tip(page)
+        fades_done(page, avail_row(SLEEPY) + " .del")
         shown = page.evaluate(f"getComputedStyle(document.querySelector('{avail_row(SLEEPY)} .del')).opacity")
         page.hover(avail_row(SLEEPY) + " .add")
         page.wait_for_selector("#tip:popover-open", timeout=1500)
@@ -2428,7 +2437,7 @@ def checks_narrow(browser):
             page.api.avail = [long]
             poll(page)
             page.hover(avail_row(long) + " .name")
-            page.wait_for_timeout(300)  # the − fades in
+            fades_done(page, avail_row(long) + " .del")  # the − fades in
             look = page.evaluate("""(sel) => { const r = document.querySelector(sel), n = r.querySelector('.name');
                 const side = document.querySelector('.sidebar').getBoundingClientRect(), box = (s) => r.querySelector(s).getBoundingClientRect();
                 return { cut: n.clientWidth > 0 && n.scrollWidth > n.clientWidth && getComputedStyle(n).textOverflow === 'ellipsis',
