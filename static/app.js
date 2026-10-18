@@ -118,7 +118,7 @@ const tips = (() => {
   const SHOW_MS = 600, QUICK_MS = 300, GAP = 8, EDGE = 8;
   const tip = el("div", { id: "tip", class: "tip", popover: "manual" });
   document.body.append(tip);
-  // held: what the pointer or the focus is on: { el, titles: [[element, its title], ...], by, x, y, quiet }.
+  // held: what the pointer or the focus is on: { el, titles: [[element, its title, the attributes after it], ...], by, x, y, quiet }.
   // el is the item with the nearest title; titles also has the ones above it that would show instead (they
   // go off with it). quiet: the label was dismissed (a click, a scroll, Esc): none again till the pointer
   // or the focus leaves, and the titles stay off meanwhile, or the browser's own box would show.
@@ -135,8 +135,25 @@ const tips = (() => {
     }
     return list;
   }
-  const strip = () => { for (const [e] of held.titles) e.removeAttribute("title"); };
-  const putBack = () => { for (const [e, t] of held.titles) e.setAttribute("title", t); };
+  // A title goes back in its place among the item's attributes: the ones after it are set again behind it
+  // (setAttribute adds it last). Put back last, an item whose title wasn't its last attribute looked changed
+  // to swapChildren's compare, and its panel was rebuilt on every poll under the pointer. Not past one that
+  // holds a state (an open details, a popover, an image's src, a field's value…), which setting again could
+  // change: the title then goes last, as before.
+  const STATEFUL = /^(open|popover|src|srcset|value|checked|selected|type)$/;
+  const strip = () => {
+    for (const entry of held.titles) {
+      const names = entry[0].getAttributeNames(), at = names.indexOf("title");
+      entry[2] = at < 0 ? [] : names.slice(at + 1);  // the attributes after it
+      entry[0].removeAttribute("title");
+    }
+  };
+  const restore = ([e, t, after = []]) => {
+    e.setAttribute("title", t);
+    if (after.some((n) => STATEFUL.test(n))) return;
+    for (const n of after) if (e.hasAttribute(n)) { const v = e.getAttribute(n); e.removeAttribute(n); e.setAttribute(n, v); }
+  };
+  const putBack = () => held.titles.forEach(restore);
   const flush = () => settle(observer.takeRecords());
 
   // where the label goes under: the item; a long label wrapped over lines, the line the pointer is on;
@@ -207,7 +224,7 @@ const tips = (() => {
   // The item was drawn again (it is gone from the page): the label goes on to the new one under the pointer, if any.
   function moved() {
     if (held.by === "pointer") {
-      for (const [e, t] of held.titles) if (e.isConnected) e.setAttribute("title", t);
+      for (const entry of held.titles) if (entry[0].isConnected) restore(entry);
       const under = document.elementFromPoint(held.x, held.y), list = under ? titled(under) : [];
       if (list.length) {
         held.el = list[0][0];
