@@ -2170,6 +2170,30 @@ def checks_wide(browser):
         check(name, inside["open"] and inside["text"] == "Rename (F2)" and off is None and swaps == 0
               and folder["open"] and folder["text"] == FOLDER and folder_off is None, (inside, off, swaps, folder, folder_off))
 
+    # A title put back went last among the attributes: an item whose title wasn't last (the + in Add agents) then
+    # looked changed to the redraw's compare, and its panel was rebuilt on every poll under the pointer.
+    name = ("tooltips: redraws under the pointer rebuild no item whose title isn't its last attribute, and the title goes "
+            "back in its place")
+    with step(page, name):
+        page.evaluate("""() => { const box = el('div', { id: 'tip-test', style: 'position: fixed; left: 600px; top: 600px; z-index: 50' });
+            document.body.append(box);
+            window.__draw = () => swapChildren(box, [el('button', { class: 'btn', title: 'Says what it does', 'aria-label': 'Try it' }, 'Try')]);
+            __draw(); window.__swaps = 0;
+            new MutationObserver(m => window.__swaps += m.length).observe(box, { childList: true, subtree: true }); }""")
+        try:
+            order = lambda: page.evaluate("document.querySelector('#tip-test button').getAttributeNames()")
+            before = order()
+            shown = hover_tip(page, "#tip-test button")
+            page.evaluate("() => { __draw(); __draw(); __draw(); }")  # what every poll does to a panel
+            swaps = page.evaluate("window.__swaps")
+            page.mouse.move(700, 700)
+            page.wait_for_timeout(50)
+            after = order()
+        finally:
+            page.evaluate("document.querySelector('#tip-test').remove()")
+        check(name, shown["text"] == "Says what it does" and swaps == 0 and before == after == ["class", "title", "aria-label"],
+              (shown, swaps, before, after))
+
     name = "tooltips: an item redrawn under the pointer keeps the label, with no title stuck off, and has its title back once the pointer leaves"
     with step(page, name):
         open_card(page, A)
