@@ -12,6 +12,7 @@ Exit 0: all passed. 1: a check failed. 2: the browser couldn't run (skipped).
 import copy
 import json
 import os
+import re
 import sys
 import time
 from contextlib import contextmanager
@@ -381,6 +382,28 @@ CONTRAST = """(sel) => {
   const a = lum(text), b = lum(back);
   return (Math.max(a, b) + .05) / (Math.min(a, b) + .05);
 }"""
+
+
+def contrast(a, b):
+    """The contrast ratio of two solid colours as getComputedStyle gives them (rgb(...))."""
+    def lum(c):
+        v = [int(x) / 255 for x in re.findall(r"\d+", c)[:3]]
+        v = [x / 12.92 if x <= .03928 else ((x + .055) / 1.055) ** 2.4 for x in v]
+        return .2126 * v[0] + .7152 * v[1] + .0722 * v[2]
+    hi, lo = sorted((lum(a), lum(b)), reverse=True)
+    return (hi + .05) / (lo + .05)
+
+
+def gradient_stops(gradient):
+    """The colours of a computed gradient, in order."""
+    return re.findall(r"rgba?\([^)]*\)", gradient)
+
+
+# Add agents' + and −, as the newest Macs' window buttons: a gradient from a fuller colour at the top to a lighter one
+# at the bottom, over the plain middle one; the +'s is clear at rest, over the grey.
+GREEN, GREEN_FILL = "rgb(125, 211, 84)", "linear-gradient(rgb(103, 207, 53) 25%, rgb(151, 217, 119) 75%)"
+RED, RED_FILL = "rgb(248, 120, 111)", "linear-gradient(rgb(253, 111, 101) 25%, rgb(243, 138, 131) 75%)"
+CLEAR_FILL = "linear-gradient(rgba(0, 0, 0, 0) 25%, rgba(0, 0, 0, 0) 75%)"
 
 
 # --------------------------------------------------------------------- checks
@@ -1535,8 +1558,8 @@ def checks_wide(browser):
         page.hover(avail_row(s) + " .del")
 
     name = ("add agents: only a sleeping background agent's row has a −, hidden at rest beside a plain grey +; under the pointer "
-            "and when the keys reach it the + is a green dot and the − a red one beside it, as big, with a thin edge light and no "
-            "blur, and dark marks (4.5:1), the same in light and dark")
+            "and when the keys reach it the + is a green dot and the − a red one beside it, each fuller at the top and lighter at "
+            "the bottom, as big, with a thin edge light and no blur, and dark marks (4.5:1 at both ends), the same in light and dark")
     with step(page, name):
         page.api.avail = [SLEEPY, NO_REPLY, RUNNING_BG, EDITOR_CHAT]
         poll(page)
@@ -1553,10 +1576,10 @@ def checks_wide(browser):
                 const inset = (c) => c.boxShadow !== 'none' && c.boxShadow.split(/,(?![^(]*\\))/).every(x => x.includes('inset'));
                 return { shown: s.opacity === '1' && s.pointerEvents === 'auto', hidden: s.opacity === '0' && s.pointerEvents === 'none',
                          grey: t.backgroundColor === getComputedStyle(document.querySelector('#available .new-here')).backgroundColor,
-                         fills: [t.backgroundColor, s.backgroundColor], marks: [t.color, s.color],
-                         rims: [t.boxShadow, s.boxShadow], lit: [inset(t), inset(s)],
+                         fills: [t.backgroundColor, s.backgroundColor], grads: [t.backgroundImage, s.backgroundImage],
+                         marks: [t.color, s.color], rims: [t.boxShadow, s.boxShadow], lit: [inset(t), inset(s)],
                          readable: ratio(sel + ' .add') >= 4.5 && ratio(sel + ' .del') >= 4.5,
-                         solid: [s, t].every(c => c.backdropFilter === 'none' && c.backgroundImage === 'none' && c.filter === 'none'),
+                         solid: [s, t].every(c => c.backdropFilter === 'none' && c.filter === 'none'),
                          pair: b.width === 26 && b.height === 26 && p.width === 26 && p.height === 26 && b.right <= p.left
                            && p.left - b.right <= 6 && Math.abs(b.top - p.top) < 1,
                          title: d.getAttribute('title'), label: d.getAttribute('aria-label') }; }""", [avail_row(SLEEPY), CONTRAST])
@@ -1573,18 +1596,18 @@ def checks_wide(browser):
             dark = look()  # (with the keys on the −, the tooltip has its title off)
         finally:
             page.emulate_media(color_scheme="light")
-        dots = ["rgb(40, 200, 64)", "rgb(255, 95, 87)"]  # a Mac window's green and red
+        both_ends = lambda v: all(contrast(m, c) >= 4.5 for m, g in zip(v["marks"], v["grads"]) for c in gradient_stops(g))
         check(name, has == [["zeta", False], ["sleepy", True], ["restart me", True], ["busy bee", False], ["cursor chat", False]]
-              and rest["hidden"] and rest["grey"] and rest["rims"][0] == "none" and rest["title"] == "Delete this background agent"
-              and rest["label"] == "Delete sleepy" and hovered["rims"][0] == hovered["rims"][1]
-              and all(v["shown"] and v["fills"] == dots and v["marks"] == hovered["marks"] and v["readable"] and v["lit"] == [True, True]
-                      and v["rims"] == hovered["rims"] for v in (hovered, keys, dark))
+              and rest["hidden"] and rest["grey"] and rest["grads"][0] == CLEAR_FILL and rest["rims"][0] == "none"
+              and rest["title"] == "Delete this background agent" and rest["label"] == "Delete sleepy" and hovered["rims"][0] == hovered["rims"][1]
+              and all(v["shown"] and v["fills"] == [GREEN, RED] and v["grads"] == [GREEN_FILL, RED_FILL] and v["marks"] == hovered["marks"]
+                      and v["readable"] and both_ends(v) and v["lit"] == [True, True] and v["rims"] == hovered["rims"] for v in (hovered, keys, dark))
               and all(v["solid"] and v["pair"] for v in (rest, hovered, keys, dark)) and on_del, (has, rest, hovered, keys, on_del, dark))
 
     # In dark every button's mark is light, which on the green would be unreadable: the +'s mark turns dark there too.
     # And the panel gives its delete buttons a faint red under the pointer, by an id, which the −'s red must win over.
-    name = ("add agents: in dark, the + of a row with no − turns from grey to a green dot with a dark mark (4.5:1) under the "
-            "pointer, and a −, under its own pointer, stays red and a little brighter")
+    name = ("add agents: in dark, the + of a row with no − turns from grey to a green dot with a dark mark (4.5:1 at both ends) "
+            "under the pointer, and a −, under its own pointer, stays red and only a touch brighter")
     with step(page, name):
         page.api.avail = [SLEEPY, RUNNING_BG]
         poll(page)
@@ -1593,7 +1616,7 @@ def checks_wide(browser):
             def dot(sel):
                 fades_done(page, sel, "#available .new-here")
                 return page.evaluate("""([sel, contrast]) => { const c = getComputedStyle(document.querySelector(sel));
-                    return { fill: c.backgroundColor, mark: c.color, filter: c.filter, ratio: +eval(contrast)(sel).toFixed(2),
+                    return { fill: c.backgroundColor, grad: c.backgroundImage, mark: c.color, filter: c.filter, ratio: +eval(contrast)(sel).toFixed(2),
                              grey: c.backgroundColor === getComputedStyle(document.querySelector('#available .new-here')).backgroundColor }; }""",
                     [sel, CONTRAST])
             park(page)
@@ -1604,9 +1627,11 @@ def checks_wide(browser):
             minus = dot(avail_row(SLEEPY) + " .del")
         finally:
             page.emulate_media(color_scheme="light")
-        check(name, rest["grey"] and rest["mark"] != plus["mark"] and plus["fill"] == "rgb(40, 200, 64)" and plus["ratio"] >= 4.5
-              and minus["fill"] == "rgb(255, 95, 87)" and minus["ratio"] >= 4.5 and minus["mark"] == plus["mark"]
-              and minus["filter"].startswith("brightness(") and float(minus["filter"][11:-1]) > 1, (rest, plus, minus))
+        ends = lambda d: min(contrast(d["mark"], c) for c in gradient_stops(d["grad"]))
+        check(name, rest["grey"] and rest["mark"] != plus["mark"] and plus["fill"] == GREEN and plus["grad"] == GREEN_FILL
+              and plus["ratio"] >= 4.5 and ends(plus) >= 4.5 and minus["fill"] == RED and minus["grad"] == RED_FILL
+              and minus["ratio"] >= 4.5 and ends(minus) >= 4.5 and minus["mark"] == plus["mark"]
+              and minus["filter"].startswith("brightness(") and 1 < float(minus["filter"][11:-1]) <= 1.03, (rest, plus, minus))
 
     name = ("add agents: the − asks first in the words of Delete agent on a card; Cancel and Esc send nothing; a yes sends one "
             "delete for that agent (of two with one name, the one picked), its row goes without waiting for a poll and the "
@@ -1656,14 +1681,15 @@ def checks_wide(browser):
         answer(page)
         page.wait_for_selector(avail_row(SLEEPY) + ".deleting")
         fades_done(page, avail_row(SLEEPY) + " .del", avail_row(SLEEPY) + " .add")  # the + fades back to grey
-        now = lambda: page.evaluate("""([sel, contrast]) => { const r = document.querySelector(sel), d = r.querySelector('.del');
+        now = lambda: page.evaluate("""([sel, contrast, red, clear]) => { const r = document.querySelector(sel), d = r.querySelector('.del');
             const a = getComputedStyle(r.querySelector('.add')), ring = d.querySelector('.state-icon.running .arc');
             return { busy: r.classList.contains('deleting'), ring: !!ring && getComputedStyle(ring).stroke === getComputedStyle(d).color
-                       && getComputedStyle(d).backgroundColor === 'rgb(255, 95, 87)' && eval(contrast)(sel + ' .del') >= 4.5,
+                       && [getComputedStyle(d).backgroundColor, getComputedStyle(d).backgroundImage].join() === red
+                       && eval(contrast)(sel + ' .del') >= 4.5,
                      shown: getComputedStyle(d).opacity === '1', faded: getComputedStyle(r.querySelector('.name')).opacity === '0.5',
-                     waits: r.querySelector('.add').disabled && a.opacity === '0.5'
+                     waits: r.querySelector('.add').disabled && a.opacity === '0.5' && a.backgroundImage === clear
                        && a.backgroundColor === getComputedStyle(document.querySelector('#available .new-here')).backgroundColor,
-                     title: d.getAttribute('title') }; }""", [avail_row(SLEEPY), CONTRAST])
+                     title: d.getAttribute('title') }; }""", [avail_row(SLEEPY), CONTRAST, f"{RED},{RED_FILL}", CLEAR_FILL])
         busy = now()
         page.click(avail_row(SLEEPY) + " .del")
         page.wait_for_timeout(200)
@@ -2589,12 +2615,12 @@ def checks_narrow(browser):
         flips = touch.evaluate("matchMedia('(hover: none)').matches")
         fades_done(touch, avail_row(SLEEPY) + " .del", avail_row(SLEEPY) + " .add")
         dots = touch.evaluate("""(sel) => [' .del', ' .add'].map(s => { const c = getComputedStyle(document.querySelector(sel + s));
-            return [c.opacity, c.backgroundColor]; })""", avail_row(SLEEPY))
+            return [c.opacity, c.backgroundColor, c.backgroundImage]; })""", avail_row(SLEEPY))
         rules = touch.evaluate("""() => [...document.styleSheets].flatMap(s => [...s.cssRules]).filter(r => r.conditionText === '(hover: none)')
             .flatMap(r => [...r.cssRules]).filter(x => x.selectorText.includes('.avail-row .btn.'))
             .map(x => [x.selectorText, x.style.opacity || x.style.backgroundColor])""")
         # without touch emulation, the rules at least
-        check(name, dots == [["1", "rgb(255, 95, 87)"], ["1", "rgb(40, 200, 64)"]] if flips else
+        check(name, dots == [["1", RED, RED_FILL], ["1", GREEN, GREEN_FILL]] if flips else
               rules == [[".avail-row .btn.del", "1"], ["#available .avail-row .btn.add:not(:disabled)", "var(--dot-green)"]],
               (flips, dots, rules))
     touch.context.close()

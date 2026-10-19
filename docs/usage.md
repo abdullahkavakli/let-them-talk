@@ -10,9 +10,10 @@ What each part of the board does, from boards and arrows to a chat's details.
   next to a folder opens [New agent](#new-agent) on that folder.
 - A sleeping background agent there (*asleep*: Claude Code still lists it,
   but it isn't running) also has a **−** beside its **+**. When you point at
-  a row or Tab to it, its grey **+** turns green and a sleeping agent's **−**
-  appears in red, each with a thin glass-like edge light, like a Mac's window
-  buttons; on a touch screen they always show that way. After asking, as
+  a row or Tab to it, its grey **+** turns a soft green and a sleeping agent's
+  **−** appears in a soft red, each a little lighter toward the bottom with a
+  faint edge light, like the window buttons of the newest Macs; on a touch
+  screen they always show that way. After asking, as
   **Delete agent** in its details does, the **−** deletes the agent with
   `claude rm` and its row folds away; if that fails, a notice says why and
   the row stays. A running agent has no **−**: end it from its card first.

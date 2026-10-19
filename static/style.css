@@ -30,16 +30,23 @@
   --field-hover: rgba(118, 118, 128, .2);
   --card-shadow: 0 1px 2px rgba(0, 0, 0, .06), 0 6px 20px rgba(0, 0, 0, .06);
   --scrim: rgba(0, 0, 0, .2);
-  /* a Mac window's buttons (Add agents' + and −): the same green and red, and the same dark marks on them, in light
-     and dark, so none of them is set again for dark below (the marks: 7.5:1 on the green, 5.6:1 on the red) */
-  --dot-green: #28c840;
-  --dot-red: #ff5f57;
+  /* a Mac window's buttons (Add agents' + and −), in the soft tones of the newest Macs': each green and red goes from
+     a fuller colour at the top to a lighter one at the bottom (the plain one is their middle), with the same dark
+     marks on them, in light and dark alike, so none of them is set again for dark below (the marks: 6.1:1 on the
+     red and 8.5:1 on the green at their fuller tops, more further down) */
+  --dot-green: #7dd354;
+  --dot-green-top: #67cf35;
+  --dot-green-bottom: #97d977;
+  --dot-red: #f8786f;
+  --dot-red-top: #fd6f65;
+  --dot-red-bottom: #f38a83;
   --dot-mark: #1d1d1f;
-  /* their edge light, as the glass rim below but the same in both themes: a thin bright line along the top, a fainter
-     one along the bottom and a faint glow inside the edge; pressed, it eases */
-  --dot-rim-top: rgba(255, 255, 255, .5);
-  --dot-rim-bottom: rgba(255, 255, 255, .22);
-  --dot-rim-glow: rgba(255, 255, 255, .1);
+  /* their edge light, as the glass rim below but the same in both themes, and gentle (the colours' fall from top to
+     bottom already gives the depth): a thin light line along the top, a fainter one along the bottom and a trace of
+     glow inside the edge; pressed, it eases */
+  --dot-rim-top: rgba(255, 255, 255, .22);
+  --dot-rim-bottom: rgba(255, 255, 255, .1);
+  --dot-rim-glow: rgba(255, 255, 255, .04);
   --dot-rim: inset 0 1.5px 0 -.5px var(--dot-rim-top), inset 0 -1.5px 0 -.5px var(--dot-rim-bottom), inset 0 0 5px var(--dot-rim-glow);
   --dot-rim-pressed: inset 0 1px 0 -.5px var(--dot-rim-top), inset 0 -1px 0 -.5px var(--dot-rim-bottom), inset 0 0 3px var(--dot-rim-glow);
   /* small text on a fill (a card, a field): --muted, a little nearer the text colour to stay readable */
@@ -206,25 +213,45 @@ select option { background: var(--panel); color: var(--text); }
 .avail-row .btn:is(.add, .del) { flex: none; width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 /* A row's + and a sleeping background agent's − (renderAvailable in app.js), as a Mac window's buttons. At rest only
    the + shows, in the sidebar's plain grey fill. Under the pointer, when the keys reach the row, and always on a touch
-   screen (no hover there), the + is a green dot and the − a red one close beside it: solid colours with dark marks
-   and a thin edge light (box-shadow only: no blur, no glass on glass). The −'s place is kept, so the name doesn't
-   move; it also stays while its agent is deleted. The colours are set with #available, over the panel's plain fills
-   and the faint red its delete buttons take under the pointer. */
+   screen (no hover there), the + is a green dot and the − a red one close beside it: each a gradient from top to
+   bottom with dark marks and a thin edge light (box-shadow only: no blur, no glass on glass). The −'s place is kept,
+   so the name doesn't move; it also stays while its agent is deleted. The colours are set with #available, over the
+   panel's plain fills and the faint red its delete buttons take under the pointer.
+   A gradient can't fade, but its two colours can once they are registered as colours: each dot's gradient is always
+   there, clear at rest over the grey (so the resting + looks as before), and its colours fade in and out with the
+   plain colour under it, as every button's colour does. */
+@property --dot-top { syntax: "<color>"; inherits: false; initial-value: transparent; }
+@property --dot-bottom { syntax: "<color>"; inherits: false; initial-value: transparent; }
+.avail-row .btn.add { transition: background-color .15s ease, color .15s ease, box-shadow .15s ease, --dot-top .15s ease, --dot-bottom .15s ease; }
 .avail-row .btn.del {
   margin-right: -4px; opacity: 0; pointer-events: none;
-  transition: opacity .2s ease, background-color .15s ease, color .15s ease, box-shadow .15s ease;
+  transition: opacity .2s ease, background-color .15s ease, color .15s ease, box-shadow .15s ease, --dot-top .15s ease, --dot-bottom .15s ease;
 }
 .avail-row:is(:hover, :has(:focus-visible), .deleting) .btn.del { opacity: 1; pointer-events: auto; }
 @media (hover: none) { .avail-row .btn.del { opacity: 1; pointer-events: auto; } }
-#available .avail-row .btn.danger.del { background: var(--dot-red); color: var(--dot-mark); box-shadow: var(--dot-rim); }
-#available .avail-row:is(:hover, :has(:focus-visible)) .btn.add:not(:disabled) { background: var(--dot-green); color: var(--dot-mark); box-shadow: var(--dot-rim); }
-@media (hover: none) { #available .avail-row .btn.add:not(:disabled) { background: var(--dot-green); color: var(--dot-mark); box-shadow: var(--dot-rim); } }
-/* the dot under the pointer a little brighter, pressed a little darker with its edge light eased (and nudged down,
-   as every button) */
-#available .avail-row:not(.deleting) .btn:is(.add, .del):not(:disabled):hover { filter: brightness(1.06); }
-#available .avail-row:not(.deleting) .btn:is(.add, .del):not(:disabled):active { filter: brightness(.9); box-shadow: var(--dot-rim-pressed); }
+/* (the fuller colour over the top quarter, the lighter one over the bottom quarter, as on the Mac; as specific as the
+   red, so the whole background the panel gives its delete buttons under the pointer doesn't take the gradient off) */
+#available .avail-row .btn:is(.add, .danger.del) {
+  background-image: linear-gradient(var(--dot-top) 25%, var(--dot-bottom) 75%);
+  background-origin: border-box;  /* over the whole dot, its clear border too: not repeated into it */
+}
+#available .avail-row .btn.danger.del {
+  --dot-top: var(--dot-red-top); --dot-bottom: var(--dot-red-bottom); background-color: var(--dot-red); color: var(--dot-mark); box-shadow: var(--dot-rim);
+}
+#available .avail-row:is(:hover, :has(:focus-visible)) .btn.add:not(:disabled) {
+  --dot-top: var(--dot-green-top); --dot-bottom: var(--dot-green-bottom); background-color: var(--dot-green); color: var(--dot-mark); box-shadow: var(--dot-rim);
+}
+@media (hover: none) {
+  #available .avail-row .btn.add:not(:disabled) {
+    --dot-top: var(--dot-green-top); --dot-bottom: var(--dot-green-bottom); background-color: var(--dot-green); color: var(--dot-mark); box-shadow: var(--dot-rim);
+  }
+}
+/* the dot under the pointer a touch brighter (the soft colours glare if lit more), pressed a little darker with its
+   edge light eased (and nudged down, as every button) */
+#available .avail-row:not(.deleting) .btn:is(.add, .del):not(:disabled):hover { filter: brightness(1.03); }
+#available .avail-row:not(.deleting) .btn:is(.add, .del):not(:disabled):active { filter: brightness(.94); box-shadow: var(--dot-rim-pressed); }
 /* disabled (the + while its agent is deleted): back to the plain grey, dimmed, the same under the pointer */
-#available .avail-row .btn:is(.add, .del):disabled { background: var(--field); color: var(--text); box-shadow: none; }
+#available .avail-row .btn:is(.add, .del):disabled { --dot-top: transparent; --dot-bottom: transparent; background-color: var(--field); color: var(--text); box-shadow: none; }
 #available .avail-row .btn.del:disabled { filter: opacity(.5); }  /* (its opacity shows and hides it) */
 /* being deleted: the row fades, the − turns (in its dark mark, on its red), the + waits */
 .avail-row.deleting :is(.dot, .name) { opacity: .5; }
@@ -748,7 +775,7 @@ dialog input[type="radio"] { width: auto; flex: none; margin: 3px 0 0; accent-co
 
 @media (prefers-reduced-motion: reduce) {
   .wire.sending { animation: none; }
-  .btn, .icon-btn, .avail-row, .browse-item, .node, .resizer::after, .avail-row .btn.del { transition: none; }
+  .btn, .icon-btn, .avail-row, .browse-item, .node, .resizer::after, .avail-row .btn:is(.add, .del) { transition: none; }
 }
 
 /* ------------------------------------------------------------ Liquid Glass
