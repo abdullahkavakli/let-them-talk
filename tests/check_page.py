@@ -1438,6 +1438,50 @@ def checks_wide(browser):
         check(name, "restart it first" in page.inner_text("#c-error") and not is_open(page, "#c-wake")
               and page.locator("#c-submit").is_disabled())
 
+    # Notes between two Windows chats work (the server delivers them with the Windows claude.exe): a Windows
+    # chat the server lists with no message block can be connected, to another Windows chat only.
+    WIN = {"platform": "windows", "winCwd": "C:\\Users\\you\\project"}
+    NO_EXE = {**WIN, "messageBlock": "Let Them Talk needs claude.exe (Claude Code on Windows) to send notes to Windows "
+                                     "chats, and can't find it. Install Claude Code on Windows, or set LTT_WIN_CLAUDE "
+                                     "to where claude.exe is."}
+
+    name = "connect: two Windows chats can be connected (no red line, Connect on); a Windows chat and a WSL one say they can't message each other"
+    with step(page, name):
+        page.api.patch = {A: WIN, E: WIN}
+        poll(page)
+        handle = page.locator(f'.node[data-id="{A}"] .port.out').count()
+        page.evaluate(f"openConnectDialog('{A}', '{E}')")
+        pair = (is_open(page, "#c-error"), page.locator("#c-submit").is_enabled(), page.inner_text("#c-error"))
+        page.evaluate("document.querySelector('#connect-dialog').close()")
+        page.api.patch = {A: WIN}
+        poll(page)
+        page.evaluate(f"openConnectDialog('{A}', '{E}')")  # alpha on Windows, epsilon in WSL
+        check(name, handle == 1 and pair == (False, True, "")
+              and page.inner_text("#c-error") == "A WSL session and a Windows session can't message each other."
+              and page.locator("#c-submit").is_disabled(), (handle, pair, page.inner_text("#c-error")))
+
+    name = ("details: a Windows chat has a handle, says it connects to other Windows chats only, and has no Send box; "
+            "one the server can't deliver to says why, with no handle")
+    with step(page, name):
+        page.api.patch = {A: WIN}
+        poll(page)
+        badge = page.locator(f'.node[data-id="{A}"] .badge.win').get_attribute("title")
+        handle = page.locator(f'.node[data-id="{A}"] .port.out').count()
+        open_card(page, A)
+        drawer = page.text_content("#drawer-body")  # the facts fold away, so not inner_text
+        no_box = page.locator("#send-box").count()
+        page.evaluate("closeDrawer()")
+        page.api.patch = {A: NO_EXE}
+        poll(page)
+        stuck = page.locator(f'.node[data-id="{A}"] .port.out').count()
+        blocked = page.locator(f'.node[data-id="{A}"] .badge.win').get_attribute("title")
+        open_card(page, A)
+        why = page.text_content("#drawer-body")
+        check(name, "other Windows chats" in badge and handle == 1 and no_box == 0
+              and "Can be connected to other Windows chats, not to WSL ones." in drawer and "Can't receive notes" not in drawer
+              and stuck == 0 and blocked == NO_EXE["messageBlock"] and f"Can't receive notes. {NO_EXE['messageBlock']}" in why
+              and "Can be connected to other" not in why, (badge, handle, no_box, drawer, stuck, blocked, why))
+
     name = "failures: a failed Disconnect leaves a notice and the details open, no alert()"
     with step(page, name):
         page.api.post_status = 500

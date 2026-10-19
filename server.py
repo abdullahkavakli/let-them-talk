@@ -111,6 +111,8 @@ TASKLIST = shutil.which("tasklist.exe") or "/mnt/c/Windows/System32/tasklist.exe
 WIN_PID_TTL = 3
 WIN_MESSAGING_MIN = (2, 1, 234)
 win_pid_cache = {"at": 0.0, "pids": set()}
+WIN_CLAUDE_TTL = 10
+win_claude_cache = {"at": -WIN_CLAUDE_TTL, "path": None}
 
 APP_NAME = "Let Them Talk"
 HOST = "127.0.0.1"
@@ -1534,6 +1536,34 @@ def windows_claude_pids():
     return pids
 
 
+def windows_claude():
+    """The Windows claude.exe that delivers notes to Windows chats (WSL's own
+    claude can't reach their named pipes; a Windows program can), as a WSL
+    path, or None: LTT_WIN_CLAUDE when set, else claude.exe on the PATH, else
+    where Claude Code's installer puts it in the Windows home. Cached for a
+    few seconds: the PATH has Windows folders, which are slow to look through."""
+    now = time.time()
+    if now - win_claude_cache["at"] < WIN_CLAUDE_TTL:
+        return win_claude_cache["path"]
+    if setting("WIN_CLAUDE"):
+        found = [setting("WIN_CLAUDE")]  # the one you named, or nothing
+    else:
+        found = [shutil.which("claude.exe"), str(WIN_HOME / ".local" / "bin" / "claude.exe") if WIN_HOME else None]
+    path = next((p for p in found if p and os.path.isfile(p)), None)
+    win_claude_cache.update(at=now, path=path)
+    return path
+
+
+def windows_relay_cwd():
+    """A folder the Windows claude.exe can start in: one on a Windows drive
+    (/mnt/c/...), since it can't start in a WSL folder. The data folder where
+    it is on one, as for the WSL relay; else the Windows home, which is only
+    started in, never written to."""
+    if re.match(r"/mnt/[a-z](/|$)", str(DATA_DIR)) and DATA_DIR.is_dir():
+        return DATA_DIR
+    return WIN_HOME
+
+
 def _version(v):
     return tuple(int(x) for x in re.findall(r"\d+", v or "")[:3])
 
@@ -1716,6 +1746,16 @@ def _background_session(row):
     }
 
 
+def own_run(reg):
+    """Whether a registry entry is one of this app's own headless runs (notes,
+    TL;DRs, suggestions; also from its Agent Organizer days). Claude Code now
+    registers `claude -p` as kind "interactive" too, so its headless
+    entrypoint marks them. A relay for Windows chats registers in the Windows
+    registry, and is found the same way."""
+    return bool(RELAY_RE.fullmatch(reg.get("name") or "") and (
+        reg.get("entrypoint") == "sdk-cli" or reg.get("kind") not in ("interactive", "bg")))
+
+
 def live_sessions():
     """Running sessions: WSL ones whose process is still the one that wrote
     the registry file, and Windows ones whose claude.exe PID is running."""
@@ -1730,12 +1770,7 @@ def live_sessions():
         sock = reg.get("messagingSocketPath")
         if not sock or not os.path.exists(sock):
             continue
-        name = reg.get("name") or ""
-        # This app's own headless runs (notes, TL;DRs, suggestions; also from
-        # its Agent Organizer days). Claude Code now registers `claude -p` as
-        # kind "interactive" too, so its headless entrypoint marks them.
-        if RELAY_RE.fullmatch(name) and (reg.get("entrypoint") == "sdk-cli"
-                                         or reg.get("kind") not in ("interactive", "bg")):
+        if own_run(reg):
             continue
         sessions.append(_session(reg, "wsl", reg.get("cwd", ""), None, wsl_exe(pid, started)))
     # background agents: add state to the running ones, list the sleeping ones
@@ -1760,13 +1795,18 @@ def live_sessions():
         win_regs = list(_read_registry(WIN_REGISTRY_DIR))
         pids = windows_claude_pids() if win_regs else set()
         for reg in win_regs:
-            if reg["pid"] not in pids:
+            # relay_pids holds WSL process numbers, which mean nothing among Windows ones
+            if reg["pid"] not in pids or own_run(reg):
                 continue
             if _version(reg.get("version")) < WIN_MESSAGING_MIN:
                 block = ("This Windows session's Claude Code is too old to receive messages; "
                          "update Claude Code on Windows.")
+            elif windows_claude() is None:
+                block = (f"{APP_NAME} needs claude.exe (Claude Code on Windows) to send notes to Windows "
+                         "chats, and can't find it. Install Claude Code on Windows, or set "
+                         "LTT_WIN_CLAUDE to where claude.exe is.")
             else:
-                block = f"{APP_NAME} can't deliver notes to Windows sessions yet."
+                block = None
             exe = windows_exe(reg["pid"]) if reg.get("entrypoint") == "claude-vscode" else ""
             sessions.append(_session(reg, "windows", win_to_wsl(reg.get("cwd", "")), block, exe))
     # A chat sent to the background leaves its terminal session "parked": it
@@ -2227,6 +2267,9 @@ def disconnect_note(src, dst, reason):
 
 # ------------------------------------------------------------------- relay
 
+# Only the notes of an arrow are delivered to a chat on Windows (see relay_notes).
+WINDOWS_NO_TEXT = "text can't be sent from here to a chat running on Windows; only the notes of its arrows reach it."
+
 RELAY_SYSTEM = (
     "You are the message relay of Let Them Talk, a local tool the user runs to "
     "connect and manage their own Claude Code sessions on this machine. Your "
@@ -2239,9 +2282,12 @@ def _norm(text):
     return re.sub(r"\s+", " ", (text or "").strip())
 
 
-def relay_send(items):
+def relay_send(items, windows=False):
     """Deliver [{"to": name, "text": str}, ...] through one headless Claude run.
-    Returns (states, meta); states[i] = {"state": sent|altered|failed, "detail"}."""
+    Returns (states, meta); states[i] = {"state": sent|altered|failed, "detail"}.
+    Chats on Windows are reached by SendMessage through named pipes only a
+    Windows program can open, so with windows=True the run is the Windows
+    claude.exe, started from here (see windows_claude, windows_relay_cwd)."""
     parts = [
         f"Deliver these {len(items)} messages. For each ITEM make exactly one "
         "SendMessage call with `to` set to the TO value and `message` set to the "
@@ -2251,32 +2297,46 @@ def relay_send(items):
     ]
     for i, it in enumerate(items, 1):
         parts.append(f"ITEM {i}\nTO: {it['to']}\nBEGIN\n{it['text']}\nEND")
-    cmd = [
-        CLAUDE_BIN, "-p", "--model", RELAY_MODEL, "--name", RELAY_NAME,
-        "--tools", "SendMessage", "--allowedTools", "SendMessage",
-        "--no-session-persistence", "--output-format", "stream-json", "--verbose",
-        "--append-system-prompt", RELAY_SYSTEM, "\n\n".join(parts),
-    ]
-    t0 = time.time()
+    prompt = "\n\n".join(parts)
     states = [{"state": "failed", "detail": "the relay made no SendMessage call"} for _ in items]
     meta = {"cost_usd": None, "seconds": None, "error": None}
+    claude = windows_claude() if windows else CLAUDE_BIN
+    cwd = windows_relay_cwd() if windows else DATA_DIR
+    if not claude or not cwd:
+        meta["error"] = ("could not find claude.exe, the Claude Code program for Windows" if not claude
+                         else "found no folder on Windows for claude.exe to start in")
+        for s in states:
+            s["detail"] = meta["error"]
+        return states, meta
+    cmd = [
+        claude, "-p", "--model", RELAY_MODEL, "--name", RELAY_NAME,
+        "--tools", "SendMessage", "--allowedTools", "SendMessage",
+        "--no-session-persistence", "--output-format", "stream-json", "--verbose",
+        "--append-system-prompt", RELAY_SYSTEM,
+        # A Windows program's command line is limited, and re-quoted on its way
+        # from WSL, so its prompt goes in on stdin, where `claude -p` reads it.
+        *([] if windows else [prompt]),
+    ]
+    t0 = time.time()
     try:
-        proc = subprocess.Popen(cmd, cwd=DATA_DIR, stdin=subprocess.DEVNULL, env=claude_env(),
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.PIPE if windows else subprocess.DEVNULL,
+                                env=claude_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     except OSError as e:
         meta["error"] = f"could not start claude: {e}"
         for s in states:
             s["detail"] = meta["error"]
         return states, meta
-    relay_pids.add(proc.pid)
+    if not windows:  # WSL process numbers: a Windows relay is hidden by its name instead (own_run)
+        relay_pids.add(proc.pid)
     try:
-        out, err = proc.communicate(timeout=RELAY_TIMEOUT)
+        out, err = proc.communicate(input=prompt if windows else None, timeout=RELAY_TIMEOUT)
     except subprocess.TimeoutExpired:
         proc.kill()
         out, err = proc.communicate()
         meta["error"] = f"relay timed out after {RELAY_TIMEOUT}s"
     finally:
-        relay_pids.discard(proc.pid)
+        if not windows:
+            relay_pids.discard(proc.pid)
     meta["seconds"] = round(time.time() - t0, 1)
 
     calls, results, final_text = {}, {}, ""
@@ -2330,9 +2390,24 @@ def relay_send(items):
 
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     with LOG_FILE.open("a", encoding="utf-8") as log:
-        log.write(json.dumps({"t": time.time(), "items": items, "states": states,
-                              "meta": meta}, ensure_ascii=False) + "\n")
+        log.write(json.dumps({"t": time.time(), "items": items, "states": states, "meta": meta,
+                              **({"platform": "windows"} if windows else {})}, ensure_ascii=False) + "\n")
     return states, meta
+
+
+def relay_notes(items):
+    """Deliver [{"to", "text", "platform"}, ...] to chats of either kind: one
+    relay run for each kind, the chats on Windows reached by the Windows
+    claude.exe. Returns the states, in the order of items."""
+    states = [None] * len(items)
+    for windows in (False, True):
+        group = [i for i, it in enumerate(items) if (it.get("platform") == "windows") == windows]
+        if group:
+            send = [{"to": items[i]["to"], "text": items[i]["text"]} for i in group]
+            got, _ = relay_send(send, windows=True) if windows else relay_send(send)
+            for i, state in zip(group, got):
+                states[i] = state
+    return states
 
 
 def _summary(states):
@@ -2412,6 +2487,7 @@ def _deliver(bid, conn_id, sides):
     by_side, woke = {}, []
     for it in items:
         s = now.get(it["sid"]) or {}
+        it["platform"] = s.get("platform") or ends[it["side"]].get("platform")  # an ended chat is as its card says
         if s.get("wakeable"):
             by_side[it["side"]] = _wake_with_note(bid, s, it["text"])
             if by_side[it["side"]]["state"] == "sent":
@@ -2422,7 +2498,7 @@ def _deliver(bid, conn_id, sides):
     if rest:
         if woke:
             _await_running([it["sid"] for it in woke])
-        got, _ = relay_send([{"to": it["to"], "text": it["text"]} for it in rest])
+        got = relay_notes(rest)
         by_side.update({it["side"]: st for it, st in zip(rest, got)})
     states = [by_side[it["side"]] for it in items]
     with lock:
@@ -2588,13 +2664,13 @@ def send_disconnect_notes(bid, removed):
         text = disconnect_note(src, dst, conn.get("reason", ""))
         for sid, n in ((conn["from"], src), (conn["to"], dst)):
             if sid in live:
-                items.append({"to": n["name"], "text": text})
+                items.append({"to": n["name"], "text": text, "platform": n.get("platform")})
                 targets.append(n)
     if not items:
         return
 
     def run():
-        states, meta = relay_send(items)
+        states = relay_notes(items)
         with lock:
             b = load_board(bid)
             ok = all(s["state"] != "failed" for s in states)
@@ -3013,8 +3089,9 @@ def _watch_launch(lid, images=()):
             # warn: the page shows a done launch only when it came up other than asked
             job.update(state="done", detail="The new chat is open." + aside, warn=bool(aside))
             return
-        if s.get("messageBlock"):
-            job.update(state="failed", detail=f"The new chat opened, but {s['messageBlock']} "
+        if s.get("messageBlock") or s.get("platform") == "windows":
+            why = s.get("messageBlock") or WINDOWS_NO_TEXT
+            job.update(state="failed", detail=f"The new chat opened, but {why} "
                                               "Paste the prompt into it yourself.")
             return
         job.update(state="sending", detail="Sending your prompt to the new chat…")
@@ -3601,6 +3678,8 @@ def send_to_session(bid, body):
     if not text and not images:
         raise ValueError("Write something to send.")
     s = find_session(sid)
+    if s.get("platform") == "windows":
+        raise ValueError(WINDOWS_NO_TEXT[0].upper() + WINDOWS_NO_TEXT[1:])
     as_prompt = s.get("background") and s.get("status") != "busy" and s.get("agentState") != "working" \
         and body.get("how") != "message"
     if not as_prompt and s.get("messageBlock"):

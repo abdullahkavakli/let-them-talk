@@ -36,6 +36,20 @@ Notes are delivered by a short headless run,
 `SendMessage` (about 8 s); [`LTT_MODEL`](configuration.md#environment-settings)
 picks another model.
 
+A chat on Windows can't be reached from WSL's `claude`: Claude Code on
+Windows listens on a named pipe (`\\.\pipe\...`, named in its registry file)
+that only a Windows program can open. So the notes between two Windows chats
+go through the same run with Windows' own `claude.exe`, started from WSL
+([`LTT_WIN_CLAUDE`](configuration.md#environment-settings)). It starts in the
+data folder when that is on a Windows drive (`/mnt/c/...`), else in your
+Windows home, since it can't start in a WSL folder, and its prompt goes in on
+stdin, not on a command line Windows would cut and re-quote. While it runs it
+has an entry in `%USERPROFILE%\.claude\sessions` named `let-them-talk`; as with
+WSL's own runs, the app tells it by that name and by its being headless, and
+doesn't list it as a chat (WSL process numbers mean nothing among Windows
+ones). A WSL chat and a Windows chat can't be connected, so an arrow's notes
+all go through one of the two runs.
+
 A background agent whose process has ended has no inbox, so its note is its
 prompt instead: it is woken with `claude --resume <id> --bg -- <note>`, as
 **Send** wakes it (see below). That goes first, and the running chat's note

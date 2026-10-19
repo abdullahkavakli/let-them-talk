@@ -21,6 +21,11 @@ Set these for the server before you start it.
 - `LTT_MODEL`: the model for notes and TL;DRs (default `haiku`).
 - `LTT_CLAUDE`: the path to the `claude` binary. By default `claude` on the
   PATH, else `~/.local/bin/claude`.
+- `LTT_WIN_CLAUDE`: the path to `claude.exe`, which delivers notes to
+  Windows chats (as a WSL path, e.g. `/mnt/c/Users/you/.local/bin/claude.exe`).
+  By default `claude.exe` on the PATH, else `.local/bin/claude.exe` in your
+  Windows home. Chats on Windows can't be connected without it. It starts in
+  the data folder when that is on a Windows drive, else in your Windows home.
 - `LTT_WINDOWS_HOME`: your Windows user folder as a WSL path, e.g.
   `/mnt/c/Users/you`, whose `.claude` holds Windows sessions. By default the
   app asks Windows for `%USERPROFILE%`.

@@ -701,7 +701,9 @@ function renderNodes() {
         title: `${n.name ? `Address: @${n.name}\n` : ""}Folder: ${where(n)}` }),
       el("div", { class: "meta badges" },
         // Every local card would say the same (WSL); only a Windows session is marked.
-        onWindows(n) && el("span", { class: "badge win state", text: "Windows", title: n.messageBlock || "" }),
+        onWindows(n) && el("span", { class: "badge win state", text: "Windows",
+          title: n.messageBlock || (n.live ? "Claude Code on Windows: it can be connected to other Windows chats, not to WSL ones"
+            : "Claude Code on Windows") }),
         opener(n) && el("span", { class: "badge", text: opener(n) }),
         n.model && el("span", { class: "badge model", text: modelName(n.model), title: n.model }),
         el("span", { class: `badge state ${{ needs: "warn", waiting: "warn", failed: "danger" }[st.dot] || ""}`, text: st.text,
@@ -1607,6 +1609,8 @@ function nodeDetails(n) {
       el("dt", { text: "Runs on" }), el("dd", { text: onWindows(n) ? "Windows" : hostLabel() }),
       el("dt", { text: "Folder" }), el("dd", { class: "small path" }, pathNodes(where(n))),
       n.messageBlock && [el("dt", { text: "Notes" }), el("dd", { class: "small", text: `Can't receive notes. ${n.messageBlock}` })],
+      onWindows(n) && n.live && !n.messageBlock && [el("dt", { text: "Notes" }),
+        el("dd", { class: "small", text: "Can be connected to other Windows chats, not to WSL ones." })],
       n.live && [el("dt", { text: "Opened in" }), el("dd", { text: opener(n) || "?" })],
       n.model && [el("dt", { text: "Model" }), el("dd", { text: modelName(n.model) })],
       el("dt", { text: "Session" }), el("dd", { class: "mono small", text: n.sessionId }))),
@@ -3279,8 +3283,9 @@ const IMAGE_MB = 10, IMAGE_COUNT = 5;
 const imageTags = (text) => { let i = 0; return text.replace(/^\[Image: source: [^\]\n]+\]$/gm, () => `[Image #${++i}]`); };
 
 // A chat can take text from here if it is running and can receive messages,
-// or if it is a background agent (which wakes up with a prompt).
-const canReach = (n) => n.live && (n.background || !n.messageBlock);
+// or if it is a background agent (which wakes up with a prompt). A chat on
+// Windows gets only the notes of its arrows.
+const canReach = (n) => n.live && !onWindows(n) && (n.background || !n.messageBlock);
 const promptable = (n) => n.background && n.agentState !== "working" && n.status !== "busy";
 
 // Sends a chat your text. Sent is said by the caller (the Send box's bubble);

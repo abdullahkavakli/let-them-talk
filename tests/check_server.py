@@ -60,6 +60,7 @@ S.subprocess.Popen = lambda args, **kw: (launched.append(list(args)) or launched
                                          or types.SimpleNamespace(wait=lambda timeout=None: 0))
 S.shutil.which = lambda name: {"code": "/bin/code", "cursor": "/bin/cursor", "rundll32.exe": "/win/rundll32.exe",
                                "cmd.exe": "/win/cmd.exe", "xdg-open": "/bin/xdg-open"}.get(name)
+real_relay_send = S.relay_send  # faked just below; the Windows notes checks run the real one with a fake claude.exe
 S.relay_send = lambda items: (sent.append(items) or [{"state": "sent", "detail": ""}], None)
 S.load_board = lambda bid: {"nodes": {}, "activity": []}
 S.save_board = lambda board: None
@@ -94,6 +95,15 @@ check("IDE chat: the folder opens in the editor, then the chat link, from the se
 check("IDE chat: the chat in that folder gets the prompt, not one elsewhere, and the page isn't told to say so",
       job["session"] and job["session"]["sessionId"] == "mine" and sent and sent[-1][0]["to"] == "mine"
       and job["state"] == "done" and not job.get("warn"), job["detail"])
+
+launched.clear(); sessions.clear(); sent.clear()
+r = S.start_editor_chat("b", {"prompt": "hi", "editor": "VS Code", "folder": folder})
+sessions[:] = [{**fake("wchat", folder), "platform": "windows", "messageBlock": None}]
+job = finish(r["launchId"])
+check("IDE chat: a new chat that turns out to run on Windows isn't sent the prompt (only arrow notes reach Windows): "
+      "the notice says to paste it",
+      job["state"] == "failed" and "Windows" in job["detail"] and "Paste the prompt" in job["detail"] and not sent,
+      job["detail"])
 
 launched.clear(); sessions.clear()
 r = S.start_editor_chat("b", {"prompt": "", "editor": "VS Code"})
@@ -1390,6 +1400,312 @@ check("connect: the other note still goes when the woken agent doesn't show up r
 for n, v in cn_saved.items():
     setattr(S, n, v)
 sessions[:] = []
+
+# --------- Notes between two Windows chats: the Windows claude.exe delivers them (every program faked)
+# A chat on Windows is reached through a named pipe only a Windows program can open, so its notes go
+# through the same relay run as a WSL chat's, but with claude.exe, started from WSL. Here claude.exe is a
+# script that records how it was started and answers like the real one: stream-json with the SendMessage
+# calls; its Windows registry entry, its folder, its command line and its environment are what is checked.
+
+wn_names = ("_read_registry", "_proc_start", "WIN_REGISTRY_DIR", "WIN_HOME", "DATA_DIR", "LOG_FILE", "CLAUDE_BIN",
+            "windows_claude_pids", "windows_exe", "wsl_exe", "session_title", "session_model", "background_rows",
+            "live_sessions", "load_board", "add_activity", "_deliver_later", "relay_send")
+wn_saved, wn_env = {n: getattr(S, n) for n in wn_names}, dict(os.environ)
+wn_popen, S.subprocess.Popen = S.subprocess.Popen, REAL_POPEN  # the real one: the fake claude.exe is run
+wn_dir = Path(tempfile.mkdtemp())
+wn_home, wn_wsl_bin = wn_dir / "winhome", wn_dir / "wslbin"
+for d in (wn_home / ".local" / "bin", wn_wsl_bin):
+    d.mkdir(parents=True)
+WN_LEAK = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDECODE")
+WN_FAKE = '''#!{py}
+import json, os, re, sys
+here = os.path.dirname(os.path.abspath(__file__))
+mode = open(os.path.join(here, "mode")).read().strip() if os.path.exists(os.path.join(here, "mode")) else "ok"
+args = sys.argv[1:]
+stdin = "" if sys.stdin.isatty() else sys.stdin.read()
+with open(os.path.join(here, "calls.jsonl"), "a") as f:
+    f.write(json.dumps({{"args": args, "cwd": os.getcwd(), "stdin": stdin,
+                        "env": {{k: os.environ.get(k) for k in {leak!r}}}}}) + "\\n")
+if mode == "fail":
+    sys.stderr.write("claude.exe: it broke")
+    sys.exit(1)
+prompt = stdin or (args[-1] if args else "")
+events = []
+for i, to, msg in re.findall(r"ITEM (\\d+)\\nTO: ([^\\n]*)\\nBEGIN\\n(.*?)\\nEND", prompt, re.S):
+    events.append({{"type": "assistant", "message": {{"content": [{{"type": "tool_use", "id": "t" + i,
+                    "name": "SendMessage", "input": {{"to": to, "message": msg}}}}]}}}})
+    events.append({{"type": "user", "message": {{"content": [{{"type": "tool_result", "tool_use_id": "t" + i,
+                    "content": json.dumps({{"success": True}})}}]}}}})
+events.append({{"type": "result", "result": "done", "total_cost_usd": 0.001}})
+sys.stdout.write("\\r\\n".join(json.dumps(e) for e in events) + "\\r\\n")  # as Windows ends its lines
+'''
+WN_EXE, WN_WSL = wn_home / ".local" / "bin" / "claude.exe", wn_wsl_bin / "claude"
+for exe in (WN_EXE, WN_WSL):
+    exe.write_text(WN_FAKE.format(py=sys.executable, leak=WN_LEAK))
+    exe.chmod(0o755)
+calls = lambda exe: ([json.loads(l) for l in (exe.parent / "calls.jsonl").read_text().splitlines()]
+                     if (exe.parent / "calls.jsonl").exists() else [])
+wn_sock = wn_dir / "sock"
+wn_sock.touch()
+wn_reg = lambda pid, sid, name, win=True, **kw: {
+    "pid": pid, "sessionId": sid, "name": name, "kind": "interactive", "entrypoint": "cli", "version": "2.1.300",
+    "cwd": "C:\\Users\\you\\proj" if win else "/home/you/proj", "status": "idle",
+    "messagingSocketPath": "\\\\.\\pipe\\LOCAL\\cc-msg-" + sid if win else str(wn_sock), **kw}
+wn_win = [wn_reg(7001, "win-a-sid", "win-a"), wn_reg(7002, "win-b-sid", "win-b"),
+          wn_reg(7003, "relay-sid", "let-them-talk", entrypoint="sdk-cli"),  # the Windows relay, while it runs
+          wn_reg(7004, "old-sid", "win-old", version="2.1.100"), wn_reg(7005, "gone-sid", "win-gone")]
+wn_wsl = [wn_reg(4001, "wsl-a-sid", "wsl-a", win=False), wn_reg(4002, "wsl-b-sid", "wsl-b", win=False)]
+wn_win_pids = {7001, 7002, 7003, 7004}  # 7005's claude.exe has ended
+wn_board, wn_log = {}, []
+wn_connect = lambda a, b: S.connect("b", {"from": a, "to": b, "reason": "review it"})
+
+
+def wn_reset(mode="ok", exe_path=WN_EXE):
+    wn_board.clear()
+    wn_board.update(nodes={}, connections=[], activity=[], hidden=[])
+    wn_log.clear()
+    for exe in (WN_EXE, WN_WSL):
+        (exe.parent / "calls.jsonl").unlink(missing_ok=True)
+        (exe.parent / "mode").write_text(mode)
+    os.environ["LTT_WIN_CLAUDE"] = str(exe_path)
+    S.win_claude_cache.update(at=0.0, path=None)
+
+
+try:
+    S._read_registry = lambda d: [dict(r) for r in (wn_win if d == S.WIN_REGISTRY_DIR else wn_wsl)]
+    S._proc_start, S.wsl_exe = (lambda pid: ""), (lambda pid, started: "")
+    S.WIN_REGISTRY_DIR, S.WIN_HOME, S.DATA_DIR = wn_dir / "winreg", wn_home, wn_dir / "data"
+    S.DATA_DIR.mkdir()
+    S.LOG_FILE, S.CLAUDE_BIN = wn_dir / "relay.jsonl", str(WN_WSL)
+    S.windows_claude_pids, S.windows_exe = (lambda: wn_win_pids), (lambda pid: "")
+    S.session_title = S.session_model = lambda sid: None
+    S.background_rows = lambda fresh=False: []
+    S.live_sessions = real_live_sessions
+    S.load_board = lambda bid: wn_board
+    S.add_activity = lambda b, text, level="info": wn_log.append((text, level))
+    S._deliver_later = lambda bid, conn_id, sides: S._deliver(bid, conn_id, sides)  # in this thread
+    S.relay_send = real_relay_send  # the real one, which starts the fake claude.exe
+    os.environ.update(CLAUDE_CODE_SESSION_ID="leaked-id", CLAUDE_CODE_MESSAGING_SOCKET="leaked-socket", CLAUDECODE="1")
+
+    # which claude.exe: the one named, else the PATH's, else the installer's place in the Windows home
+    wn_which = S.shutil.which
+    wn_found = lambda: (S.win_claude_cache.update(at=0.0, path=None), S.windows_claude())[1]
+    for n in ("LTT_WIN_CLAUDE", "ORGANIZER_WIN_CLAUDE"):
+        os.environ.pop(n, None)
+    S.shutil.which = lambda name: str(wn_dir / "on-path.exe") if name == "claude.exe" else None
+    (wn_dir / "on-path.exe").touch()
+    on_path = wn_found()
+    os.environ["LTT_WIN_CLAUDE"] = str(WN_EXE)
+    named = wn_found()
+    os.environ["LTT_WIN_CLAUDE"] = str(wn_dir / "nowhere.exe")
+    named_missing = wn_found()  # the one you named, and nothing else behind its back
+    os.environ.pop("LTT_WIN_CLAUDE")
+    (wn_dir / "on-path.exe").unlink()
+    installed = wn_found()
+    WN_EXE.rename(WN_EXE.with_name("moved.exe"))
+    nothing = wn_found()
+    WN_EXE.with_name("moved.exe").rename(WN_EXE)
+    S.shutil.which = wn_which
+    check("windows notes: claude.exe is LTT_WIN_CLAUDE, else the PATH's, else the one in the Windows home, else none",
+          (named, on_path, installed, nothing, named_missing) == (str(WN_EXE), str(wn_dir / "on-path.exe"), str(WN_EXE),
+                                                                  None, None),
+          (named, on_path, installed, nothing, named_missing))
+    S.win_claude_cache.update(at=0.0, path=None)
+    kept = S.windows_claude()
+    WN_EXE.rename(WN_EXE.with_name("moved.exe"))
+    check("windows notes: where claude.exe is isn't looked for again on every list of chats (the PATH is slow)",
+          S.windows_claude() == kept == str(WN_EXE))
+    WN_EXE.with_name("moved.exe").rename(WN_EXE)
+
+    # the folder it starts in: on a Windows drive (not a WSL folder), the data folder's own where it is one
+    class WnDir:
+        def __init__(self, path, is_dir=True):
+            self.path, self.exists = path, is_dir
+        __str__ = lambda self: self.path
+        is_dir = lambda self: self.exists
+
+    where = {}
+    for key, folder_ in (("on a drive", WnDir("/mnt/c/Users/you/app")), ("a drive that isn't there", WnDir("/mnt/c/x", False)),
+                         ("in WSL", WnDir("/home/you/.local/share/let-them-talk")), ("another mount", WnDir("/mnt/wsl/x")),
+                         ("a mount named like a drive", WnDir("/mnt/cc/x"))):
+        S.DATA_DIR = folder_
+        where[key] = S.windows_relay_cwd()
+    S.DATA_DIR = wn_dir / "data"
+    check("windows notes: claude.exe starts in the data folder when that is on a Windows drive, else in the Windows home",
+          where["on a drive"] is not None and str(where["on a drive"]) == "/mnt/c/Users/you/app"
+          and all(where[k] == wn_home for k in ("a drive that isn't there", "in WSL", "another mount",
+                                                 "a mount named like a drive")), where)
+
+    # the list: its own relay isn't a chat, and a Windows chat that can be reached has no block
+    wn_reset()
+    listed = {s["sessionId"]: s for s in real_live_sessions()}
+    check("windows notes: the relay's own registry entry (named let-them-talk, headless) is not listed as a chat, "
+          "nor is a chat whose claude.exe has ended",
+          set(listed) == {"win-a-sid", "win-b-sid", "old-sid", "wsl-a-sid", "wsl-b-sid"}, sorted(listed))
+    check("windows notes: a Windows chat of a new enough Claude Code has no message block any more",
+          all(listed[k]["platform"] == "windows" and listed[k]["messageBlock"] is None for k in ("win-a-sid", "win-b-sid")),
+          listed["win-a-sid"]["messageBlock"])
+    check("windows notes: one of an old Claude Code keeps its own block, and a WSL chat has none",
+          "too old" in listed["old-sid"]["messageBlock"] and listed["wsl-a-sid"]["messageBlock"] is None)
+    check("windows notes: a Windows chat's folder is its C:\\ one, also as a WSL path",
+          listed["win-a-sid"]["winCwd"] == "C:\\Users\\you\\proj" and listed["win-a-sid"]["cwd"] == "/mnt/c/Users/you/proj")
+    wn_win.append(wn_reg(7006, "same-sid", "let-them-talk", kind="interactive"))  # a chat of yours that has the relay's name
+    wn_win_pids.add(7006)
+    S.relay_pids.update({7001, 4001})  # WSL relays' numbers: a Windows chat with the same number is another process
+    again = {s["sessionId"]: s for s in real_live_sessions()}
+    S.relay_pids.difference_update({7001, 4001})
+    check("windows notes: a WSL relay's process number hides no Windows chat (they are other processes), "
+          "but hides the WSL one it belongs to", "win-a-sid" in again and "wsl-a-sid" not in again, sorted(again))
+    check("windows notes: a running relay isn't counted when names are checked: the chat with its name isn't 'shared'",
+          "same-sid" in again and again["same-sid"]["ambiguous"] is False and "relay-sid" not in again)
+    wn_win[:] = wn_win[:-1]
+    wn_win_pids.discard(7006)
+    wn_win.append(wn_reg(7007, "twin-sid", "win-a"))
+    wn_win_pids.add(7007)
+    twins = {s["sessionId"]: s for s in real_live_sessions()}
+    wn_win[:] = wn_win[:-1]
+    wn_win_pids.discard(7007)
+    check("windows notes: two Windows chats with one name are still told apart as shared",
+          twins["win-a-sid"]["ambiguous"] and twins["twin-sid"]["ambiguous"] and not twins["win-b-sid"]["ambiguous"])
+    check("windows notes: what is a relay of this app (and so hidden) is the same for both kinds of chat",
+          S.own_run({"name": "let-them-talk", "entrypoint": "sdk-cli", "kind": "interactive"})
+          and S.own_run({"name": "let-them-talk-merger", "entrypoint": "sdk-cli", "kind": "interactive"})
+          and S.own_run({"name": "organizer", "kind": "headless"})
+          and not S.own_run({"name": "let-them-talk", "entrypoint": "cli", "kind": "interactive"})
+          and not S.own_run({"name": "reviewer", "entrypoint": "sdk-cli", "kind": "interactive"})
+          and not S.own_run({"name": "", "kind": "interactive"}))
+
+    # a Windows pair connects, and its notes go through claude.exe, not through WSL's claude
+    wn_reset()
+    conn = wn_connect("win-a-sid", "win-b-sid")
+    ran, wsl_ran = calls(WN_EXE), calls(WN_WSL)
+    args = ran[0]["args"] if ran else []
+    flag = lambda name: args[args.index(name) + 1] if name in args else None
+    texts = [conn["notes"][s]["text"] for s in ("from", "to")] if isinstance(conn, dict) else []
+    check("windows notes: a Windows pair connects (no red line), and both notes go in one run of claude.exe, "
+          "none through WSL's claude",
+          isinstance(conn, dict) and len(ran) == 1 and not wsl_ran and conn["status"] == "sent"
+          and all(n["state"] == "sent" for n in conn["notes"].values()), (conn, ran, wsl_ran))
+    check("windows notes: claude.exe is run as the relay is: its name, its one tool, no saved conversation, "
+          "and the relay's own instructions",
+          flag("--name") == S.RELAY_NAME and flag("--tools") == "SendMessage" and flag("--allowedTools") == "SendMessage"
+          and flag("--model") == S.RELAY_MODEL and flag("--append-system-prompt") == S.RELAY_SYSTEM
+          and "-p" in args and "--no-session-persistence" in args and flag("--output-format") == "stream-json", args)
+    check("windows notes: the prompt (each note, to the chat it is for, word for word) goes in on stdin, "
+          "not on the command line Windows would cut and re-quote",
+          ran and all(x in ran[0]["stdin"] for x in ("TO: win-a", "TO: win-b", *texts)) and ran[0]["stdin"].count("\nITEM ") == 2
+          and not any("BEGIN" in a for a in args), ran and ran[0]["stdin"][:200])
+    check("windows notes: claude.exe starts in a folder Windows can use (here the Windows home, as the data folder "
+          "is a WSL one), and without this server's own session variables",
+          ran and ran[0]["cwd"] == os.path.realpath(wn_home) and not any(ran[0]["env"].values()), ran and (ran[0]["cwd"], ran[0]["env"]))
+    note_states = [conn["notes"][s]["state"] for s in ("from", "to")] if isinstance(conn, dict) else []
+    check("windows notes: Activity says the notes were sent, and the relay log says they went through Windows",
+          wn_log and wn_log[-1][1] == "ok" and "notes sent, sent" in wn_log[-1][0] and note_states == ["sent", "sent"]
+          and json.loads((wn_dir / "relay.jsonl").read_text().splitlines()[-1]).get("platform") == "windows", wn_log)
+    check("windows notes: the same relay name, so the chat sees the same sender as for a WSL chat",
+          "[Let Them Talk]" in texts[0] and "@win-b" in texts[0] and "@win-a" in texts[1], texts)
+
+    # a pair of WSL chats is as before: WSL's claude, not claude.exe
+    wn_reset()
+    conn = wn_connect("wsl-a-sid", "wsl-b-sid")
+    ran, wsl_ran = calls(WN_EXE), calls(WN_WSL)
+    check("windows notes: a WSL pair still goes through WSL's claude, with its prompt as the last argument and in the "
+          "data folder",
+          isinstance(conn, dict) and len(wsl_ran) == 1 and not ran and wsl_ran[0]["stdin"] == ""
+          and "TO: wsl-b" in wsl_ran[0]["args"][-1] and wsl_ran[0]["cwd"] == os.path.realpath(S.DATA_DIR), (conn, wsl_ran, ran))
+
+    # a mixed pair is refused as before, and nothing is run
+    for a, b in (("wsl-a-sid", "win-a-sid"), ("win-a-sid", "wsl-a-sid")):
+        wn_reset()
+        try:
+            wn_connect(a, b)
+            said = "connected"
+        except ValueError as e:
+            said = str(e)
+        check(f"windows notes: a mixed pair ({a} to {b}) is refused with the plain message, no arrow, nothing run",
+              said == "A WSL session and a Windows session can't message each other."
+              and not wn_board["connections"] and not calls(WN_EXE) and not calls(WN_WSL), said)
+
+    # a claude.exe that fails: the notes say why
+    wn_reset(mode="fail")
+    conn = wn_connect("win-a-sid", "win-b-sid")
+    check("windows notes: a claude.exe that fails gives failed notes with its own words, and a failed arrow",
+          isinstance(conn, dict) and conn["status"] == "failed"
+          and all(n["state"] == "failed" and "it broke" in n["detail"] for n in conn["notes"].values()), conn)
+
+    # resend and a later Start use the same way
+    wn_reset()
+    conn = wn_connect("win-a-sid", "win-b-sid")
+    for n in conn["notes"].values():
+        n.update(state="failed")
+    conn["status"] = "failed"
+    S.resend("b", conn["id"])
+    check("windows notes: Resend failed notes goes through claude.exe again",
+          len(calls(WN_EXE)) == 2 and not calls(WN_WSL) and conn["status"] == "sent", (conn, calls(WN_EXE)))
+
+    # the disconnect notes too
+    wn_reset()
+    conn = wn_connect("win-a-sid", "win-b-sid")
+    nodes = {k: dict(v) for k, v in wn_board["nodes"].items()}
+    S.send_disconnect_notes("b", [(conn, nodes["win-a-sid"], nodes["win-b-sid"])])
+    end = time.time() + 5
+    while not any("Disconnect notes" in t for t, _ in wn_log) and time.time() < end:
+        real_sleep(0.02)
+    check("windows notes: the notes sent when an arrow is removed go through claude.exe as well, one run for both chats",
+          len(calls(WN_EXE)) == 2 and not calls(WN_WSL) and "removed the connection" in calls(WN_EXE)[-1]["stdin"]
+          and "TO: win-a" in calls(WN_EXE)[-1]["stdin"] and "TO: win-b" in calls(WN_EXE)[-1]["stdin"],
+          [c["stdin"][-300:] for c in calls(WN_EXE)])
+
+    # a chat that has ended is delivered to as its card says it runs
+    wn_reset()
+    states = S.relay_notes([{"to": "win-a", "text": "one", "platform": "windows"},
+                            {"to": "wsl-a", "text": "two", "platform": "wsl"},
+                            {"to": "win-b", "text": "three", "platform": "windows"}, {"to": "old", "text": "four"}])
+    ran, wsl_ran = calls(WN_EXE), calls(WN_WSL)
+    check("windows notes: notes for chats of both kinds go one run for each kind, to the right chats, states in order",
+          len(ran) == 1 and len(wsl_ran) == 1 and [s["state"] for s in states] == ["sent"] * 4
+          and "TO: win-a" in ran[0]["stdin"] and "TO: win-b" in ran[0]["stdin"] and "TO: wsl-a" not in ran[0]["stdin"]
+          and "TO: wsl-a" in wsl_ran[0]["args"][-1] and "TO: old" in wsl_ran[0]["args"][-1], (ran, wsl_ran))
+
+    # claude.exe missing: the chats say what is missing, nothing can connect them, and no run is attempted
+    wn_reset(exe_path=wn_dir / "nowhere.exe")
+    listed = {s["sessionId"]: s for s in real_live_sessions()}
+    block = listed["win-a-sid"]["messageBlock"] or ""
+    check("windows notes: with no claude.exe, a Windows chat says in plain words what is missing and what to do",
+          "claude.exe" in block and "Install Claude Code on Windows" in block and "LTT_WIN_CLAUDE" in block
+          and "too old" in listed["old-sid"]["messageBlock"] and listed["wsl-a-sid"]["messageBlock"] is None, block)
+    try:
+        wn_connect("win-a-sid", "win-b-sid")
+        said = "connected"
+    except ValueError as e:
+        said = str(e)
+    check("windows notes: with no claude.exe a Windows pair is refused with that message, and nothing is run",
+          said == block and not wn_board["connections"] and not calls(WN_EXE) and not calls(WN_WSL), said)
+    states, meta = S.relay_send([{"to": "win-a", "text": "x"}], windows=True)
+    check("windows notes: a note that is sent anyway (an arrow made earlier) fails naming claude.exe, and runs nothing",
+          states[0]["state"] == "failed" and "claude.exe" in states[0]["detail"] and not calls(WN_EXE)
+          and not calls(WN_WSL), states)
+
+    # what still can't reach a chat on Windows: text typed here
+    wn_reset()
+    try:
+        S.send_to_session("b", {"sessionId": "win-a-sid", "text": "hello"})
+        said = "sent"
+    except ValueError as e:
+        said = str(e)
+    check("windows notes: text typed in the Send box still can't reach a chat on Windows, said in plain words, nothing run",
+          "Windows" in said and "notes" in said and not calls(WN_EXE) and not calls(WN_WSL), said)
+finally:
+    S.shutil.which = wn_which
+    S.subprocess.Popen = wn_popen
+    for n, v in wn_saved.items():
+        setattr(S, n, v)
+    os.environ.clear()
+    os.environ.update(wn_env)
+    S.win_claude_cache.update(at=0.0, path=None)
+    S.relay_pids.clear()
+    sessions[:] = []
+S.shutil.rmtree(wn_dir)
 
 # ------------------------- New workflow with agents: a master and its team (faked)
 

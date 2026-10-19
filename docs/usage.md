@@ -56,6 +56,12 @@ they work on. You can edit or switch off either note before sending.
   the agent is up. One that has no saved conversation (*needs restart*) can't
   be connected; restart it first. How: [Notes and
   messages](how-it-works.md#notes-and-messages).
+- **Chats on Windows** (Claude Code on native Windows; their cards have a
+  *Windows* badge) can be connected to each other. A Windows chat and a WSL
+  chat can't message each other, and the dialog says so. The notes go through
+  Windows' own `claude.exe`; if the app can't find it, the card and the dialog
+  say what is missing and what to do. Only the notes of an arrow reach a
+  Windows chat: it has no [Send box](#send-a-message).
 
 ## Arrows
 
@@ -175,7 +181,8 @@ be available, and one on it then asks before it acts.
   (see [Sessions are addressed by name](limits.md#sessions-are-addressed-by-name)).
 - A card that has ended or can't receive notes has no handle; an ended
   background agent that can be woken keeps it (see [Connect two
-  chats](#connect-two-chats)).
+  chats](#connect-two-chats)). A card with a *Windows* badge has one when the
+  app can deliver notes to it.
 - A background agent's card says what it is doing, in Claude Code's own
   terms, with one difference:
   - *working*: it is on a turn.
