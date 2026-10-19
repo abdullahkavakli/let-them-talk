@@ -1490,42 +1490,79 @@ def checks_wide(browser):
         page.hover(avail_row(s) + " .name")
         page.hover(avail_row(s) + " .del")
 
-    name = ("add agents: only a sleeping background agent's row has a −, hidden at rest, shown under the pointer and when the "
-            "keys reach it; red on the plain fill of the + beside it, as big, in light and dark")
+    name = ("add agents: only a sleeping background agent's row has a −, hidden at rest beside a plain grey +; under the pointer "
+            "and when the keys reach it the + is a green dot and the − a red one beside it, as big, with a thin edge light and no "
+            "blur, and dark marks (4.5:1), the same in light and dark")
     with step(page, name):
         page.api.avail = [SLEEPY, NO_REPLY, RUNNING_BG, EDITOR_CHAT]
         poll(page)
         park(page)
         has = page.eval_on_selector_all("#available .avail-row", "rs => rs.map(r => [r.querySelector('.name').textContent, !!r.querySelector('.del')])")
         def look():
-            # Read once the fades are over, not after a fixed time: in dark, the − and the + take two fades (theirs starts
-            # again while their row's colour fades), and on a slow machine 300 ms caught the − one step short of its red.
-            fades_done(page, avail_row(SLEEPY) + " .del", avail_row(SLEEPY) + " .add", "#delete-board")
-            return page.evaluate("""(sel) => {
-                const d = document.querySelector(sel + ' .del'), a = document.querySelector(sel + ' .add'), s = getComputedStyle(d);
-                const b = d.getBoundingClientRect(), p = a.getBoundingClientRect();
+            # Read once the fades are over, not after a fixed time: the + fades from grey to green (and its edge light in),
+            # and in dark the − and the + take two fades (theirs starts again while their row's colour fades); 300 ms once
+            # caught one short.
+            fades_done(page, avail_row(SLEEPY) + " .del", avail_row(SLEEPY) + " .add", "#available .new-here")
+            return page.evaluate("""([sel, contrast]) => {
+                const d = document.querySelector(sel + ' .del'), a = document.querySelector(sel + ' .add'), s = getComputedStyle(d), t = getComputedStyle(a);
+                const b = d.getBoundingClientRect(), p = a.getBoundingClientRect(), ratio = eval(contrast);
+                const inset = (c) => c.boxShadow !== 'none' && c.boxShadow.split(/,(?![^(]*\\))/).every(x => x.includes('inset'));
                 return { shown: s.opacity === '1' && s.pointerEvents === 'auto', hidden: s.opacity === '0' && s.pointerEvents === 'none',
-                         red: s.color === getComputedStyle(document.querySelector('#delete-board')).color, colour: s.color,
-                         plain: s.backgroundColor === getComputedStyle(a).backgroundColor && s.backdropFilter === 'none',
-                         pair: b.width === 26 && b.height === 26 && p.width === 26 && b.right <= p.left && p.left - b.right <= 6
-                           && Math.abs(b.top - p.top) < 1,
-                         title: d.getAttribute('title'), label: d.getAttribute('aria-label') }; }""", avail_row(SLEEPY))
+                         grey: t.backgroundColor === getComputedStyle(document.querySelector('#available .new-here')).backgroundColor,
+                         fills: [t.backgroundColor, s.backgroundColor], marks: [t.color, s.color],
+                         rims: [t.boxShadow, s.boxShadow], lit: [inset(t), inset(s)],
+                         readable: ratio(sel + ' .add') >= 4.5 && ratio(sel + ' .del') >= 4.5,
+                         solid: [s, t].every(c => c.backdropFilter === 'none' && c.backgroundImage === 'none' && c.filter === 'none'),
+                         pair: b.width === 26 && b.height === 26 && p.width === 26 && p.height === 26 && b.right <= p.left
+                           && p.left - b.right <= 6 && Math.abs(b.top - p.top) < 1,
+                         title: d.getAttribute('title'), label: d.getAttribute('aria-label') }; }""", [avail_row(SLEEPY), CONTRAST])
         rest = look()
         page.hover(avail_row(SLEEPY) + " .name")
         hovered = look()
         park(page)
         page.focus(avail_row(SLEEPY) + " .add")
         page.keyboard.press("Shift+Tab")
-        keys = look()["shown"] and page.evaluate("document.activeElement.matches('.del')")
+        keys = look()
+        on_del = page.evaluate("document.activeElement.matches('.del')")
         page.emulate_media(color_scheme="dark")
         try:
             dark = look()  # (with the keys on the −, the tooltip has its title off)
         finally:
             page.emulate_media(color_scheme="light")
+        dots = ["rgb(40, 200, 64)", "rgb(255, 95, 87)"]  # a Mac window's green and red
         check(name, has == [["zeta", False], ["sleepy", True], ["restart me", True], ["busy bee", False], ["cursor chat", False]]
-              and rest["hidden"] and rest["title"] == "Delete this background agent" and rest["label"] == "Delete sleepy"
-              and all(v["red"] and v["plain"] and v["pair"] for v in (rest, dark)) and rest["colour"] != dark["colour"]
-              and hovered["shown"] and keys, (has, rest, hovered, keys, dark))
+              and rest["hidden"] and rest["grey"] and rest["rims"][0] == "none" and rest["title"] == "Delete this background agent"
+              and rest["label"] == "Delete sleepy" and hovered["rims"][0] == hovered["rims"][1]
+              and all(v["shown"] and v["fills"] == dots and v["marks"] == hovered["marks"] and v["readable"] and v["lit"] == [True, True]
+                      and v["rims"] == hovered["rims"] for v in (hovered, keys, dark))
+              and all(v["solid"] and v["pair"] for v in (rest, hovered, keys, dark)) and on_del, (has, rest, hovered, keys, on_del, dark))
+
+    # In dark every button's mark is light, which on the green would be unreadable: the +'s mark turns dark there too.
+    # And the panel gives its delete buttons a faint red under the pointer, by an id, which the −'s red must win over.
+    name = ("add agents: in dark, the + of a row with no − turns from grey to a green dot with a dark mark (4.5:1) under the "
+            "pointer, and a −, under its own pointer, stays red and a little brighter")
+    with step(page, name):
+        page.api.avail = [SLEEPY, RUNNING_BG]
+        poll(page)
+        page.emulate_media(color_scheme="dark")
+        try:
+            def dot(sel):
+                fades_done(page, sel, "#available .new-here")
+                return page.evaluate("""([sel, contrast]) => { const c = getComputedStyle(document.querySelector(sel));
+                    return { fill: c.backgroundColor, mark: c.color, filter: c.filter, ratio: +eval(contrast)(sel).toFixed(2),
+                             grey: c.backgroundColor === getComputedStyle(document.querySelector('#available .new-here')).backgroundColor }; }""",
+                    [sel, CONTRAST])
+            park(page)
+            rest = dot(avail_row(RUNNING_BG) + " .add")
+            page.hover(avail_row(RUNNING_BG) + " .name")
+            plus = dot(avail_row(RUNNING_BG) + " .add")
+            onto_del(SLEEPY)
+            minus = dot(avail_row(SLEEPY) + " .del")
+        finally:
+            page.emulate_media(color_scheme="light")
+        check(name, rest["grey"] and rest["mark"] != plus["mark"] and plus["fill"] == "rgb(40, 200, 64)" and plus["ratio"] >= 4.5
+              and minus["fill"] == "rgb(255, 95, 87)" and minus["ratio"] >= 4.5 and minus["mark"] == plus["mark"]
+              and minus["filter"].startswith("brightness(") and float(minus["filter"][11:-1]) > 1, (rest, plus, minus))
 
     name = ("add agents: the − asks first in the words of Delete agent on a card; Cancel and Esc send nothing; a yes sends one "
             "delete for that agent (of two with one name, the one picked), its row goes without waiting for a poll and the "
@@ -1564,8 +1601,8 @@ def checks_wide(browser):
               and said["focus"] == "ask-no" and none_sent and deletes() == [{"jobId": TWIN["jobId"]}] and kept == 1
               and focus == SLEEPY["sessionId"], (on_card, cancelled, said, deletes(), kept, focus))
 
-    name = ("add agents: while an agent is deleted its row fades, its − turns and takes no second click, and its + waits; a "
-            "failure is a notice, and the row is as it was")
+    name = ("add agents: while an agent is deleted its row fades, its − turns (dark, on its red) and takes no second click, "
+            "and its + waits, grey and dimmed; a failure is a notice, and the row is as it was")
     with step(page, name):
         page.api.avail = [SLEEPY]
         poll(page)
@@ -1574,11 +1611,15 @@ def checks_wide(browser):
         page.click(avail_row(SLEEPY) + " .del")
         answer(page)
         page.wait_for_selector(avail_row(SLEEPY) + ".deleting")
-        fades_done(page, avail_row(SLEEPY) + " .del")
-        now = lambda: page.evaluate("""(sel) => { const r = document.querySelector(sel), d = r.querySelector('.del');
-            return { busy: r.classList.contains('deleting'), ring: !!d.querySelector('.state-icon.running'),
+        fades_done(page, avail_row(SLEEPY) + " .del", avail_row(SLEEPY) + " .add")  # the + fades back to grey
+        now = lambda: page.evaluate("""([sel, contrast]) => { const r = document.querySelector(sel), d = r.querySelector('.del');
+            const a = getComputedStyle(r.querySelector('.add')), ring = d.querySelector('.state-icon.running .arc');
+            return { busy: r.classList.contains('deleting'), ring: !!ring && getComputedStyle(ring).stroke === getComputedStyle(d).color
+                       && getComputedStyle(d).backgroundColor === 'rgb(255, 95, 87)' && eval(contrast)(sel + ' .del') >= 4.5,
                      shown: getComputedStyle(d).opacity === '1', faded: getComputedStyle(r.querySelector('.name')).opacity === '0.5',
-                     waits: r.querySelector('.add').disabled, title: d.getAttribute('title') }; }""", avail_row(SLEEPY))
+                     waits: r.querySelector('.add').disabled && a.opacity === '0.5'
+                       && a.backgroundColor === getComputedStyle(document.querySelector('#available .new-here')).backgroundColor,
+                     title: d.getAttribute('title') }; }""", [avail_row(SLEEPY), CONTRAST])
         busy = now()
         page.click(avail_row(SLEEPY) + " .del")
         page.wait_for_timeout(200)
@@ -2495,17 +2536,23 @@ def checks_narrow(browser):
                 check(name, list_first and detail_then and list_in() and not detail_in() and chevron and words == "All agents",
                       (chevron, words))
         page.context.close()
-    # On a touch screen nothing hovers: a sleeping background agent's − shows all the time.
-    name = "touch screen: a sleeping background agent's − shows without a pointer on its row"
+    # On a touch screen nothing hovers: a row's + is a green dot and a sleeping background agent's − a red one all the time.
+    name = "touch screen: without a pointer on its row, a sleeping background agent's − shows as a red dot and its + as a green one"
     touch = open_page(browser, 390, 844, has_touch=True)
     with step(touch, name):
         touch.api.avail = [SLEEPY]
         poll(touch)
         flips = touch.evaluate("matchMedia('(hover: none)').matches")
-        shown = touch.evaluate(f"getComputedStyle(document.querySelector('{avail_row(SLEEPY)} .del')).opacity")
-        rule = touch.evaluate("""() => [...document.styleSheets].flatMap(s => [...s.cssRules]).some(r => r.conditionText === '(hover: none)'
-            && [...r.cssRules].some(x => x.selectorText === '.avail-row .btn.del' && x.style.opacity === '1'))""")
-        check(name, shown == "1" if flips else rule, (flips, shown, rule))  # without touch emulation, the rule at least
+        fades_done(touch, avail_row(SLEEPY) + " .del", avail_row(SLEEPY) + " .add")
+        dots = touch.evaluate("""(sel) => [' .del', ' .add'].map(s => { const c = getComputedStyle(document.querySelector(sel + s));
+            return [c.opacity, c.backgroundColor]; })""", avail_row(SLEEPY))
+        rules = touch.evaluate("""() => [...document.styleSheets].flatMap(s => [...s.cssRules]).filter(r => r.conditionText === '(hover: none)')
+            .flatMap(r => [...r.cssRules]).filter(x => x.selectorText.includes('.avail-row .btn.'))
+            .map(x => [x.selectorText, x.style.opacity || x.style.backgroundColor])""")
+        # without touch emulation, the rules at least
+        check(name, dots == [["1", "rgb(255, 95, 87)"], ["1", "rgb(40, 200, 64)"]] if flips else
+              rules == [[".avail-row .btn.del", "1"], ["#available .avail-row .btn.add:not(:disabled)", "var(--dot-green)"]],
+              (flips, dots, rules))
     touch.context.close()
 
 

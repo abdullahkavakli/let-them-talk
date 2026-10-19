@@ -9,9 +9,11 @@ What each part of the board does, from boards and arrows to a chat's details.
   *Add agents*, where a row's **+** puts it on the board and **+ New agent**
   next to a folder opens [New agent](#new-agent) on that folder.
 - A sleeping background agent there (*asleep*: Claude Code still lists it,
-  but it isn't running) also has a red **−** beside its **+**. It shows when
-  you point at the row or Tab to it, and always on a touch screen. After
-  asking, as **Delete agent** in its details does, it deletes the agent with
+  but it isn't running) also has a **−** beside its **+**. When you point at
+  a row or Tab to it, its grey **+** turns green and a sleeping agent's **−**
+  appears in red, each with a thin glass-like edge light, like a Mac's window
+  buttons; on a touch screen they always show that way. After asking, as
+  **Delete agent** in its details does, the **−** deletes the agent with
   `claude rm` and its row folds away; if that fails, a notice says why and
   the row stays. A running agent has no **−**: end it from its card first.
 - **New board** takes any existing folder (`C:\...`, `/mnt/c/...`, `~/...`),
@@ -404,7 +406,7 @@ A background agent's details have these buttons:
 - **Delete agent**: `claude rm`, which removes it from Claude Code's list,
   with its worktree if it has one. Its conversation file stays. A sleeping
   agent that isn't on the board can be deleted from *Add agents* too, with
-  the **−** on its row.
+  the red **−** that appears on its row when you point at it or Tab to it.
 - **Restart in terminal**: an agent whose process ended before its first
   reply finished (`claude stop`, a crash) has no saved conversation and can't
   be woken; its card says *needs restart*. This button runs

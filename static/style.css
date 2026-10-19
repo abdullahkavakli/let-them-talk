@@ -30,6 +30,18 @@
   --field-hover: rgba(118, 118, 128, .2);
   --card-shadow: 0 1px 2px rgba(0, 0, 0, .06), 0 6px 20px rgba(0, 0, 0, .06);
   --scrim: rgba(0, 0, 0, .2);
+  /* a Mac window's buttons (Add agents' + and −): the same green and red, and the same dark marks on them, in light
+     and dark, so none of them is set again for dark below (the marks: 7.5:1 on the green, 5.6:1 on the red) */
+  --dot-green: #28c840;
+  --dot-red: #ff5f57;
+  --dot-mark: #1d1d1f;
+  /* their edge light, as the glass rim below but the same in both themes: a thin bright line along the top, a fainter
+     one along the bottom and a faint glow inside the edge; pressed, it eases */
+  --dot-rim-top: rgba(255, 255, 255, .5);
+  --dot-rim-bottom: rgba(255, 255, 255, .22);
+  --dot-rim-glow: rgba(255, 255, 255, .1);
+  --dot-rim: inset 0 1.5px 0 -.5px var(--dot-rim-top), inset 0 -1.5px 0 -.5px var(--dot-rim-bottom), inset 0 0 5px var(--dot-rim-glow);
+  --dot-rim-pressed: inset 0 1px 0 -.5px var(--dot-rim-top), inset 0 -1px 0 -.5px var(--dot-rim-bottom), inset 0 0 3px var(--dot-rim-glow);
   /* small text on a fill (a card, a field): --muted, a little nearer the text colour to stay readable */
   --quiet: color-mix(in srgb, var(--muted) 78%, var(--text));
   /* the one chevron (pointing down; turned for the other ways), drawn in --muted */
@@ -192,16 +204,29 @@ select option { background: var(--panel); color: var(--text); }
 .avail-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .avail-row .btn { padding: 3px 10px; font-size: 12px; }
 .avail-row .btn:is(.add, .del) { flex: none; width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
-/* A sleeping background agent's − (renderAvailable in app.js): red, on the same plain fill as the + (no glass on
-   glass), close beside it as a pair. Its place is kept, so the name doesn't move; it shows under the pointer, when
-   the keys reach the row, while it is deleted, and always on a touch screen (no hover there). */
+/* A row's + and a sleeping background agent's − (renderAvailable in app.js), as a Mac window's buttons. At rest only
+   the + shows, in the sidebar's plain grey fill. Under the pointer, when the keys reach the row, and always on a touch
+   screen (no hover there), the + is a green dot and the − a red one close beside it: solid colours with dark marks
+   and a thin edge light (box-shadow only: no blur, no glass on glass). The −'s place is kept, so the name doesn't
+   move; it also stays while its agent is deleted. The colours are set with #available, over the panel's plain fills
+   and the faint red its delete buttons take under the pointer. */
 .avail-row .btn.del {
   margin-right: -4px; opacity: 0; pointer-events: none;
-  transition: opacity .2s ease, background-color .15s ease, color .15s ease;
+  transition: opacity .2s ease, background-color .15s ease, color .15s ease, box-shadow .15s ease;
 }
 .avail-row:is(:hover, :has(:focus-visible), .deleting) .btn.del { opacity: 1; pointer-events: auto; }
 @media (hover: none) { .avail-row .btn.del { opacity: 1; pointer-events: auto; } }
-/* being deleted: the row fades, the − turns, the + waits */
+#available .avail-row .btn.danger.del { background: var(--dot-red); color: var(--dot-mark); box-shadow: var(--dot-rim); }
+#available .avail-row:is(:hover, :has(:focus-visible)) .btn.add:not(:disabled) { background: var(--dot-green); color: var(--dot-mark); box-shadow: var(--dot-rim); }
+@media (hover: none) { #available .avail-row .btn.add:not(:disabled) { background: var(--dot-green); color: var(--dot-mark); box-shadow: var(--dot-rim); } }
+/* the dot under the pointer a little brighter, pressed a little darker with its edge light eased (and nudged down,
+   as every button) */
+#available .avail-row:not(.deleting) .btn:is(.add, .del):not(:disabled):hover { filter: brightness(1.06); }
+#available .avail-row:not(.deleting) .btn:is(.add, .del):not(:disabled):active { filter: brightness(.9); box-shadow: var(--dot-rim-pressed); }
+/* disabled (the + while its agent is deleted): back to the plain grey, dimmed, the same under the pointer */
+#available .avail-row .btn:is(.add, .del):disabled { background: var(--field); color: var(--text); box-shadow: none; }
+#available .avail-row .btn.del:disabled { filter: opacity(.5); }  /* (its opacity shows and hides it) */
+/* being deleted: the row fades, the − turns (in its dark mark, on its red), the + waits */
 .avail-row.deleting :is(.dot, .name) { opacity: .5; }
 .avail-row.deleting .btn.del { cursor: progress; }
 .avail-row .btn.del .state-icon { --ico: currentColor; width: 14px; height: 14px; }
